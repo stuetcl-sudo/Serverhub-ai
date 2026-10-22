@@ -305,6 +305,20 @@ def autonomous_job(ctx, spec: dict) -> dict:
             charged_cost = budget.cost_used - previous_cost
             if charged_tokens or charged_cost:
                 ctx.usage(charged_tokens, charged_cost)
+        # Use numeric/unit labels that do not resemble credential keys; the
+        # audit redactor intentionally masks any field named *token*.
+        accounting = completion.accounting
+        ctx.log("Model request accounting", {
+            "unit": "tokens", "estimator": accounting.get("method"),
+            "input_estimate": accounting.get("estimated_input_tokens"),
+            "generation_reserve": accounting.get("output_reserve_tokens"),
+            "input_measured": accounting.get("actual_input_tokens"),
+            "output_measured": accounting.get("actual_output_tokens"),
+            "usage_verified": accounting.get("usage_verified"),
+            "serialized_utf8_bytes": accounting.get("serialized_utf8_bytes"),
+            "job_limit": accounting.get("token_limit"), "already_spent": accounting.get("tokens_used"),
+            "context_limit": accounting.get("context_limit"),
+        })
         state["messages"].append(completion.assistant_message())
         state["step"] = index + 1
         state["pending_calls"] = [{"id": call.id, "name": call.name,

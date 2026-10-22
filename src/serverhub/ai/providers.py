@@ -6,6 +6,7 @@ configuration is an operator-owned trust boundary, never model output.
 from __future__ import annotations
 
 import json
+import math
 import ipaddress
 import os
 import stat
@@ -29,7 +30,26 @@ class ProviderError(RuntimeError):
 
 
 class BudgetExceeded(RuntimeError):
-    pass
+    def __init__(self, message: str, *, diagnostics: dict | None = None):
+        super().__init__(message)
+        self.diagnostics = diagnostics or {}
+
+
+def estimate_prompt(messages: list[dict], tools: list[dict] | None = None) -> dict:
+    """Portable *estimate*, not a tokenizer or a guaranteed upper bound.
+
+    ASCII BPE text/code/JSON: 3 characters/token plus 20% headroom. Non-ASCII
+    uses UTF-8 bytes as a deliberately cautious allowance (covers CJK/emoji).
+    Count tool schemas once, without double-encoding them into message content.
+    Include chat framing separately; never infer a Qwen tokenizer from its name.
+    Provider usage replaces this estimate after a response, never added to it.
+    """
+    text = json.dumps({"messages": messages, "tools": tools or []}, ensure_ascii=False, separators=(",", ":"))
+    ascii_chars = sum(ord(char) < 128 for char in text)
+    byte_count = len(text.encode("utf-8"))
+    estimate = math.ceil((ascii_chars / 3 + byte_count - ascii_chars) * 1.2)
+    return {"method": "mixed_utf8_bpe_estimate_v1", "estimated_input_tokens": estimate + 12 * len(messages) + 32,
+            "serialized_utf8_bytes": byte_count, "is_exact": False}
 
 
 def validate_url(value: str, *, allow_http: bool = False) -> str:
@@ -127,6 +147,7 @@ class Completion:
     output_tokens: int = 0
     cost: float = 0
     usage_verified: bool = True
+    accounting: dict = field(default_factory=dict)
 
     def assistant_message(self) -> dict:
         message: dict[str, Any] = {"role": "assistant", "content": self.content or None}
@@ -145,19 +166,31 @@ class UsageBudget:
     tokens_used: int = 0
     cost_used: float = 0
 
-    def preflight(self, config: ProviderConfig, messages: list[dict], output_tokens: int) -> int:
-        # UTF-8 byte count is deliberately conservative; provider tokenizers
-        # differ. Billed usage, if supplied, replaces this reserve after a call.
-        estimated_input = len(json.dumps(messages, ensure_ascii=False).encode("utf-8"))
+    last_preflight: dict = field(default_factory=dict)
+
+    def preflight(self, config: ProviderConfig, messages: list[dict], output_tokens: int,
+                  tools: list[dict] | None = None) -> int:
+        estimate = estimate_prompt(messages, tools)
+        estimated_input = estimate["estimated_input_tokens"]
+        self.last_preflight = {**estimate, "output_reserve_tokens": output_tokens,
+                               "tokens_used": self.tokens_used, "token_limit": self.token_limit,
+                               "remaining_tokens": self.token_limit - self.tokens_used,
+                               "context_limit": config.context_limit}
+        details = (f"input estimate={estimated_input}, output reserve={output_tokens}, "
+                   f"used={self.tokens_used}, job limit={self.token_limit}, context limit={config.context_limit}; "
+                   f"estimator={estimate['method']}, serialized bytes={estimate['serialized_utf8_bytes']}")
         if estimated_input + output_tokens > config.context_limit:
-            raise BudgetExceeded("Conversation exceeds configured conservative context bound")
+            raise BudgetExceeded("Conversation exceeds configured context limit: " + details +
+                                 ". Reduce history/tool results or configure a supported larger context.", diagnostics=self.last_preflight)
         if self.tokens_used + estimated_input + output_tokens > self.token_limit:
-            raise BudgetExceeded("Job token budget would be exceeded")
+            raise BudgetExceeded("Job token budget would be exceeded: " + details +
+                                 ". Reduce task scope/history or increase the authorized job budget.", diagnostics=self.last_preflight)
         if config.input_cost_per_million is None or config.output_cost_per_million is None:
-            raise BudgetExceeded("API pricing must be configured before paid model use")
+            raise BudgetExceeded("API pricing must be configured before paid model use", diagnostics=self.last_preflight)
         reserve = (estimated_input * config.input_cost_per_million + output_tokens * config.output_cost_per_million) / 1_000_000
+        self.last_preflight.update({"cost_reserve": reserve, "cost_used": self.cost_used, "cost_limit": self.cost_limit})
         if self.cost_used + reserve > self.cost_limit:
-            raise BudgetExceeded("Job API cost budget would be exceeded")
+            raise BudgetExceeded(f"Job API cost budget would be exceeded: reserve={reserve:.6f}, used={self.cost_used:.6f}, limit={self.cost_limit:.6f}", diagnostics=self.last_preflight)
         return estimated_input
 
     def charge(self, completion: Completion) -> None:
@@ -218,11 +251,13 @@ class ChatProvider:
     def complete(self, messages: list[dict], tools: list[dict], budget: UsageBudget,
                  before_request: Callable[[], None] | None = None) -> Completion:
         cfg = self.config
-        output_limit = min(cfg.max_output_tokens, max(32, budget.token_limit - budget.tokens_used))
-        # Reserve before every HTTP request, including retries. Timed-out calls
-        # may still be billed. Such attempts are charged conservatively.
-        budget_messages = messages + [{"role": "system", "content": json.dumps(tools, ensure_ascii=False)}]
-        estimated_input = budget.preflight(cfg, budget_messages, output_limit)
+        estimated_input = estimate_prompt(messages, tools)["estimated_input_tokens"]
+        # Shrink generation allowance to fit both limits, while retaining enough
+        # room for a structured tool call. Never silently truncate input history.
+        output_limit = min(cfg.max_output_tokens, budget.token_limit - budget.tokens_used - estimated_input,
+                           cfg.context_limit - estimated_input)
+        output_limit = max(32, output_limit)
+        estimated_input = budget.preflight(cfg, messages, output_limit, tools)
         headers = {"Content-Type": "application/json"}
         if cfg.api_key_env:
             key = os.environ.get(cfg.api_key_env)
@@ -231,7 +266,7 @@ class ChatProvider:
             headers["Authorization"] = f"Bearer {key}"
         if cfg.kind == "ollama":
             body = {"model": cfg.model, "messages": self._ollama_messages(messages), "stream": False,
-                    "options": {"num_predict": output_limit}}
+                    "options": {"num_predict": output_limit, "num_ctx": cfg.context_limit}}
             endpoint = "/api/chat"
         else:
             body = {"model": cfg.model, "messages": messages, "stream": False, cfg.max_tokens_parameter: output_limit}
@@ -240,7 +275,7 @@ class ChatProvider:
             body["tools"] = tools
         with httpx.Client(timeout=cfg.timeout_seconds, transport=self.transport, follow_redirects=False, trust_env=False) as client:
             for attempt in range(cfg.max_retries + 1):
-                budget.preflight(cfg, budget_messages, output_limit)
+                budget.preflight(cfg, messages, output_limit, tools)
                 if before_request:
                     before_request()
                 try:
@@ -264,6 +299,9 @@ class ChatProvider:
                         # Invalid replies still incur provider cost.
                         self._charge_unknown(budget, estimated_input, output_limit)
                         raise ProviderError("Provider returned an invalid chat response") from exc
+                    completion.accounting = {**budget.last_preflight, "actual_input_tokens": completion.input_tokens if completion.usage_verified else None,
+                                             "actual_output_tokens": completion.output_tokens if completion.usage_verified else None,
+                                             "usage_verified": completion.usage_verified}
                     budget.charge(completion)
                     return completion
                 except httpx.HTTPError as exc:

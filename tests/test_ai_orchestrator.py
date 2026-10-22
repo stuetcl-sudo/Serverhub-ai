@@ -116,3 +116,17 @@ def test_interrupted_external_write_requires_reconciliation():
     with pytest.raises(ValueError, match="reconciliation"):
         ai._pending_tools(Context(), state)
     assert state["in_flight"]["checkpoint"]["user_rules"] == ["||old.example^"]
+
+
+def test_model_accounting_event_keeps_numbers_visible_through_secret_redaction(monkeypatch):
+    from serverhub.audit import redact
+    provider(monkeypatch, [Completion("done", input_tokens=4, output_tokens=3, accounting={
+        "estimated_input_tokens": 123, "actual_input_tokens": 4, "actual_output_tokens": 3,
+        "output_reserve_tokens": 64, "usage_verified": True})])
+    ctx = Context()
+    ai.autonomous_job(ctx, {"prompt": "Read-only summary"})
+    event = next(data for message, data in ctx.logs if message == "Model request accounting")
+    persisted = redact(event)
+    assert persisted["input_estimate"] == 123
+    assert persisted["input_measured"] == 4
+    assert persisted["unit"] == "tokens"
