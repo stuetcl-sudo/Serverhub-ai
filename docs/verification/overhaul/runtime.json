@@ -1,5 +1,5 @@
 {
-  "started_at": "2026-10-22T16:31:31.399488+00:00",
+  "started_at": "2026-10-22T16:49:01.005814+00:00",
   "environment": "disposable namespace; PostgreSQL16.2; test-only UID shim on postgres/initdb only; no host installation",
   "checks": {
     "automated_backend": "passed; see backend-junit.xml",
@@ -46,5 +46,5 @@
   },
   "postgres": "PostgreSQL 16.2 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 10.2.1 20210130 (Red Hat 10.2.1-11), 64-bit",
   "state": "passed",
-  "finished_at": "2026-10-22T16:31:55.243777+00:00"
+  "finished_at": "2026-10-22T16:49:23.833666+00:00"
 }

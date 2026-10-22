@@ -44,8 +44,8 @@ legacy-partial-install limitations. No database is deleted to recover installati
 
 | Verification | Actual result |
 | --- | --- |
-| Local full Python suite with disposable PostgreSQL 16.2 | **134 passed, 1 skipped**. The optional live external Ollama test is not configured. |
-| Local targeted provider/core/overhaul regressions | **60 passed, 1 skipped** after the provider-error sanitization change; subsequent migration fixture strengthening passed **22 tests, 1 skipped** in the overhaul file. |
+| Local full Python suite with disposable PostgreSQL 16.2 | **135 passed, 1 skipped**. The optional live external Ollama test is not configured. |
+| Local targeted provider/core/overhaul regressions | **60 passed, 1 skipped** after the provider-error sanitization change; subsequent compatibility/migration fixture strengthening passed **23 tests, 1 skipped** in the overhaul file. |
 | Frontend tests | **24 passed**, across API, dashboard and new setup/profile/diagnostic tests. |
 | Frontend build | TypeScript/Vite completed; real compiled assets served by the API. |
 | Real local controller/worker/node lifecycle | API startup and actual schema health, individually authenticated node, two durable node-command workflow steps, persisted success and valid audit chain passed. |
@@ -57,11 +57,10 @@ legacy-partial-install limitations. No database is deleted to recover installati
 | Dependency scanning | GitHub Python audit and npm audit completed successfully; frontend audit reported zero known vulnerabilities at scan time. |
 | Code quality | Ruff on backend, new regressions/native smoke script and `git diff --check` passed. |
 
-CI evidence for native install/upgrade/rollback and the preceding complete source
-validation: https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39813687220
-The final application code revision also passed all four CI jobs:
-https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39814398317
-(**133 Python tests passed, 2 skipped; 24 frontend tests passed; native upgrade/rollback and dependency scanning passed**).
+Final application-code CI, including the private legacy-fallback compatibility check:
+https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39816992422
+(**134 Python tests passed, 2 skipped; 24 frontend tests passed; native install/upgrade/rollback and dependency scanning passed**).
+Earlier full validation is also retained in runs 39813687220 and 39814398317.
 Exact machine-readable local evidence is in `verification/overhaul/`; CI job logs
 and artifacts are available from the linked runs. Hosted non-root Python testing
 also skips the root-owned checkpoint test, which passes in the local isolated-root
