@@ -129,3 +129,15 @@ New runtime options take effect after the reviewed agent/broker update. The mode
 context must fit the real model and inference host; `num_ctx` is now explicit.
 Rollback uses the existing protected recovery workflow. Added JSON fields are
 backward compatible; no destructive downgrade or data conversion is required.
+
+## Additional reported baseline in issue #3
+
+[Issue #3](https://github.com/stuetcl-sudo/Serverhub-ai/issues/3) was added during
+this implementation. Its 22 October audit is a **historical operator-reported
+baseline**, not authenticated current inventory. The upcoming audit/optimization
+planner must re-read enrolled-node evidence, prioritize the reported data-disk
+capacity concern, and keep host listeners, LAN reachability and verified gateway/WAN
+exposure separate. No baseline measurement is imported as a current verified fact
+by this increment. No pruning/deletion, NTFS loopback relocation, firewall/SSH/DNS/
+routing changes, GPU-driver reinstall or production reboot is authorized by it.
+The staged zone migration and update/reboot/restore plans remain subsequent work.
