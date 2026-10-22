@@ -175,3 +175,93 @@ def test_provider_underestimate_charged_and_stops_future_requests():
     with pytest.raises(BudgetExceeded, match="Job token budget"):
         provider.complete([], [], budget)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("limit", [0, 1, 31, 32, 60])
+def test_small_budget_never_reserves_more_than_remaining_input_and_output(limit):
+    from serverhub.ai.providers import PreflightRejected
+    budget = UsageBudget(limit, 0)
+    invoked = []
+    cfg = ProviderConfig(kind="ollama", model="qwen2.5:3b", base_url="http://localhost:11434")
+    with pytest.raises(PreflightRejected) as error:
+        ChatProvider(cfg, transport=httpx.MockTransport(lambda r: invoked.append(r))).complete([], [], budget)
+    data = error.value.diagnostics
+    assert data["output_reserve_tokens"] <= max(0, limit - data["estimated_input_tokens"])
+    assert data["remaining_tokens"] == limit and not invoked and budget.tokens_used == 0
+    assert "remaining job budget=" in str(error.value)
+
+
+def test_native_ollama_budget_uses_actual_history_format_and_schema_once():
+    from copy import deepcopy
+    from serverhub.ai.providers import estimate_prompt, format_messages
+    messages = [
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "a", "type": "function", "function": {"name": "status", "arguments": '{"service":"test.service"}'}}]},
+        {"role": "tool", "name": "status", "tool_call_id": "a", "content": "active"},
+    ]
+    original = deepcopy(messages)
+    request_sizes = []
+    tools = [{"type": "function", "function": {"name": "status", "parameters": {"type": "object"}}}]
+    expected = len(json.dumps({"messages": format_messages(messages, "ollama"), "tools": tools}, ensure_ascii=False, separators=(",", ":")).encode())
+    def handle(request):
+        body = json.loads(request.content)
+        request_sizes.append(len(request.content))
+        assert body["messages"][1]["tool_name"] == "status"
+        assert body["messages"][0]["tool_calls"][0]["function"]["arguments"] == {"service": "test.service"}
+        return httpx.Response(200, json={"message": {"content": "done"}, "prompt_eval_count": 40, "eval_count": 2})
+    cfg = ProviderConfig(kind="ollama", model="qwen2.5:3b", base_url="http://localhost:11434")
+    result = ChatProvider(cfg, transport=httpx.MockTransport(handle)).complete(messages, tools, UsageBudget(20000, 0))
+    assert result.accounting["request_utf8_bytes"] == request_sizes[0]
+    assert result.accounting["serialized_utf8_bytes"] == expected
+    assert result.accounting["provider_format"] == "ollama"
+    assert result.accounting["uncertainty_margin"] == .2
+    assert estimate_prompt(messages, tools, kind="openai")["serialized_utf8_bytes"] != expected
+    assert messages == original
+
+
+def test_failed_request_charged_and_retry_output_recomputed_from_remaining_budget():
+    from serverhub.ai.providers import estimate_prompt
+    bodies = []
+    cfg = ProviderConfig(kind="ollama", model="local", base_url="http://localhost:11434", max_output_tokens=600)
+    def handle(request):
+        bodies.append(json.loads(request.content))
+        if len(bodies) == 1:
+            raise httpx.ReadTimeout("timeout", request=request)
+        return httpx.Response(200, json={"message": {"content": "ok"}, "prompt_eval_count": 40, "eval_count": 2})
+    budget = UsageBudget(1000, 0)
+    ChatProvider(cfg, transport=httpx.MockTransport(handle), sleep=lambda _: None).complete([], [], budget)
+    estimate = estimate_prompt([], kind="ollama")["estimated_input_tokens"]
+    assert bodies[0]["options"]["num_predict"] == 600
+    assert bodies[1]["options"]["num_predict"] == 1000 - 600 - 2 * estimate
+    assert budget.tokens_used == estimate + 600 + 42
+
+
+def test_repeated_requests_charge_actual_usage_and_reduce_next_reservation():
+    bodies = []
+    def handle(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"content": "ok"}, "prompt_eval_count": 40, "eval_count": 20})
+    cfg = ProviderConfig(kind="ollama", model="local", base_url="http://localhost:11434")
+    budget = UsageBudget(500, 0)
+    provider = ChatProvider(cfg, transport=httpx.MockTransport(handle))
+    provider.complete([], [], budget)
+    provider.complete([], [], budget)
+    assert budget.tokens_used == 120
+    assert bodies[0]["options"]["num_predict"] - bodies[1]["options"]["num_predict"] == 60
+
+
+@pytest.mark.parametrize("status", [400, 401, 429, 503])
+def test_failed_http_request_cannot_escape_unknown_usage_accounting(status):
+    cfg = ProviderConfig(kind="ollama", model="local", base_url="http://localhost:11434", max_retries=0, max_output_tokens=64)
+    budget = UsageBudget(1000, 0)
+    with pytest.raises(ProviderError):
+        ChatProvider(cfg, transport=httpx.MockTransport(lambda r: httpx.Response(status, json={"error": "unreported"}))).complete([], [], budget)
+    assert budget.tokens_used >= 64
+
+
+@pytest.mark.parametrize("count", [True, 1.5, "5", None, -1, 2**31, 2**63])
+def test_invalid_usage_is_conservatively_charged_not_coerced_to_smaller_count(count):
+    cfg = ProviderConfig(kind="ollama", model="local", base_url="http://localhost:11434", max_output_tokens=64)
+    budget = UsageBudget(1000, 0)
+    with pytest.raises(ProviderError, match="invalid chat response"):
+        ChatProvider(cfg, transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"message": {"content": "ok"}, "prompt_eval_count": count, "eval_count": 1}))).complete([], [], budget)
+    assert budget.tokens_used >= 64

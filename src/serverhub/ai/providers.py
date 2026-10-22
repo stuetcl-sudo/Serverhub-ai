@@ -35,7 +35,31 @@ class BudgetExceeded(RuntimeError):
         self.diagnostics = diagnostics or {}
 
 
-def estimate_prompt(messages: list[dict], tools: list[dict] | None = None) -> dict:
+class PreflightRejected(BudgetExceeded):
+    """Request admission failed; unlike actual usage overrun this made no call."""
+
+
+def format_messages(messages: list[dict], kind: str) -> list[dict]:
+    if kind == "openai":
+        return messages
+    converted = []
+    for source in messages:
+        message = dict(source)
+        if message.get("content") is None:
+            message["content"] = ""
+        if message.get("tool_calls"):
+            message["tool_calls"] = [{"function": {"name": call["function"]["name"],
+                "arguments": json.loads(call["function"]["arguments"]) if isinstance(call["function"]["arguments"], str) else call["function"]["arguments"]}}
+                for call in message["tool_calls"]]
+        if message.get("role") == "tool":
+            message.pop("tool_call_id", None)
+            if "name" in message:
+                message["tool_name"] = message.pop("name")
+        converted.append(message)
+    return converted
+
+
+def estimate_prompt(messages: list[dict], tools: list[dict] | None = None, *, kind: str = "openai") -> dict:
     """Portable *estimate*, not a tokenizer or a guaranteed upper bound.
 
     ASCII BPE text/code/JSON: 3 characters/token plus 20% headroom. Non-ASCII
@@ -44,12 +68,15 @@ def estimate_prompt(messages: list[dict], tools: list[dict] | None = None) -> di
     Include chat framing separately; never infer a Qwen tokenizer from its name.
     Provider usage replaces this estimate after a response, never added to it.
     """
+    messages = format_messages(messages, kind)
     text = json.dumps({"messages": messages, "tools": tools or []}, ensure_ascii=False, separators=(",", ":"))
     ascii_chars = sum(ord(char) < 128 for char in text)
     byte_count = len(text.encode("utf-8"))
     estimate = math.ceil((ascii_chars / 3 + byte_count - ascii_chars) * 1.2)
     return {"method": "mixed_utf8_bpe_estimate_v1", "estimated_input_tokens": estimate + 12 * len(messages) + 32,
-            "serialized_utf8_bytes": byte_count, "is_exact": False}
+            "serialized_utf8_bytes": byte_count, "is_exact": False,
+            "provider_format": kind, "ascii_characters_per_token": 3, "uncertainty_margin": 0.2,
+            "framing_reserve_tokens": 12 * len(messages) + 32}
 
 
 def validate_url(value: str, *, allow_http: bool = False) -> str:
@@ -168,36 +195,49 @@ class UsageBudget:
 
     last_preflight: dict = field(default_factory=dict)
 
-    def preflight(self, config: ProviderConfig, messages: list[dict], output_tokens: int,
+    def preflight(self, config: ProviderConfig, messages: list[dict], output_tokens: int | None = None,
                   tools: list[dict] | None = None) -> int:
-        estimate = estimate_prompt(messages, tools)
+        estimate = estimate_prompt(messages, tools, kind=config.kind)
         estimated_input = estimate["estimated_input_tokens"]
+        requested = config.max_output_tokens if output_tokens is None else output_tokens
+        if isinstance(requested, bool) or not isinstance(requested, int) or requested < 0:
+            raise ValueError("Output reservation must be a non-negative integer")
+        # Never reserve more than the *actual* remaining request/job allowance,
+        # even in a rejection diagnostic. No request is sent with <32 output.
+        output_tokens = max(0, min(requested, config.max_output_tokens,
+                                  config.context_limit - estimated_input,
+                                  self.token_limit - self.tokens_used - estimated_input))
         self.last_preflight = {**estimate, "output_reserve_tokens": output_tokens,
                                "tokens_used": self.tokens_used, "token_limit": self.token_limit,
-                               "remaining_tokens": self.token_limit - self.tokens_used,
+                               "remaining_tokens": max(0, self.token_limit - self.tokens_used),
+                               "minimum_output_tokens": 32,
                                "context_limit": config.context_limit}
         details = (f"input estimate={estimated_input}, output reserve={output_tokens}, "
-                   f"used={self.tokens_used}, job limit={self.token_limit}, context limit={config.context_limit}; "
+                   f"used={self.tokens_used}, remaining job budget={max(0, self.token_limit - self.tokens_used)}, "
+                   f"job limit={self.token_limit}, context limit={config.context_limit}, minimum output=32; "
                    f"estimator={estimate['method']}, serialized bytes={estimate['serialized_utf8_bytes']}")
-        if estimated_input + output_tokens > config.context_limit:
-            raise BudgetExceeded("Conversation exceeds configured context limit: " + details +
+        if estimated_input + 32 > config.context_limit:
+            raise PreflightRejected("Conversation exceeds configured context limit: " + details +
                                  ". Reduce history/tool results or configure a supported larger context.", diagnostics=self.last_preflight)
-        if self.tokens_used + estimated_input + output_tokens > self.token_limit:
-            raise BudgetExceeded("Job token budget would be exceeded: " + details +
+        if self.tokens_used + estimated_input + 32 > self.token_limit or output_tokens < 32:
+            raise PreflightRejected("Job token budget would be exceeded: " + details +
                                  ". Reduce task scope/history or increase the authorized job budget.", diagnostics=self.last_preflight)
         if config.input_cost_per_million is None or config.output_cost_per_million is None:
-            raise BudgetExceeded("API pricing must be configured before paid model use", diagnostics=self.last_preflight)
+            raise PreflightRejected("API pricing must be configured before paid model use: " + details, diagnostics=self.last_preflight)
         reserve = (estimated_input * config.input_cost_per_million + output_tokens * config.output_cost_per_million) / 1_000_000
         self.last_preflight.update({"cost_reserve": reserve, "cost_used": self.cost_used, "cost_limit": self.cost_limit})
         if self.cost_used + reserve > self.cost_limit:
-            raise BudgetExceeded(f"Job API cost budget would be exceeded: reserve={reserve:.6f}, used={self.cost_used:.6f}, limit={self.cost_limit:.6f}", diagnostics=self.last_preflight)
+            raise PreflightRejected(f"Job API cost budget would be exceeded: reserve={reserve:.6f}, used={self.cost_used:.6f}, limit={self.cost_limit:.6f}; {details}", diagnostics=self.last_preflight)
         return estimated_input
 
     def charge(self, completion: Completion) -> None:
         self.tokens_used += completion.input_tokens + completion.output_tokens
         self.cost_used += completion.cost
         if self.tokens_used > self.token_limit or self.cost_used > self.cost_limit:
-            raise BudgetExceeded("Provider billed usage exceeded the reserved budget; further requests stopped")
+            raise BudgetExceeded(f"Provider billed usage exceeded the reserved budget; further requests stopped: "
+                                 f"actual input={completion.input_tokens}, actual output={completion.output_tokens}, "
+                                 f"used={self.tokens_used}, job limit={self.token_limit}, remaining job budget={max(0, self.token_limit-self.tokens_used)}, "
+                                 f"context limit={self.last_preflight.get('context_limit', 'unknown')}, cost used={self.cost_used:.6f}, cost limit={self.cost_limit:.6f}")
 
 
 def load_routes(path: str | Path | None = None) -> dict[str, ProviderConfig]:
@@ -251,13 +291,8 @@ class ChatProvider:
     def complete(self, messages: list[dict], tools: list[dict], budget: UsageBudget,
                  before_request: Callable[[], None] | None = None) -> Completion:
         cfg = self.config
-        estimated_input = estimate_prompt(messages, tools)["estimated_input_tokens"]
-        # Shrink generation allowance to fit both limits, while retaining enough
-        # room for a structured tool call. Never silently truncate input history.
-        output_limit = min(cfg.max_output_tokens, budget.token_limit - budget.tokens_used - estimated_input,
-                           cfg.context_limit - estimated_input)
-        output_limit = max(32, output_limit)
-        estimated_input = budget.preflight(cfg, messages, output_limit, tools)
+        estimated_input = budget.preflight(cfg, messages, tools=tools)
+        output_limit = budget.last_preflight["output_reserve_tokens"]
         headers = {"Content-Type": "application/json"}
         if cfg.api_key_env:
             key = os.environ.get(cfg.api_key_env)
@@ -275,7 +310,13 @@ class ChatProvider:
             body["tools"] = tools
         with httpx.Client(timeout=cfg.timeout_seconds, transport=self.transport, follow_redirects=False, trust_env=False) as client:
             for attempt in range(cfg.max_retries + 1):
-                budget.preflight(cfg, messages, output_limit, tools)
+                estimated_input = budget.preflight(cfg, messages, tools=tools)
+                output_limit = budget.last_preflight["output_reserve_tokens"]
+                if cfg.kind == "ollama":
+                    body["options"]["num_predict"] = output_limit
+                else:
+                    body[cfg.max_tokens_parameter] = output_limit
+                budget.last_preflight["request_utf8_bytes"] = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
                 if before_request:
                     before_request()
                 try:
@@ -287,7 +328,9 @@ class ChatProvider:
                                 self._charge_unknown(budget, estimated_input, output_limit)
                                 raise ProviderError("Provider response exceeded 4 MiB")
                         status = response.status_code
-                    if status >= 500:
+                    if status >= 300:
+                        # A provider rejection does not prove zero upstream
+                        # work/billing. Charge its reserve before any retry.
                         self._charge_unknown(budget, estimated_input, output_limit)
                     if status == 429 or status >= 500:
                         raise ProviderError(f"Provider temporarily unavailable (HTTP {status})", retryable=True)
@@ -322,35 +365,26 @@ class ChatProvider:
 
     @staticmethod
     def _ollama_messages(messages):
-        converted = []
-        for source in messages:
-            message = dict(source)
-            if message.get("content") is None:
-                message["content"] = ""
-            if message.get("tool_calls"):
-                message["tool_calls"] = [{"function": {"name": call["function"]["name"],
-                    "arguments": json.loads(call["function"]["arguments"]) if isinstance(call["function"]["arguments"], str) else call["function"]["arguments"]}}
-                    for call in message["tool_calls"]]
-            if message.get("role") == "tool":
-                message.pop("tool_call_id", None)
-                if "name" in message:
-                    message["tool_name"] = message.pop("name")
-            converted.append(message)
-        return converted
+        return format_messages(messages, "ollama")
 
     def _parse(self, data: dict, fallback_input: int, output_limit: int) -> Completion:
         cfg = self.config
+        def counter(values, name, fallback):
+            value = values.get(name, fallback)
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 2_000_000:
+                raise ValueError("Provider usage counts must be bounded non-negative integers")
+            return value
         if cfg.kind == "ollama":
             message = data["message"]
             verified = "prompt_eval_count" in data and "eval_count" in data
-            inp = int(data.get("prompt_eval_count", fallback_input))
-            out = int(data.get("eval_count", output_limit))
+            inp = counter(data, "prompt_eval_count", fallback_input)
+            out = counter(data, "eval_count", output_limit)
         else:
             message = data["choices"][0]["message"]
             usage = data.get("usage") or {}
             verified = "prompt_tokens" in usage and "completion_tokens" in usage
-            inp = int(usage.get("prompt_tokens", fallback_input))
-            out = int(usage.get("completion_tokens", output_limit))
+            inp = counter(usage, "prompt_tokens", fallback_input)
+            out = counter(usage, "completion_tokens", output_limit)
         if inp < 0 or out < 0 or len(message.get("tool_calls") or []) > 16:
             raise ValueError("Invalid usage/tool count")
         calls = []

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from serverhub.audit import redact
 from serverhub.integrations.registry import OPERATIONS, IntegrationError, execute, operation_schemas
 from .agents import AGENTS, BASE_INSTRUCTIONS
-from .providers import BudgetExceeded as ProviderBudgetExceeded, ChatProvider, ProviderError, UsageBudget, load_routes
+from .providers import BudgetExceeded as ProviderBudgetExceeded, ChatProvider, ProviderError, PreflightRejected, UsageBudget, load_routes
 
 
 class Arguments(BaseModel):
@@ -184,7 +184,7 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
     raise ValueError("Tool has no installed implementation")
 
 
-def _pending_tools(ctx, state: dict) -> None:
+def _pending_tools(ctx, state: dict, on_execution=None) -> None:
     for call in list(state.get("pending_calls") or []):
         operation = call["operation"]
         call_id = call["id"]
@@ -204,6 +204,8 @@ def _pending_tools(ctx, state: dict) -> None:
             ctx.log("AI tool request", {"operation": operation, "arguments": call["arguments"],
                                         "specialist": state["specialist"]})
             try:
+                if on_execution:
+                    on_execution()
                 result = _run_tool(ctx, operation, call["arguments"], state, call_id)
             except IntegrationError as exc:
                 state["in_flight"]["failure"] = {"error": str(exc), "rollback": exc.rollback}
@@ -268,6 +270,8 @@ def autonomous_job(ctx, spec: dict) -> dict:
     routes = load_routes()
     if not routes:
         raise ValueError("No model is configured. Open Setup → AI provider, discover an installed tool-capable model, test it and save the default route")
+    if hasattr(ctx, "reconcile_model_reservation"):
+        ctx.reconcile_model_reservation()
     state = dict((ctx.job.checkpoint or {}).get("ai") or {})
     if not state:
         state = {"specialist": selected, "step": 0, "messages": [
@@ -275,8 +279,22 @@ def autonomous_job(ctx, spec: dict) -> dict:
             {"role": "user", "content": prompt}], "evidence": [], "completed_calls": {}}
         _save(ctx, state)
     budget = UsageBudget(ctx.job.token_budget, ctx.job.cost_budget, ctx.job.tokens_used, ctx.job.cost_used)
+    activity_this_attempt = False
+    def mark_execution():
+        nonlocal activity_this_attempt
+        activity_this_attempt = True
+    def before_model_request():
+        if hasattr(ctx, "record_model_usage"):
+            ctx.record_model_usage(budget.tokens_used, budget.cost_used)
+        ctx.check_cancelled()
+        ctx.heartbeat()
+        if budget.last_preflight and hasattr(ctx, "reserve_model_request"):
+            reservation = budget.last_preflight
+            ctx.reserve_model_request(reservation["estimated_input_tokens"] + reservation["output_reserve_tokens"],
+                                      reservation["cost_reserve"])
+        mark_execution()
     # Resume the saved model response before asking the provider for another one.
-    _pending_tools(ctx, state)
+    _pending_tools(ctx, state, on_execution=mark_execution)
     if "final_summary" in state:
         return _finish(ctx, state, budget)
     start_step = int(state.get("step", 0))
@@ -291,9 +309,16 @@ def autonomous_job(ctx, spec: dict) -> dict:
         previous_tokens, previous_cost = budget.tokens_used, budget.cost_used
         try:
             completion = ChatProvider(routes[route]).complete(messages, tool_schemas(), budget,
-                         before_request=lambda: (ctx.check_cancelled(), ctx.heartbeat()))
+                         before_request=before_model_request)
         except ProviderBudgetExceeded as exc:
-            from serverhub.jobs import BudgetExceeded
+            from serverhub.jobs import BudgetExceeded, PreflightRejected as JobPreflightRejected
+            if isinstance(exc, PreflightRejected) and not activity_this_attempt:
+                data = exc.diagnostics
+                safe = {"input_estimate": data.get("estimated_input_tokens"),
+                        "output_reserve": data.get("output_reserve_tokens"), "minimum_output": 32,
+                        "context_limit": data.get("context_limit"), "remaining_job_budget": data.get("remaining_tokens"),
+                        "estimator": data.get("method"), "serialized_utf8_bytes": data.get("serialized_utf8_bytes")}
+                raise JobPreflightRejected(str(exc), safe) from exc
             raise BudgetExceeded(str(exc)) from exc
         except ProviderError as exc:
             if exc.retryable:
@@ -303,7 +328,9 @@ def autonomous_job(ctx, spec: dict) -> dict:
         finally:
             charged_tokens = budget.tokens_used - previous_tokens
             charged_cost = budget.cost_used - previous_cost
-            if charged_tokens or charged_cost:
+            if hasattr(ctx, "record_model_usage"):
+                ctx.record_model_usage(budget.tokens_used, budget.cost_used)
+            elif charged_tokens or charged_cost:
                 ctx.usage(charged_tokens, charged_cost)
         # Use numeric/unit labels that do not resemble credential keys; the
         # audit redactor intentionally masks any field named *token*.
@@ -316,6 +343,9 @@ def autonomous_job(ctx, spec: dict) -> dict:
             "output_measured": accounting.get("actual_output_tokens"),
             "usage_verified": accounting.get("usage_verified"),
             "serialized_utf8_bytes": accounting.get("serialized_utf8_bytes"),
+            "request_utf8_bytes": accounting.get("request_utf8_bytes"),
+            "provider_format": accounting.get("provider_format"),
+            "uncertainty_margin": accounting.get("uncertainty_margin"),
             "job_limit": accounting.get("token_limit"), "already_spent": accounting.get("tokens_used"),
             "context_limit": accounting.get("context_limit"),
         })
@@ -329,7 +359,7 @@ def autonomous_job(ctx, spec: dict) -> dict:
         _save(ctx, state)
         if not completion.tool_calls:
             return _finish(ctx, state, budget)
-        _pending_tools(ctx, state)
+        _pending_tools(ctx, state, on_execution=mark_execution)
     return {"summary": "Configured planning step limit reached; unfinished work remains", "completed": False,
             "evidence": state.get("evidence", []), "tokens_used": budget.tokens_used, "cost_used": budget.cost_used}
 

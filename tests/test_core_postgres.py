@@ -133,3 +133,50 @@ def test_postgres_supervisor_enforces_deadline_without_handler_cooperation(pg_en
         assert job.state == "failed"
         assert job.failure_class == "timeout"
         assert not job.result
+
+
+def test_postgres_model_preflight_pause_refunds_claim_and_survives_worker_restart(pg_env, monkeypatch):
+    from serverhub.ai import orchestrator
+    from serverhub.ai.providers import ProviderConfig
+    from serverhub.jobs import load_plugins
+    load_plugins()
+    config = ProviderConfig(kind="ollama", model="qwen2.5:3b", base_url="http://127.0.0.1:1", context_limit=1024)
+    monkeypatch.setattr(orchestrator, "load_routes", lambda: {"default": config})
+    with SessionLocal() as db:
+        job = submit_job(db, pg_env, "autonomous", {"prompt": "Read inventory and verify freshness"}, host_id="pghost", token_budget=20000)
+        identity = job.id
+        db.commit()
+    assert Worker(isolated=True).run_once()
+    with SessionLocal() as db:
+        job = db.get(Job, identity)
+        assert (job.state, job.attempts, job.tokens_used) == ("paused", 0, 0), job.error
+        assert job.failure_class == "preflight"
+        assert job.result["preflight"]["context_limit"] == 1024
+        assert verify_chain(db)["valid"]
+    assert not Worker(isolated=True).run_once()
+
+
+def test_postgres_unknown_model_reservation_survives_process_recovery_without_double_charge(pg_env, monkeypatch):
+    from serverhub.ai import orchestrator
+    from serverhub.ai.providers import ProviderConfig
+    from serverhub.jobs import JobContext, load_plugins
+    load_plugins()
+    monkeypatch.setattr(orchestrator, "load_routes", lambda: {"default": ProviderConfig(
+        kind="ollama", model="qwen2.5:3b", base_url="http://127.0.0.1:1", context_limit=1024)})
+    with SessionLocal() as db:
+        job = submit_job(db, pg_env, "autonomous", {"prompt": "Inspect inventory"}, host_id="pghost")
+        job.state, job.worker_id, job.attempts = "running", "interrupted-worker", 1
+        job.started_at, job.lease_until = utcnow(), utcnow() + timedelta(minutes=1)
+        db.commit()
+        context = JobContext(db, job, pg_env)
+        context.reserve_model_request(500, .01)
+        identity = job.id
+        job.lease_until = utcnow() - timedelta(seconds=1)
+        db.commit()
+    assert Worker(isolated=True).run_once()
+    with SessionLocal() as db:
+        job = db.get(Job, identity)
+        assert (job.state, job.attempts, job.tokens_used) == ("paused", 1, 500)
+        assert job.cost_used == pytest.approx(.01)
+        assert "model_request_reservation" not in job.checkpoint
+        assert verify_chain(db)["valid"]
