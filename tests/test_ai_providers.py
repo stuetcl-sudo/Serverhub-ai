@@ -76,3 +76,17 @@ def test_no_remote_plain_http_or_inline_credentials():
         ProviderConfig(base_url="http://remote.example", model="x")
     with pytest.raises(ValueError):
         ProviderConfig(base_url="https://username:password@remote.example", model="x")
+
+
+def test_server_error_after_possible_generation_charged_before_retry():
+    attempts = []
+    def handle(request):
+        attempts.append(1)
+        if len(attempts) == 1:
+            return httpx.Response(503, json={"error": "unknown billing outcome"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}],
+                                         "usage": {"prompt_tokens": 2, "completion_tokens": 1}})
+    budget = UsageBudget(10000, 1)
+    result = ChatProvider(config(), transport=httpx.MockTransport(handle), sleep=lambda _: None).complete([], [], budget)
+    assert result.content == "ok" and len(attempts) == 2
+    assert budget.tokens_used > 64 + 3

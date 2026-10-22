@@ -89,3 +89,39 @@ def test_legacy_mcp_metadata_negotiates_and_notifies():
     cfg = {"old": IntegrationConfig(kind="serverhub_mcp", base_url="https://serverhub.example/mcp", allowed_operations=["serverhub_mcp.tools"])}
     assert execute("serverhub_mcp.tools", {"integration_id": "old"}, config=cfg, transport=httpx.MockTransport(handler))["result"]["tools"] == []
     assert methods == ["initialize", "notifications/initialized", "tools/list"]
+
+
+def test_filter_add_timeout_reconciles_applied_candidate_before_rollback():
+    filters = [{"id": 1, "name": "Original", "url": "https://old.example/list.txt", "enabled": True}]
+    snapshots, removed = [], []
+    candidate = "https://vetted.example/list.txt"
+    def handler(request):
+        nonlocal filters
+        path = request.url.path
+        if request.url.host == "vetted.example":
+            return httpx.Response(200, text="\n".join(f"||ads{i}.example^" for i in range(12)))
+        if path.endswith("check_host"):
+            return httpx.Response(200, json={"reason": "FilteredBlackList" if request.url.params["name"] == "ads.example" else "NotFilteredNotFound"})
+        if path.endswith("add_url"):
+            filters.append({"id": 2, "url": candidate, "enabled": True, "rules_count": 12})
+            raise httpx.ReadTimeout("Response lost after server applied add_url", request=request)
+        if path.endswith("set_url"):
+            payload = json.loads(request.content)
+            for item in filters:
+                if item["url"] == payload["url"]:
+                    item.update(payload["data"])
+            return httpx.Response(200)
+        if path.endswith("remove_url"):
+            url = json.loads(request.content)["url"]
+            removed.append(url)
+            filters = [item for item in filters if item["url"] != url]
+            return httpx.Response(200)
+        return httpx.Response(200, json={"filters": filters})
+    cfg = {"dns": IntegrationConfig(kind="adguard", base_url="https://dns.example", allowed_operations=["adguard.replace_filter"],
+                                    filter_sources={"vetted": candidate},
+                                    validation_domains={"ads.example": "blocked", "allowed.example": "allowed"})}
+    with pytest.raises(IntegrationError, match="rollback attempted") as error:
+        execute("adguard.replace_filter", {"integration_id": "dns", "source": "vetted", "old_filter_id": 1}, config=cfg,
+                transport=httpx.MockTransport(handler), checkpoint=snapshots.append)
+    assert error.value.rollback == {"verified": True}
+    assert removed == [candidate] and len(filters) == 1 and filters[0]["enabled"]
