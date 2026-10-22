@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -52,6 +53,14 @@ def repair(source):
         "repair-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:6]
     )
     release.mkdir(mode=0o755)
+    from .release import ReleaseManager
+
+    recovery = ReleaseManager()
+    recovery._protect()
+    pending = recovery.state_root / "pending.json"
+    if pending.exists() and json.loads(pending.read_text()).get("state") == "armed":
+        raise InstallError("Another release is awaiting verification; finish or roll it back before repair")
+    recovery_journal = None
     try:
         wheels = sorted((source / "dist").glob("*.whl"))
         if len(wheels) != 1:
@@ -79,6 +88,16 @@ def repair(source):
         for path in release.rglob("*"):
             if not path.is_symlink():
                 path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
+        installer._run(["systemctl", "enable", "--now", "serverhub-release-watchdog.timer"])
+        recovery_journal = {
+            "state": "armed",
+            "previous": str(previous),
+            "candidate": str(release),
+            "deadline": time.time() + 300,
+            "backup_id": backup["id"],
+            "release_id": release.name,
+        }
+        recovery._write_journal(recovery_journal)
         installer._run(["systemctl", "stop", "serverhub-api.service", "serverhub-worker.service"])
         environment = dict(
             os.environ,
@@ -135,6 +154,8 @@ def repair(source):
         installer._run(["systemctl", "daemon-reload"])
         installer._run(["systemctl", "restart", "serverhub-api.service", "serverhub-worker.service"])
         installer._healthchecks(release)
+        recovery_journal["state"], recovery_journal["verified_at"] = "verified", time.time()
+        recovery._write_journal(recovery_journal)
         return {
             "state": "upgraded",
             "release": str(release),
@@ -143,7 +164,7 @@ def repair(source):
             "credentials": "retained",
             "schema_rollback": "0004 is additive; previous code can run without dropping the new tables/column",
         }
-    except Exception:
+    except BaseException:
         installer._activate(previous)
         for path, (content, mode, uid, gid) in snapshots.items():
             path.write_bytes(content)
@@ -151,6 +172,9 @@ def repair(source):
             os.chown(path, uid, gid)
         installer._run(["systemctl", "daemon-reload"])
         installer._run(["systemctl", "restart", "serverhub-api.service", "serverhub-worker.service"])
+        if recovery_journal:
+            recovery_journal["state"], recovery_journal["reverted_at"] = "reverted", time.time()
+            recovery._write_journal(recovery_journal)
         raise
 
 

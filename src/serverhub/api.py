@@ -122,7 +122,7 @@ def _host_dict(host):
 
 
 @router.post("/auth/login")
-def login(body: Login, response: Response, db=Depends(get_db)):
+def login(body: Login, request: Request, response: Response, db=Depends(get_db)):
     settings = get_settings()
     user = db.scalar(select(User).where(User.username == body.username).with_for_update())
     now = utcnow()
@@ -145,7 +145,9 @@ def login(body: Login, response: Response, db=Depends(get_db)):
     token = create_session(db, user)
     append_audit(db, user.id, "login.succeeded", user.id)
     db.commit()
-    response.set_cookie("serverhub_session", token, httponly=True, secure=not settings.dev_mode,
+    local_tunnel = (request.url.scheme == "http" and request.url.hostname in {"localhost", "127.0.0.1", "::1"}
+                    and request.client and request.client.host in {"localhost", "127.0.0.1", "::1"})
+    response.set_cookie("serverhub_session", token, httponly=True, secure=not settings.dev_mode and not local_tunnel,
                         samesite="strict", max_age=settings.session_hours * 3600, path="/")
     response.headers["Cache-Control"] = "no-store"
     return {"token": token, "user": _user_dict(user)}

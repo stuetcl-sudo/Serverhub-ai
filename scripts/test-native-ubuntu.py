@@ -113,6 +113,7 @@ login = client.post(
     "/api/auth/login", json={"username": "ciowner", "password": "isolated-native-owner-password-42"}
 )
 login.raise_for_status()
+assert "Secure" not in login.headers.get("set-cookie", "")  # narrowly scoped loopback tunnel login
 headers = {"Authorization": "Bearer " + login.json()["token"], "Origin": "https://serverhub.test"}
 model = {"kind": "ollama", "base_url": "http://127.0.0.1:11439", "model": "native-fixture"}
 for endpoint in ("discover", "test"):
@@ -206,6 +207,27 @@ assert checks["database"]["status"] == "ok", checks["database"]
 upgraded = repair(source)
 assert upgraded["state"] == "upgraded"
 assert Path("/etc/serverhub/api.env").read_bytes() == before
+# Prove a failed post-upgrade healthcheck restores the previous release,
+# credentials and native units. This runs only inside the confirmed disposable VM.
+previous = Path("/opt/serverhub/current").resolve()
+healthchecks = Installer._healthchecks
+try:
+
+    def fail_health(self, release):
+        raise InstallError("Intentional isolated post-upgrade verification failure")
+
+    Installer._healthchecks = fail_health
+    try:
+        repair(source)
+        raise AssertionError("Expected failed upgrade")
+    except InstallError:
+        pass
+finally:
+    Installer._healthchecks = healthchecks
+assert Path("/opt/serverhub/current").resolve() == previous
+assert Path("/etc/serverhub/api.env").read_bytes() == before
+assert json.loads(Path("/var/lib/serverhub-release/pending.json").read_text())["state"] == "reverted"
+installer._healthchecks(previous)
 # No production systems are contacted. Emit only non-secret result evidence.
 print(
     json.dumps(
@@ -218,6 +240,7 @@ print(
             "read_only_autonomous_job": result["state"],
             "unauthorized_restart": unauthorized.status_code,
             "upgrade": upgraded["state"],
+            "failed_upgrade_rollback": "passed",
             "database_backup_id": upgraded["backup_id"],
         }
     )

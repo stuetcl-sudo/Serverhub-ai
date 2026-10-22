@@ -36,7 +36,7 @@ NODE_OPERATIONS = frozenset(
     }
 )
 READ_OPERATIONS = frozenset(
-    {"inventory.refresh", "discovery.refresh", "diagnostics.network", "security.scan", "systemd.status"}
+    {"inventory.refresh", "discovery.refresh", "diagnostics.network", "security.scan", "systemd.status", "systemd.logs"}
 )
 
 

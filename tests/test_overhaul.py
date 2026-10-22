@@ -9,7 +9,12 @@ import httpx
 import pytest
 from sqlalchemy import select, text
 
-from test_core import core_env as core_env, client as client, bearer, owner as owner  # shared isolated fixtures
+from test_core import (
+    core_env as core_env,
+    client as client,
+    bearer,
+    owner as owner,
+)  # shared isolated fixtures
 from serverhub.database import SessionLocal, get_engine, utcnow
 from serverhub.models import Host, Job, ModelRoute, Policy, WorkerHeartbeat, InventorySample
 from serverhub.policy import PermissionDenied, authorize
@@ -182,6 +187,7 @@ def test_policy_blocked_job_has_exact_denial_and_resumes_saved_progress(core_env
         job = db.get(Job, identity)
         assert job.state == "waiting_approval"
         assert job.result["denial"]["arguments"] == {"target": "internet"}
+        assert job.result["denial"]["environment"] == "read"
         assert job.checkpoint["first"]
         db.add(
             Policy(
@@ -385,3 +391,14 @@ def test_upgrade_of_existing_0003_schema_adds_runtime_without_erasing_grants(tmp
         connection.execute(text("SELECT name FROM model_routes"))
     get_engine().dispose()
     get_settings.cache_clear()
+
+
+def test_redaction_preserves_policy_scope_but_masks_log_credentials():
+    from serverhub.audit import redact
+
+    assert redact({"environment": "staging"})["environment"] == "staging"
+    assert redact({"environment": {"SECRET": "value"}})["environment"] == "[REDACTED]"
+    value = redact(
+        'password=hunter2 api_key="example-secret" postgresql://owner:db-secret@localhost/test Bearer abcdef'
+    )
+    assert all(secret not in value for secret in ("hunter2", "example-secret", "db-secret", "abcdef"))
