@@ -25,7 +25,7 @@ LockPersonality=true
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 ReadWritePaths=/var/lib/serverhub-node
-InaccessiblePaths=-/etc/serverhub/api.env -/etc/serverhub/worker.env -/etc/serverhub/recovery.env /etc/serverhub/broker.yaml /var/backups/serverhub /var/lib/serverhub-recovery /var/lib/serverhub-release -/var/run/docker.sock
+InaccessiblePaths=-/etc/serverhub/api.env -/etc/serverhub/worker.env -/etc/serverhub/recovery.env -/etc/serverhub/broker.yaml -/var/backups/serverhub -/var/lib/serverhub-recovery -/var/lib/serverhub-release -/var/run/docker.sock
 MemoryMax=512M
 TasksMax=64
 [Install]

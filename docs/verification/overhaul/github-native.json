@@ -1,0 +1,46 @@
+{
+  "run_id": 39816992422,
+  "source_commit": "c6cc0e7b536c942d58ad1c6c6e85995a89f687e9",
+  "url": "https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39816992422",
+  "jobs": [
+    {
+      "name": "backend",
+      "job_id": 119957946551
+    },
+    {
+      "name": "frontend",
+      "job_id": 119957947114
+    },
+    {
+      "name": "dependencies",
+      "job_id": 119957947479
+    },
+    {
+      "name": "native-ubuntu",
+      "job_id": 119958422816
+    }
+  ],
+  "native": {
+    "native_install": "passed",
+    "interruption_resume": "passed",
+    "idempotency": "passed",
+    "api_worker": "healthy",
+    "model_setup": "mock Ollama API verified",
+    "read_only_autonomous_job": "succeeded",
+    "unauthorized_restart": 403,
+    "upgrade": "upgraded",
+    "failed_upgrade_rollback": "passed",
+    "database_backup_id": "20261022T165011Z-7e2bdf726ee7"
+  },
+  "backend_summary": [
+    "2026-10-22T16:48:35.3631767Z SKIPPED [1] tests/test_node.py:150: root-owned checkpoint file test requires isolated root environment",
+    "2026-10-22T16:48:35.3632088Z SKIPPED [1] tests/test_overhaul.py:361: Optional real Ollama provider is not configured",
+    "2026-10-22T16:48:35.3632462Z ================== 134 passed, 2 skipped, 1 warning in 11.96s =================="
+  ],
+  "frontend_summary": [
+    "2026-10-22T16:48:23.5628132Z found 0 vulnerabilities",
+    "2026-10-22T16:48:35.2015690Z  Test Files  3 passed (3)",
+    "2026-10-22T16:48:35.2016706Z       Tests  24 passed (24)",
+    "2026-10-22T16:48:35.6589246Z found 0 vulnerabilities"
+  ]
+}

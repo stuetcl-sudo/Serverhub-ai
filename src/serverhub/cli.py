@@ -4,6 +4,7 @@ import getpass
 import json
 import sys
 from pathlib import Path
+import os
 
 from .auth import ROLES, hash_password
 from .database import SessionLocal
@@ -14,12 +15,25 @@ from .settings import get_settings
 def _alembic_config():
     from alembic.config import Config
     # Native release layout includes migrations beside the wheel-installed virtualenv.
-    candidates = [Path.cwd() / "alembic.ini", Path(__file__).resolve().parents[2] / "alembic.ini",
-                  Path("/opt/serverhub/current/alembic.ini")]
+    explicit = os.environ.get("SERVERHUB_RELEASE_DIR")
+    candidates = ([Path(explicit) / "alembic.ini"] if explicit else [])
+    candidates += [Path("/opt/serverhub/current/alembic.ini"), Path(__file__).resolve().parents[2] / "alembic.ini"]
+    try:
+        candidates.append(Path.cwd() / "alembic.ini")
+    except (PermissionError, FileNotFoundError):
+        pass
     for candidate in candidates:
-        if candidate.is_file():
-            return Config(str(candidate))
-    raise RuntimeError("Cannot find alembic.ini; run from the repository/release root")
+        try:
+            if candidate.is_file():
+                config = Config(str(candidate.resolve()))
+                config.set_main_option("script_location", str(candidate.resolve().parent / "migrations"))
+                # Installed modules are already on sys.path; never inherit a caller's
+                # inaccessible source directory during a privilege transition.
+                config.set_main_option("prepend_sys_path", "")
+                return config
+        except PermissionError:
+            continue
+    raise RuntimeError("Cannot locate migrations. Set SERVERHUB_RELEASE_DIR to the installed release directory")
 
 
 def main(argv=None):
@@ -37,10 +51,18 @@ def main(argv=None):
     user.add_argument("--username", required=True)
     user.add_argument("--role", choices=sorted(ROLES), default="owner")
     user.add_argument("--password-stdin", action="store_true")
+    user.add_argument("--if-absent", action="store_true", help="Resume bootstrap without resetting existing credentials")
     health = sub.add_parser("health", help="Read the controller health endpoint")
     health.add_argument("--url", default="http://127.0.0.1:9080")
+    sub.add_parser("doctor", help="Read-only local diagnostics (use API database environment)")
     args = parser.parse_args(argv)
     settings = get_settings()
+    if args.command == "doctor":
+        from .diagnostics import collect_diagnostics
+        with SessionLocal() as db:
+            report = collect_diagnostics(db)
+        print(json.dumps(report, indent=2, default=str))
+        return 0 if report["healthy"] else 1
     if args.command == "serve":
         import uvicorn
         uvicorn.run("serverhub.main:app", host=args.host or settings.api_bind, port=args.port or settings.api_port,
@@ -65,8 +87,12 @@ def main(argv=None):
         if not args.password_stdin and password != getpass.getpass("Repeat password: "):
             parser.error("passwords do not match")
         with SessionLocal() as db:
-            if db.scalar(select(User).where(User.username == args.username)):
-                parser.error("username already exists; no credential was changed")
+            existing = db.scalar(select(User).where(User.username == args.username))
+            if existing:
+                if args.if_absent and existing.role == args.role and existing.enabled:
+                    print(json.dumps({"id": existing.id, "username": existing.username, "state": "retained"}))
+                    return 0
+                parser.error("username already exists with incompatible role/state; no credential was changed")
             account = User(username=args.username, password_hash=hash_password(password), role=args.role)
             db.add(account)
             db.commit()

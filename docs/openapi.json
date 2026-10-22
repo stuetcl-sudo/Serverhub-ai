@@ -830,22 +830,6 @@
         }
       }
     },
-    "/api/settings/models": {
-      "get": {
-        "summary": "Models Settings",
-        "operationId": "models_settings_api_settings_models_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/emergency-stop": {
       "get": {
         "summary": "Emergency Status",
@@ -1677,6 +1661,228 @@
           }
         }
       }
+    },
+    "/api/settings/models": {
+      "get": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Model Settings",
+        "operationId": "model_settings_api_settings_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/models/discover": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Discover",
+        "operationId": "discover_api_settings_models_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/models/test": {
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Test",
+        "operationId": "test_api_settings_models_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/models/{name}": {
+      "put": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Save Model",
+        "operationId": "save_model_api_settings_models__name__put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/policies/profiles": {
+      "get": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Profiles",
+        "operationId": "profiles_api_policies_profiles_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Grant Profile",
+        "operationId": "grant_profile_api_policies_profiles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileGrant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/diagnostics": {
+      "get": {
+        "tags": [
+          "setup"
+        ],
+        "summary": "Diagnostics",
+        "operationId": "diagnostics_api_diagnostics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2117,6 +2323,19 @@
             "format": "date-time",
             "title": "Expires At"
           },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "any",
+              "read",
+              "maintenance",
+              "development",
+              "staging",
+              "production"
+            ],
+            "title": "Environment",
+            "default": "any"
+          },
           "production": {
             "type": "boolean",
             "title": "Production",
@@ -2237,6 +2456,179 @@
           "enabled"
         ],
         "title": "PolicyUpdate"
+      },
+      "ProfileGrant": {
+        "properties": {
+          "profile": {
+            "type": "string",
+            "title": "Profile"
+          },
+          "subject_id": {
+            "type": "string",
+            "title": "Subject Id"
+          },
+          "host_id": {
+            "type": "string",
+            "title": "Host Id"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "hours": {
+            "type": "integer",
+            "maximum": 8784.0,
+            "minimum": 1.0,
+            "title": "Hours",
+            "default": 24
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Services"
+          },
+          "containers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Containers"
+          },
+          "network_targets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Network Targets"
+          },
+          "allow_dependency_network": {
+            "type": "boolean",
+            "title": "Allow Dependency Network",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "profile",
+          "subject_id",
+          "host_id"
+        ],
+        "title": "ProfileGrant"
+      },
+      "ProviderConfig": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "openai"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Model"
+          },
+          "api_key_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Env"
+          },
+          "allow_insecure_http": {
+            "type": "boolean",
+            "title": "Allow Insecure Http",
+            "default": false
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "maximum": 300.0,
+            "minimum": 1.0,
+            "title": "Timeout Seconds",
+            "default": 90
+          },
+          "max_retries": {
+            "type": "integer",
+            "maximum": 4.0,
+            "minimum": 0.0,
+            "title": "Max Retries",
+            "default": 2
+          },
+          "max_output_tokens": {
+            "type": "integer",
+            "maximum": 32768.0,
+            "minimum": 32.0,
+            "title": "Max Output Tokens",
+            "default": 2048
+          },
+          "max_tokens_parameter": {
+            "type": "string",
+            "title": "Max Tokens Parameter",
+            "default": "max_completion_tokens"
+          },
+          "input_cost_per_million": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Cost Per Million"
+          },
+          "output_cost_per_million": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 10000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Cost Per Million"
+          },
+          "context_limit": {
+            "type": "integer",
+            "maximum": 2000000.0,
+            "minimum": 1024.0,
+            "title": "Context Limit",
+            "default": 32768
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "base_url",
+          "model"
+        ],
+        "title": "ProviderConfig"
       },
       "ScheduleStatus": {
         "properties": {

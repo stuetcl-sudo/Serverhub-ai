@@ -74,6 +74,7 @@ class Policy(Base):
     role: Mapped[str | None] = mapped_column(String(32), nullable=True)
     host_id: Mapped[str | None] = mapped_column(ForeignKey("hosts.id"), nullable=True)
     project: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    environment: Mapped[str] = mapped_column(String(30), default="any")
     operations: Mapped[list] = mapped_column(JSON, default=list)
     constraints: Mapped[dict] = mapped_column(JSON, default=dict)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
@@ -270,3 +271,21 @@ def to_dict(model: Any, exclude: set[str] | None = None) -> dict:
         value = getattr(model, column.name)
         result[column.name] = value.isoformat() + "Z" if isinstance(value, datetime) else value
     return result
+
+
+class ModelRoute(Base):
+    """Owner-controlled endpoints; workers may SELECT but never change routes."""
+    __tablename__ = "model_routes"
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    config: Mapped[dict] = mapped_column(JSON)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    readiness: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class WorkerHeartbeat(Base):
+    __tablename__ = "worker_heartbeats"
+    worker_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    seen_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

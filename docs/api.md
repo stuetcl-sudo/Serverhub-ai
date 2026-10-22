@@ -25,3 +25,24 @@ A workflow example:
 ```
 
 Submission and execution both require active policies for concrete operations. The example service must also be separately allowlisted by its node broker. No documented example grants a real server permission by itself.
+
+
+## Setup and diagnostics additions
+
+All setup/configuration routes below require an authenticated owner.
+
+| Method | Route | Behavior |
+| --- | --- | --- |
+| GET | `/api/settings/models` | Effective validated routes and timestamped readiness; empty routes mean unconfigured. |
+| POST | `/api/settings/models/discover` | Bounded provider model discovery from a validated fixed endpoint. |
+| POST | `/api/settings/models/test` | Capability/readiness and harmless structured tool-call probe; no infrastructure tool execution. |
+| PUT | `/api/settings/models/{name}` | Test then persist a route, audit the change; no inline secret values. |
+| GET | `/api/policies/profiles` | Read-only, maintenance and development profile descriptions. |
+| POST | `/api/policies/profiles` | Grant named identity/host/argument/environment scope with expiration; never a universal root grant. |
+| GET | `/api/diagnostics` | Actionable configuration/schema/worker/asset/node findings; no repair side effects. |
+
+Permission failures return `403 {detail, denial}`. Policy-blocked jobs persist the
+same denial under `result.denial` with operation, host, project, arguments,
+environment, missing permission and remediation. `partial` is a terminal job state
+for explicit unfinished or unverified AI outcomes. Existing successful dependency
+checks continue to require `succeeded`, so partial work does not unlock dependents.

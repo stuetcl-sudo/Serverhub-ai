@@ -6,6 +6,7 @@ configuration is an operator-owned trust boundary, never model output.
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import stat
 import time
@@ -17,7 +18,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class ProviderError(RuntimeError):
@@ -36,15 +37,26 @@ def validate_url(value: str, *, allow_http: bool = False) -> str:
     if (parsed.scheme not in ("https", "http") or not parsed.hostname or
             parsed.username or parsed.password or parsed.query or parsed.fragment):
         raise ValueError("A fixed HTTP(S) URL without credentials, query or fragment is required")
-    if parsed.scheme == "http" and not (allow_http or parsed.hostname in ("localhost", "127.0.0.1", "::1")):
-        raise ValueError("Non-loopback endpoints require HTTPS or explicit allow_insecure_http")
+    if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+        try:
+            address = ipaddress.ip_address(parsed.hostname)
+            private = any(address in ipaddress.ip_network(network) for network in
+                          ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+                          if address.version == ipaddress.ip_network(network).version)
+        except ValueError:
+            private = False
+        if not allow_http or not private:
+            raise ValueError("Private HTTP requires explicit allow_insecure_http and a literal RFC1918/ULA address; use HTTPS for public endpoints or DNS names")
     return value.rstrip("/")
 
 
 def read_operator_yaml(path: str | Path) -> dict:
     path = Path(path)
-    if not path.is_file():
-        return {}
+    try:
+        if not path.is_file():
+            return {}
+    except PermissionError as exc:
+        raise ValueError("Model configuration cannot be read; run Setup diagnostics to inspect file and ancestor permissions") from exc
     if path.is_symlink():
         raise ValueError("Operator configuration must not be a symlink")
     if os.environ.get("SERVERHUB_DEV_MODE", "").lower() not in {"true", "1"}:
@@ -157,18 +169,43 @@ class UsageBudget:
 
 def load_routes(path: str | Path | None = None) -> dict[str, ProviderConfig]:
     if path is None:
+        from serverhub.database import SessionLocal
+        from serverhub.models import ModelRoute
+        from sqlalchemy import select
+        # DB errors are not swallowed: a missing migration must be actionable.
+        with SessionLocal() as db:
+            saved = db.scalars(select(ModelRoute)).all()
+            if saved:
+                return validate_routes({row.name: row.config for row in saved if row.enabled})
+    if path is None:
         try:
             from serverhub.settings import get_settings
             path = getattr(get_settings(), "model_config_path", "/etc/serverhub/models.yaml")
         except ImportError:
             path = "/etc/serverhub/models.yaml"
-    data = read_operator_yaml(path)
+    try:
+        data = read_operator_yaml(path)
+    except yaml.YAMLError as exc:
+        raise ValueError("Invalid model YAML. Use owner Setup or validate the root-owned fallback file; source contents are not returned") from exc
+    if set(data) - {"routes", "providers"} or data.get("providers"):
+        raise ValueError("Unsupported model configuration shape. Use inline route configurations or owner Setup; legacy provider documents remain private")
     routes = data.get("routes", {})
     if not isinstance(routes, dict):
         raise ValueError("routes must be a mapping")
     if any(not isinstance(name, str) or not __import__("re").fullmatch(r"[A-Za-z0-9_-]{1,64}", name) for name in routes):
         raise ValueError("Invalid model route name")
-    return {name: ProviderConfig.model_validate(config) for name, config in routes.items()}
+    return validate_routes(routes)
+
+
+def validate_routes(routes):
+    result = {}
+    for name, config in routes.items():
+        try:
+            result[name] = ProviderConfig.model_validate(config)
+        except ValidationError as exc:
+            fields = sorted({".".join(str(part) for part in error["loc"]) or "endpoint" for error in exc.errors()})
+            raise ValueError("Invalid model route " + str(name) + ": check " + ", ".join(fields) + " in owner Setup. Configuration values are withheld") from None
+    return result
 
 
 class ChatProvider:
@@ -232,7 +269,7 @@ class ChatProvider:
                 except httpx.HTTPError as exc:
                     self._charge_unknown(budget, estimated_input, output_limit)
                     if attempt == cfg.max_retries:
-                        raise ProviderError("Provider transport failed", retryable=True) from exc
+                        raise ProviderError("Provider transport failed: model endpoint is unreachable or timed out; check Settings → AI providers and the controller-to-Ollama network path", retryable=True) from exc
                 except ProviderError as exc:
                     if not exc.retryable or attempt == cfg.max_retries:
                         raise
@@ -258,6 +295,8 @@ class ChatProvider:
                     for call in message["tool_calls"]]
             if message.get("role") == "tool":
                 message.pop("tool_call_id", None)
+                if "name" in message:
+                    message["tool_name"] = message.pop("name")
             converted.append(message)
         return converted
 

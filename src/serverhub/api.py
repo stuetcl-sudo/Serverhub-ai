@@ -4,14 +4,13 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from starlette.responses import StreamingResponse
 
-from .audit import append_audit, redact, verify_chain
+from .audit import append_audit, verify_chain
 from .auth import (Authenticated, PASSWORDS, _DUMMY_HASH, create_session, hash_password,
                    hash_secret, request_token, require_owner, token_principal,
                    verify_password)
@@ -55,6 +54,7 @@ class NewPolicy(StrictModel):
     operations: list[str] = Field(min_length=1, max_length=100)
     constraints: dict = Field(default_factory=dict)
     expires_at: datetime
+    environment: Literal["any", "read", "maintenance", "development", "staging", "production"] = "any"
     production: bool = False
 
     @field_validator("operations")
@@ -122,7 +122,7 @@ def _host_dict(host):
 
 
 @router.post("/auth/login")
-def login(body: Login, response: Response, db=Depends(get_db)):
+def login(body: Login, request: Request, response: Response, db=Depends(get_db)):
     settings = get_settings()
     user = db.scalar(select(User).where(User.username == body.username).with_for_update())
     now = utcnow()
@@ -145,7 +145,9 @@ def login(body: Login, response: Response, db=Depends(get_db)):
     token = create_session(db, user)
     append_audit(db, user.id, "login.succeeded", user.id)
     db.commit()
-    response.set_cookie("serverhub_session", token, httponly=True, secure=not settings.dev_mode,
+    local_tunnel = (request.url.scheme == "http" and request.url.hostname in {"localhost", "127.0.0.1", "::1"}
+                    and request.client and request.client.host in {"localhost", "127.0.0.1", "::1"})
+    response.set_cookie("serverhub_session", token, httponly=True, secure=not settings.dev_mode and not local_tunnel,
                         samesite="strict", max_age=settings.session_hours * 3600, path="/")
     response.headers["Cache-Control"] = "no-store"
     return {"token": token, "user": _user_dict(user)}
@@ -410,19 +412,6 @@ def audit(principal: Authenticated, limit: int = 200, db=Depends(get_db)):
 def audit_verify(principal: Authenticated, db=Depends(get_db)):
     require_owner(principal)
     return verify_chain(db)
-
-
-@router.get("/settings/models")
-def models_settings(principal: Authenticated):
-    require_owner(principal)
-    path = get_settings().model_config_path
-    if not path.is_file():
-        return {"configured": False, "providers": {}, "routes": {}, "editable": False,
-                "message": "Configure the root-owned model settings file before autonomous AI jobs"}
-    with path.open() as stream:
-        payload = yaml.safe_load(stream) or {}
-    return {"configured": True, **redact(payload), "editable": False,
-            "message": "Model trust configuration is root-owned; edit through the native administrator workflow"}
 
 
 @router.get("/emergency-stop")

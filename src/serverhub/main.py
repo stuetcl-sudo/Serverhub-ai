@@ -82,10 +82,15 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         origin = request.headers.get("origin")
-        if origin and origin not in settings.allowed_origins:
+        allowed_origins = set(settings.allowed_origins)
+        # Same-origin loopback UI through an SSH tunnel. Never accept an
+        # arbitrary Origin, LAN HTTP origin, or Origin unrelated to Host.
+        if request.url.hostname in {"127.0.0.1", "localhost", "::1"}:
+            allowed_origins.add(str(request.base_url).rstrip("/"))
+        if origin and origin not in allowed_origins:
             return JSONResponse({"detail": "Origin is not allowed"}, status_code=403)
         if (request.method not in {"GET", "HEAD", "OPTIONS"} and request.cookies.get("serverhub_session")
-                and not request.headers.get("authorization") and origin not in settings.allowed_origins):
+                and not request.headers.get("authorization") and origin not in allowed_origins):
             return JSONResponse({"detail": "Cookie-authenticated writes require an allowed Origin"}, status_code=403)
         length = request.headers.get("content-length")
         if length:
@@ -107,7 +112,7 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(PermissionDenied)
     async def permission_denied(request, exc):
-        return JSONResponse({"detail": str(exc)}, status_code=403)
+        return JSONResponse({"detail": str(exc), "denial": exc.details}, status_code=403)
 
     @app.get("/health", include_in_schema=False)
     def health():
@@ -127,7 +132,7 @@ def create_app() -> FastAPI:
             return JSONResponse({"status": "unhealthy", "version": __version__, "database": "unavailable_or_unmigrated"}, status_code=503)
 
     app.include_router(router)
-    for module_name in ("serverhub.node_api", "serverhub.extensions", "serverhub.mcp"):
+    for module_name in ("serverhub.node_api", "serverhub.extensions", "serverhub.mcp", "serverhub.setup"):
         try:
             extension = importlib.import_module(module_name)
         except ModuleNotFoundError as exc:

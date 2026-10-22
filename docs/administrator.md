@@ -51,3 +51,20 @@ Treat findings as evidence to investigate. `not_observed` means a finding was no
 Native backups run independently from the AI and publish read-only status to the dashboard. Verify checksums and perform restore drills to a generated disposable database. Archive copies and disaster recovery media remain the operator's responsibility. Review `docs/recovery.md` before upgrades.
 
 The installed update path requires the owner's trusted signing key, exact artifact hashes, validation metadata and unchanged trust-boundary digest. AI-generated changes can be proposed and tested but cannot silently replace the installed policy, audit, OAuth or recovery implementation.
+
+
+## Stability/autonomy setup
+
+Owners can use Setup & diagnostics to discover/test/save model routes, inspect
+worker/schema/asset health and grant autonomy profiles. Grants are scoped to a
+named identity and enrolled host with explicit argument targets, environment and
+expiry. Maintenance profiles permit only selected restarts; development profiles
+permit one configured project and staging, never production release. A denied job
+retains its exact operation/host/project/arguments and saved progress. After granting
+its intended scope, resume the same job; do not resubmit until its side effects are
+understood. `partial` is terminal and does not satisfy successful dependencies.
+
+AI results become verified only when supported deterministic checks pass and no
+unverified mutation/unfinished submitted child remains. The verified scope is the
+listed checks, not an independent proof of an arbitrary prose summary. Freshness
+uses actual inventory receipt history, separately from agent heartbeat liveness.

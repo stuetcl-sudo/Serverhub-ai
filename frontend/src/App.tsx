@@ -59,6 +59,7 @@ import {
 } from "lucide-react";
 import { api, date, human, patch, post, relative, rows } from "./api";
 import type { Json, User } from "./api";
+import { FirstRunSetup, ModelSetup, ProfileSetup } from "./Setup";
 
 const RefreshContext = createContext(0);
 const ToastContext = createContext<(message: string, error?: boolean) => void>(
@@ -94,6 +95,7 @@ const NAV = [
     items: [
       ["policies", "Approval policies", LockKeyhole],
       ["backups", "Backup & recovery", HardDrive],
+      ["setup", "Setup & diagnostics", Settings2],
       ["models", "AI providers", Bot],
       ["users", "Users & roles", Users],
       ["audit", "Audit trail", FileText],
@@ -101,6 +103,7 @@ const NAV = [
   },
 ];
 const TITLES: Record<string, [string, string]> = {
+  setup: ["Set up reliable autonomy.", "Connect models, enroll hosts, delegate scoped permissions and diagnose readiness."],
   overview: [
     "Your infrastructure, in focus.",
     "A live view of your systems and the work happening around them.",
@@ -828,6 +831,8 @@ export default function App() {
                   <Policies />
                 ) : page === "users" ? (
                   <UserAdmin />
+                ) : page === "setup" ? (
+                  <FirstRunSetup />
                 ) : page === "models" ? (
                   <Models />
                 ) : page === "backups" ? (
@@ -1956,6 +1961,9 @@ function Jobs() {
     "queued",
     "running",
     "succeeded",
+    "partial",
+    "waiting_approval",
+    "retry",
     "failed",
     "paused",
     "cancelled",
@@ -2143,7 +2151,7 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
                     Resume
                   </button>
                 )}
-                {!["succeeded", "failed", "cancelled"].includes(job.state) && (
+                {!["succeeded", "partial", "failed", "cancelled"].includes(job.state) && (
                   <button
                     className="button secondary danger"
                     disabled={busy}
@@ -2163,6 +2171,9 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
                   }
                 />
               )}
+              {job.result?.denial && <section className="callout"><div><h4>Permission required</h4><p><strong>{job.result.denial.operation}</strong> · host {job.result.denial.host_id || "none"} · {job.result.denial.environment}</p><p>{job.result.denial.reason}</p><p>{job.result.denial.remediation}</p><a href="#policies" onClick={onClose}>Open scoped autonomy profiles</a></div></section>}
+              <h4>Tool-call history</h4>
+              {(job.checkpoint?.ai?.evidence || []).map((entry: Json, index: number) => <details key={index}><summary>{index + 1}. {entry.operation}</summary><JsonView value={entry.result} /></details>)}
               <h4>Execution events</h4>
               <Load
                 loading={events.loading}
@@ -2732,6 +2743,7 @@ function Policies() {
   }
   return (
     <>
+      {roleOwner(user) && <ProfileSetup />}
       <div className="toolbar">
         <div className="scope-note">
           <Shield size={17} />
@@ -3170,77 +3182,7 @@ function UserAdmin() {
   );
 }
 
-function Models() {
-  const r = useResource<Json>("/settings/models");
-  const config = r.data || {},
-    providers = rows(config.providers),
-    routing = config.routing || config.routes || {};
-  const providerEntries: Json[] = providers.length
-    ? providers
-    : Object.entries(config.providers || {}).map(([id, v]) => ({
-        id,
-        ...(typeof v === "object" ? (v as Json) : { model: v }),
-      }));
-  return (
-    <>
-      <div className="callout subtle">
-        <LockKeyhole size={18} />
-        <span>
-          Provider credentials are loaded from protected environment references.
-          Configure secrets on the controller; never paste keys into AI chat.
-        </span>
-      </div>
-      <Load loading={r.loading} error={r.error} onRetry={r.reload}>
-        {providerEntries.length ? (
-          <div className="provider-grid">
-            {providerEntries.map((p, i) => (
-              <Panel key={p.id || p.name || i}>
-                <div className="provider-heading">
-                  <div className="provider-icon">
-                    <Bot size={24} />
-                  </div>
-                  <span className="tag">
-                    {p.type || p.provider || "OpenAI compatible"}
-                  </span>
-                </div>
-                <h2>{p.name || p.id || p.model}</h2>
-                <p className="mono small muted">
-                  {p.base_url || p.url || "Provider URL not exposed"}
-                </p>
-                <dl className="provider-details">
-                  <dt>Model</dt>
-                  <dd>{human(p.model)}</dd>
-                  <dt>Credential reference</dt>
-                  <dd>
-                    {p.api_key_env || p.key_env || p.token_env || "Not exposed"}
-                  </dd>
-                  <dt>Timeout</dt>
-                  <dd>{p.timeout ? `${p.timeout}s` : "Provider default"}</dd>
-                </dl>
-              </Panel>
-            ))}
-          </div>
-        ) : (
-          <Panel>
-            <Empty
-              icon={Bot}
-              title="No model providers configured"
-              text="Configure an OpenAI-compatible endpoint or Ollama in the protected model configuration file, then restart the controller and worker as documented."
-            />
-          </Panel>
-        )}
-        {Object.keys(routing).length > 0 && (
-          <Panel title="Specialist routing">
-            <JsonView value={routing} />
-          </Panel>
-        )}
-        <Panel title="Provider configuration status">
-          <JsonView value={config} />
-        </Panel>
-      </Load>
-    </>
-  );
-}
+function Models() { return <ModelSetup />; }
 
 function Backups() {
   const r = useResource<Json[]>("/backups"),

@@ -24,7 +24,7 @@ from .discovery import CollectionError, command, discover
 from .security import vulnerability_findings
 
 MAX_REQUEST = 65536
-ALLOWED_OPERATIONS = frozenset({"inventory.refresh", "discovery.refresh", "diagnostics.network", "systemd.status", "systemd.restart",
+ALLOWED_OPERATIONS = frozenset({"inventory.refresh", "discovery.refresh", "diagnostics.network", "systemd.status", "systemd.logs", "systemd.restart",
                                 "docker.restart", "docker.compose.apply", "security.scan"})
 PROTECTED_UNITS = re.compile(r"^(serverhub|ssh|sshd|network|systemd-network|NetworkManager|docker|containerd|ufw|nftables|postgresql|dbus|polkit|sudo|cron)", re.I)
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}$")
@@ -164,13 +164,18 @@ def execute(operation: str, arguments: dict, config: dict) -> dict:
         if PROTECTED_UNITS.match(service):
             raise BrokerDenied("control-plane, authentication, database and network services are protected")
         if operation == "systemd.status":
-            return _systemd_status(service)
+            return {**_systemd_status(service), "verified": True}
+        if operation == "systemd.logs":
+            from serverhub.audit import redact
+            output = command("journalctl", "--unit", service, "--lines", "100", "--no-pager", "--output=short-iso", timeout=10)
+            return {"service": service, "lines": redact(output[:32000]), "verified": True,
+                    "scope": "explicitly permitted unit; last 100 journal lines"}
         before = _systemd_status(service)
         command("systemctl", "restart", service, timeout=45)
         after = _systemd_status(service)
         if after["active"] != "active":
             raise CollectionError("service restart did not verify active state")
-        return {"before": before, "after": after, "verification": "systemd_active_state"}
+        return {"before": before, "after": after, "verification": "systemd_active_state", "verified": True}
     if operation == "docker.restart":
         _exact_args(arguments, {"container"})
         container = _name(arguments.get("container"))
@@ -182,7 +187,7 @@ def execute(operation: str, arguments: dict, config: dict) -> dict:
         if not expected or before.get("Image") != expected:
             raise BrokerDenied("container image differs from approved image id")
         command("docker", "restart", "--time", "10", container, timeout=45)
-        return {**_wait_container(container), "image_id": before.get("Image")}
+        return {**_wait_container(container), "image_id": before.get("Image"), "verified": True}
     if operation == "docker.compose.apply":
         _exact_args(arguments, {"project"})
         name = _name(arguments.get("project"))

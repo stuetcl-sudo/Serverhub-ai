@@ -21,3 +21,6 @@ build/
 .DS_Store
 playwright-report/
 test-results/
+
+.build-venv/
+.build-tools/

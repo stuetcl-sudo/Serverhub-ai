@@ -43,3 +43,30 @@ Ubuntu VM installation, remote ARM64 execution and real production backup recove
 must be verified on disposable target machines. Staged configuration tests and
 mocked command-adapter tests are not substitutes for those integration checks.
 The implementation has no claim to identify or remove every vulnerability.
+
+
+## Owner-managed model settings and autonomy profiles
+
+Only the authenticated owner can discover/test/save model routes or grant autonomy
+profiles. Model routes contain fixed endpoints, model IDs, bounds and environment
+references; raw credential values are not accepted. PostgreSQL denies worker route
+writes; the worker cannot change where its next model call goes. Private plaintext
+HTTP requires explicit consent and a literal RFC1918/ULA endpoint, with no redirects
+or environment proxies. Model probes can execute only a harmless nonce schema.
+
+Profiles intersect role ceilings, target host/project, exact operation names,
+argument allowlists, environment and expiry. Maintenance grants include selected
+restarts, never credential changes, destructive databases, SSH/firewall or production
+release. Local root broker/project allowlists are additional independent checks.
+Owner inventory/read privileges retained from the existing architecture do not
+carry infrastructure write permissions. Nothing in a prompt creates a grant.
+
+Explicit service-log grants expose that unit's operational content. Review the
+unit and intended recipients before granting it. Common credential assignments,
+DSNs and Authorization values are redacted, but pattern redaction is defense in
+depth, not a proof that every application log is free of private data.
+
+The local-root repair workflow is an explicit reviewed trust-boundary replacement,
+not an autonomous worker update. It creates a protected backup and arms the stable
+rollback timer. Automatic code rollback retains additive schema changes; recovery
+from an incompatible schema requires a separately reviewed restore plan.

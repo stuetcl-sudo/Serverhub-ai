@@ -1,5 +1,26 @@
 # Controlled native upgrades
 
+## Stability/autonomy overhaul and legacy installations
+
+For an installation with no resume journal, or a reviewed change to protected code, use the explicit local-root workflow below. This is not callable by an AI worker. It intentionally accepts reviewed trust-boundary changes; signing a normal autonomous release must never silently replace its trust anchors.
+
+```sh
+# Check out the reviewed overhaul branch/ref as your normal user.
+./scripts/install-ubuntu.sh --build-only
+sudo ./scripts/repair-install.sh
+```
+
+This preserves database passwords, sessions, enrolled identities and operator configuration. An invalid/obsolete model fallback remains root-only and does not block the upgrade; configure a validated database route through Setup afterwards. Only a schema-validated non-secret fallback is made readable to service users. It creates and checks a protected PostgreSQL/configuration backup, prepares a new native runtime, stops API/worker during migration, applies additive migration `0004_runtime`, reapplies explicit grants, updates reviewed systemd units and code anchors, switches the release, and checks API/worker/frontend health. The existing recovery runtime remains independent.
+
+An independent 300-second release watchdog is armed before service interruption. A normal failure restores the previous release and saved configuration/units, restarts services, and retains backups. An abruptly killed repair can be reverted by the watchdog to the previous code; its configuration snapshot remains in the protected backup for administrator restoration. No automatic destructive database downgrade occurs. The old pre-overhaul health endpoint expects revision 0003 exactly, so it may report a migration mismatch after code rollback to 0003 while additive schema 0004 remains. Complete the reviewed upgrade or perform a separately reviewed recovery; do not edit `alembic_version` to hide this mismatch.
+
+Migration 0004 adds `model_routes`, `worker_heartbeats` and `policies.environment` (existing grants retain `any` environment). The worker may read model routes and publish heartbeat rows, but cannot change provider endpoints, policies, users, audit history or backup state. No policy grants or model endpoints are silently created. Configure these in Setup after upgrading.
+
+A failed first install created by the new journaled installer should be resumed with the original installation command instead. A legacy partial installation without a usable current/recovery runtime needs operator inspection and backup before adoption; the repair command does not invent or reset its missing credentials.
+
+## Normal signed releases
+
+
 The independent maintenance runtime is installed at `/opt/serverhub/recovery/venv` and is not switched during normal upgrades. Recovery timers use it instead of candidate code.
 
 The worker cannot modify installed code, systemd definitions, policy/audit tables,

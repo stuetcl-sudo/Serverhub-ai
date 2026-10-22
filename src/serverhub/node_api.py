@@ -29,14 +29,14 @@ NODE_OPERATIONS = frozenset(
         "discovery.refresh",
         "diagnostics.network",
         "security.scan",
-        "systemd.status",
+        "systemd.status", "systemd.logs",
         "systemd.restart",
         "docker.restart",
         "docker.compose.apply",
     }
 )
 READ_OPERATIONS = frozenset(
-    {"inventory.refresh", "discovery.refresh", "diagnostics.network", "security.scan", "systemd.status"}
+    {"inventory.refresh", "discovery.refresh", "diagnostics.network", "security.scan", "systemd.status", "systemd.logs"}
 )
 
 

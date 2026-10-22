@@ -1,11 +1,9 @@
-# Root-owned. Add a provider explicitly; empty configuration disables AI requests.
-providers: {}
+# Optional root-owned fallback. Ordinary setup uses the owner-only UI and database.
+# No secret values: name environment variables with api_key_env for paid providers.
 routes: {}
-# Example (verify current pricing and provision the named secret separately):
-# providers:
-#   local:
-#     kind: ollama
-#     base_url: http://127.0.0.1:11434
-#     model: YOUR_INSTALLED_TOOL_CAPABLE_MODEL
 # routes:
-#   default: local
+#   default:
+#     kind: ollama
+#     base_url: http://192.168.68.20:11434
+#     allow_insecure_http: true  # only this explicit RFC1918 endpoint
+#     model: YOUR_INSTALLED_TOOL_CAPABLE_MODEL

@@ -51,6 +51,15 @@ class InventoryQuery(Arguments):
     limit: int = Field(default=30, ge=1, le=100)
 
 
+class VerificationCheck(Arguments):
+    kind: str = Field(pattern=r"^(inventory.fresh|host.online|systemd.active|container.healthy)$")
+    target: str | None = Field(default=None, max_length=160)
+
+
+class Verification(Arguments):
+    checks: list[VerificationCheck] = Field(min_length=1, max_length=20)
+
+
 class Specialist(Arguments):
     specialist: str = Field(pattern="^(" + "|".join(AGENTS) + ")$")
 
@@ -67,6 +76,8 @@ TOOLS: dict[str, tuple[type[BaseModel], str]] = {
     "inventory.query": (InventoryQuery, "Inspect a bounded inventory section of the selected host with optional text filter"),
     "inventory.refresh": (Arguments, "Ask the target Linux node for a fresh inventory"),
     "diagnostics.network": (Network, "Probe a fixed owner-configured network target through the node"),
+    "task.verify": (Verification, "Evaluate explicit inventory freshness, host liveness, service active state or container health from recent authenticated observations. Required before claiming a verified result."),
+    "systemd.logs": (Service, "Read last 100 journal lines of an explicitly permitted broker-allowlisted unit"),
     "systemd.status": (Service, "Read an owner-allowlisted service's measured status"),
     "systemd.restart": (Service, "Restart an owner-allowlisted service and verify status"),
     "docker.restart": (Container, "Restart a broker-allowlisted safe container and verify health"),
@@ -77,7 +88,7 @@ TOOLS: dict[str, tuple[type[BaseModel], str]] = {
     "agent.specialize": (Specialist, "Delegate the next planning phase to a specialist using the same permissions and durable shared state"),
     "development.submit": (Development, "Queue a project-policy-gated isolated development job; does not claim deployment"),
 }
-NODE_TOOLS = {"inventory.refresh", "diagnostics.network", "systemd.status", "systemd.restart", "docker.restart", "docker.compose.apply", "security.scan"}
+NODE_TOOLS = {"inventory.refresh", "diagnostics.network", "systemd.status", "systemd.logs", "systemd.restart", "docker.restart", "docker.compose.apply", "security.scan"}
 
 
 def tool_schemas() -> list[dict]:
@@ -89,7 +100,7 @@ def tool_schemas() -> list[dict]:
 def _save(ctx, state: dict) -> None:
     checkpoint = dict(ctx.job.checkpoint or {})
     checkpoint["ai"] = state
-    ctx.save_checkpoint(checkpoint)
+    ctx.save_checkpoint(checkpoint, progress=min(0.95, state.get("step", 0) / max(1, int(getattr(ctx.job, "spec", {}).get("max_steps", 20)))))
 
 
 def _memory(ctx, query: str) -> dict:
@@ -120,6 +131,11 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
     if operation in NODE_TOOLS:
         from serverhub.node_api import execute_node
         return execute_node(ctx, operation, args, idempotency_key=f"{ctx.job.id}:ai:{call_id}")
+    if operation == "task.verify":
+        from serverhub.verification import verify_inventory
+        ctx.require("task.verify", arguments=args)
+        ctx.require("inventory.read")
+        return verify_inventory(ctx.db, ctx.job.host_id, args["checks"])
     if operation in {"inventory.read", "inventory.query"}:
         from serverhub.models import Host
         ctx.require("inventory.read")
@@ -206,6 +222,7 @@ def _pending_tools(ctx, state: dict) -> None:
             state["evidence"].append({"operation": operation, "result": result})
             state.pop("in_flight", None)
             _save(ctx, state)
+            ctx.log("AI tool result", {"operation": operation, "call_id": call_id, "result": result})
         # Persist removal and its tool response in one checkpoint. A crash at any
         # earlier point reuses the completed result without repeating the effect.
         state["messages"].append({"role": "tool", "tool_call_id": call_id,
@@ -225,10 +242,15 @@ def _finish(ctx, state, budget):
         ctx.db.commit()
         state["memory_recorded"] = True
         _save(ctx, state)
+    checks = [entry["result"] for entry in evidence if entry["operation"] == "task.verify"]
+    verified = bool(checks) and all(item.get("verified") is True for item in checks)
+    unfinished_children = any(entry["operation"] == "development.submit" and not entry["result"].get("completed") for entry in evidence)
+    writes_verified = all(entry["result"].get("verified") is True for entry in evidence if entry["operation"] in {"systemd.restart", "docker.restart", "docker.compose.apply"} or (entry["operation"] in OPERATIONS and OPERATIONS[entry["operation"]].writes))
+    verified = verified and not unfinished_children and writes_verified
     return {"summary": redact(content), "evidence": evidence,
             "specialist": state["specialist"], "tokens_used": budget.tokens_used,
-            "cost_used": budget.cost_used, "verified": False,
-            "verification": "Tool evidence has individual verification flags; AI summary is not independent verification"}
+            "cost_used": budget.cost_used, "verified": verified, "completed": verified,
+            "verification": "Explicit deterministic checks passed; summary itself is not independently verified" if verified else "Partial: missing successful deterministic checks, an unverified write, or unfinished child work"}
 
 
 def autonomous_job(ctx, spec: dict) -> dict:
@@ -245,7 +267,7 @@ def autonomous_job(ctx, spec: dict) -> dict:
         raise ValueError("Unknown specialist")
     routes = load_routes()
     if not routes:
-        raise ValueError("No model is configured; provision root-owned models.yaml first")
+        raise ValueError("No model is configured. Open Setup → AI provider, discover an installed tool-capable model, test it and save the default route")
     state = dict((ctx.job.checkpoint or {}).get("ai") or {})
     if not state:
         state = {"specialist": selected, "step": 0, "messages": [
