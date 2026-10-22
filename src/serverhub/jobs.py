@@ -299,6 +299,8 @@ class Worker:
             emergency = db.get(SystemState, "emergency_stop")
             if emergency and emergency.value.get("enabled"):
                 return None
+            from .scheduling import tick
+            tick(db)
             stale = db.scalars(select(Job).where(Job.state.in_(["running", "pause_requested", "cancel_requested"]),
                                                 Job.lease_until <= utcnow()).with_for_update(skip_locked=True)).all()
             for job in stale:

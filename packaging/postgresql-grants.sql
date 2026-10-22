@@ -23,7 +23,7 @@ DO $$ DECLARE relation text; BEGIN
     IF to_regclass('public.' || relation) IS NOT NULL THEN
       EXECUTE format('GRANT INSERT, UPDATE, DELETE ON TABLE %I TO serverhub_api', relation);
       IF relation = 'schedules' THEN
-        EXECUTE format('GRANT SELECT, UPDATE ON TABLE %I TO serverhub_worker', relation);
+        EXECUTE format('GRANT SELECT, UPDATE (next_run, last_job_id, last_error, updated_at) ON TABLE %I TO serverhub_worker', relation);
       END IF;
     END IF;
   END LOOP;

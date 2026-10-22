@@ -220,6 +220,23 @@ class SystemState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class Schedule(Base):
+    __tablename__ = "schedules"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(60))
+    spec: Mapped[dict] = mapped_column(JSON, default=dict)
+    host_id: Mapped[str | None] = mapped_column(ForeignKey("hosts.id"), nullable=True)
+    project: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    interval_seconds: Mapped[int] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_run: Mapped[datetime] = mapped_column(DateTime, index=True)
+    last_job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class InventorySample(Base):
     __tablename__ = "inventory_samples"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

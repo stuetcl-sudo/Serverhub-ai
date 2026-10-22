@@ -27,6 +27,7 @@ jobs:
       - run: python -m pytest --junitxml=test-results/backend.xml
         env:
           SERVERHUB_DEV_MODE: 'true'
+          SERVERHUB_TEST_DATABASE_CONFIRM: isolated
           SERVERHUB_DATABASE_URL: postgresql+psycopg://serverhub:isolated-ci-only@127.0.0.1:5432/serverhub_test
           SERVERHUB_TEST_POSTGRES_URL: postgresql+psycopg://serverhub:isolated-ci-only@127.0.0.1:5432/serverhub_test
       - run: python -m build

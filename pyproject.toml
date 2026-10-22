@@ -13,7 +13,7 @@ authors = [{ name = "ServerHub Engineering" }]
 dependencies = [
   "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "SQLAlchemy>=2.0.36,<2.1",
   "psycopg[binary]>=3.2,<4", "alembic>=1.14,<2", "httpx>=0.28,<1",
-  "argon2-cffi>=23.1,<26", "cryptography>=43,<47", "psutil>=6,<8",
+  "argon2-cffi>=23.1,<26", "cryptography>=50.0.2,<51", "psutil>=6,<8",
   "pydantic-settings>=2.7,<3", "PyYAML>=6,<7", "jsonschema>=4.23,<5",
 ]
 
