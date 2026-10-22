@@ -1,3 +1,4 @@
+import { HostAuditReport } from "./HostAuditReport";
 import { InventoryHistory } from "./InventoryHistory";
 import {
   createContext,
@@ -1495,6 +1496,13 @@ function HostDetail({ host }: { host: Json }) {
       notice((e as Error).message, true);
     }
   }
+  async function audit() {
+    try {
+      const job = await post("/jobs", { kind: "operation", host_id: host.id,
+        spec: { operation: "host.audit", arguments: {} }, token_budget: 0, cost_budget: 0 });
+      notice(`Read-only audit queued: ${job.id}. Follow it in Jobs & activity.`);
+    } catch (e) { notice((e as Error).message, true); }
+  }
   return (
     <div className="modal-content">
       <div className="detail-meta">
@@ -1502,6 +1510,7 @@ function HostDetail({ host }: { host: Json }) {
         <span>Last seen {date(host.last_seen)}</span>
         <span className="mono">{host.id}</span>
       </div>
+      <button className="button secondary" onClick={audit}>Run read-only audit</button>
       <div className="tabs">
         <button
           className={tab === "inventory" ? "active" : ""}
@@ -2190,6 +2199,7 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
                 />
               )}
               {job.result?.denial && <section className="callout"><div><h4>Permission required</h4><p><strong>{job.result.denial.operation}</strong> · host {job.result.denial.host_id || "none"} · {job.result.denial.environment}</p><p>{job.result.denial.reason}</p><p>{job.result.denial.remediation}</p><a href="#policies" onClick={onClose}>Open scoped autonomy profiles</a></div></section>}
+              {job.result?.mode === "read_only_dry_run" && <HostAuditReport report={job.result} />}
               <h4>Tool-call history</h4>
               {(job.checkpoint?.ai?.evidence || []).map((entry: Json, index: number) => <details key={index}><summary>{index + 1}. {entry.operation}</summary><JsonView value={entry.result} /></details>)}
               <h4>Execution events</h4>

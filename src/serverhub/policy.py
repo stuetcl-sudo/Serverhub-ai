@@ -35,7 +35,7 @@ STANDARD_OPS = {"inventory.read", "network.diagnose", "diagnostics.network", "dn
 
 def is_read(operation: str) -> bool:
     return operation.endswith(READ_SUFFIXES) or operation in {
-        "inventory.read", "inventory.refresh", "discovery.refresh", "diagnostics.network",
+        "inventory.read", "inventory.refresh", "discovery.refresh", "diagnostics.network", "host.audit", "diagnostics.storage",
         "systemd.logs", "task.verify", "homeassistant.states", "homeassistant.health", "adguard.status"}
 
 

@@ -24,7 +24,7 @@ from .discovery import CollectionError, command, discover, docker_events, caddy_
 from .security import vulnerability_findings
 
 MAX_REQUEST = 65536
-ALLOWED_OPERATIONS = frozenset({"inventory.refresh", "discovery.refresh", "diagnostics.network", "systemd.status", "systemd.logs", "systemd.restart",
+ALLOWED_OPERATIONS = frozenset({"inventory.refresh", "discovery.refresh", "diagnostics.network", "diagnostics.storage", "systemd.status", "systemd.logs", "systemd.restart",
                                 "docker.restart", "docker.compose.apply", "security.scan"})
 PROTECTED_UNITS = re.compile(r"^(serverhub|ssh|sshd|network|systemd-network|NetworkManager|docker|containerd|ufw|nftables|postgresql|dbus|polkit|sudo|cron)", re.I)
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}$")
@@ -169,6 +169,35 @@ def execute(operation: str, arguments: dict, config: dict) -> dict:
     if operation == "inventory.events":
         _exact_args(arguments, set())
         return docker_events()
+    if operation == "diagnostics.storage":
+        _exact_args(arguments, {"target"})
+        target = _name(arguments.get("target"))
+        configured = config.get("storage_targets", {}).get(target)
+        if not isinstance(configured, str):
+            raise BrokerDenied("storage target is not explicitly allowlisted")
+        path = Path(configured)
+        if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+            raise BrokerDenied("storage target must be an existing absolute directory")
+        # The root-selected directory and all ancestors must be trusted. Never
+        # accept a user/model path, follow symlinked directories or cross mounts.
+        for part in [path, *path.parents]:
+            metadata = part.lstat()
+            if part.is_symlink() or metadata.st_uid != 0 or metadata.st_mode & 0o022:
+                raise BrokerDenied("storage target or ancestor has unsafe ownership/permissions")
+        if str(path) in {"/", "/var", "/var/lib", "/opt", "/home"} or any(path.is_relative_to(prefix) for prefix in
+                ("/etc", "/root", "/proc", "/sys", "/dev", "/run", "/opt/serverhub", "/var/lib/serverhub", "/var/lib/serverhub-recovery", "/var/backups/serverhub")):
+            raise BrokerDenied("sensitive/broad storage targets are not permitted")
+        # du may read a large tree: hard deadline/output bound, fixed depth and
+        # filesystem, no dereference, no shell or mutation. No size means partial.
+        text = command("du", "--one-file-system", "--max-depth=1", "--block-size=1", "--null", "--", str(path), timeout=10)
+        entries = []
+        for line in text.split("\0"):
+            size, separator, name = line.partition("\t")
+            if separator and size.isdigit():
+                entries.append({"path": name, "allocated_bytes": int(size)})
+        return {"target": target, "entries": sorted(entries, key=lambda item: item["allocated_bytes"], reverse=True)[:100],
+                "truncated": len(entries) > 100, "source": "du_allocated_bytes_single_filesystem", "verified": True,
+                "limitations": "Allocated blocks, not apparent size; excludes other mounted filesystems and symlink traversal"}
     if operation.startswith("systemd."):
         _exact_args(arguments, {"service"})
         service = _name(arguments.get("service"))

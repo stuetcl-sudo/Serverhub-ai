@@ -61,7 +61,7 @@ export function ProfileSetup() {
     event.preventDefault(); const form = new FormData(event.currentTarget); setBusy(true); setError("");
     const names = (key: string) => String(form.get(key) || "").split(",").map(v => v.trim()).filter(Boolean);
     try {
-      const result = await post("/policies/profiles", { profile, subject_id: form.get("subject_id"), host_id: form.get("host_id"), hours: Number(form.get("hours")), project: form.get("project") || null, services: names("services"), containers: names("containers"), network_targets: names("network_targets"), allow_dependency_network: form.get("allow_dependency_network") === "on" });
+      const result = await post("/policies/profiles", { profile, subject_id: form.get("subject_id"), host_id: form.get("host_id"), hours: Number(form.get("hours")), project: form.get("project") || null, services: names("services"), containers: names("containers"), network_targets: names("network_targets"), storage_targets: names("storage_targets"), allow_dependency_network: form.get("allow_dependency_network") === "on" });
       setMessage(result.message);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
@@ -73,6 +73,7 @@ export function ProfileSetup() {
       <label>Target host<select name="host_id" required><option value="">Select enrolled host</option>{hosts.filter(h => !h.revoked).map(h => <option key={h.id} value={h.id}>{h.name}</option>)}</select></label>
       <label>Expires after (hours)<input name="hours" type="number" min="1" max="8784" defaultValue="24" required /></label>
       <label>Allowed service names<input name="services" placeholder="example.service, other.service" /></label>
+      <label>Approved storage target names<input name="storage_targets" placeholder="data (broker allowlist required)" /></label>
       <label>Allowed fixed network target names<input name="network_targets" placeholder="internet, gateway" /></label>
       {profile === "maintenance" && <label>Allowed container names<input name="containers" placeholder="homepage, uptime-kuma" /></label>}
       {profile === "development" && <><label>Registered project<input name="project" required /></label><label className="check-label"><input name="allow_dependency_network" type="checkbox" />Allow dependency installation network in its isolated workspace</label></>}

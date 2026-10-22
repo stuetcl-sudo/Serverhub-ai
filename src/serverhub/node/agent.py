@@ -24,7 +24,7 @@ from .broker import ALLOWED_OPERATIONS, BrokerDenied, call_broker
 from .discovery import discover
 
 LOG = logging.getLogger("serverhub.node")
-READ_OPERATIONS = {"inventory.refresh", "discovery.refresh", "systemd.status", "systemd.logs", "diagnostics.network", "security.scan"}
+READ_OPERATIONS = {"inventory.refresh", "discovery.refresh", "systemd.status", "systemd.logs", "diagnostics.network", "diagnostics.storage", "security.scan"}
 
 
 class AgentError(RuntimeError):
