@@ -187,6 +187,8 @@ def load_routes(path: str | Path | None = None) -> dict[str, ProviderConfig]:
         data = read_operator_yaml(path)
     except yaml.YAMLError as exc:
         raise ValueError("Invalid model YAML. Use owner Setup or validate the root-owned fallback file; source contents are not returned") from exc
+    if set(data) - {"routes", "providers"} or data.get("providers"):
+        raise ValueError("Unsupported model configuration shape. Use inline route configurations or owner Setup; legacy provider documents remain private")
     routes = data.get("routes", {})
     if not isinstance(routes, dict):
         raise ValueError("routes must be a mapping")

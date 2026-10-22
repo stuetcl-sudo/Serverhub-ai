@@ -464,6 +464,9 @@ def test_legacy_model_fallback_cannot_block_upgrade_setup_or_be_made_public(tmp_
     monkeypatch.setattr(native.os, "chown", lambda *args: None)
     assert native.protect_model_fallback(config) == "needs_setup"
     assert config.stat().st_mode & 0o777 == 0o600
+    config.write_text("providers:\n  local:\n    api_key: isolated-secret-must-stay-private\nroutes: {}\n")
+    assert native.protect_model_fallback(config) == "needs_setup"
+    assert config.stat().st_mode & 0o777 == 0o600
     config.write_text("routes: {}\n")
     assert native.protect_model_fallback(config) == "readable_validated_fallback"
     assert config.stat().st_mode & 0o777 == 0o644
