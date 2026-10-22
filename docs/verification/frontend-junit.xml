@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="20" failures="0" errors="0" time="3.030328304">
+    <testsuite name="src/App.test.tsx" timestamp="2026-10-22T04:17:31.553Z" hostname="131c936ddb60" tests="14" failures="0" errors="0" skipped="0" time="3.01558888">
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; requires login and renders authentication errors without granting access" time="0.459375354">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; shows controller data without a synthetic fleet or job fallback" time="0.191254971">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; submits a host-bound persistent chat job and displays its result" time="0.38968688">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; shows a rejected chat request and retains the request text" time="0.371814896">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; creates an expiring exact capability policy using the backend contract" time="0.259296667">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; revokes policy by PATCH rather than an unsupported action route" time="0.178586311">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; requires a recorded reason before changing emergency-stop state" time="0.609666311">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; logs out when the authenticated event stream reports expiry" time="0.066961692">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; shows API failure instead of reporting zero Docker containers as a successful inventory" time="0.036017389">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; uses individual one-time node enrollment credentials" time="0.15719962">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="control center integration &gt; shows protected native backup publication independently of SQL records" time="0.049461009">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="submits configured development workflow without arbitrary command arguments" time="0.125420901">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="distinguishes load per core from CPU utilization and charts only recorded history" time="0.06859125">
+        </testcase>
+        <testcase classname="src/App.test.tsx" name="renders persisted fractional job progress as a completed percentage" time="0.049586316">
+        </testcase>
+    </testsuite>
+    <testsuite name="src/api.test.ts" timestamp="2026-10-22T04:17:31.561Z" hostname="131c936ddb60" tests="6" failures="0" errors="0" skipped="0" time="0.014739424">
+        <testcase classname="src/api.test.ts" name="authenticated REST client &gt; sends same-origin cookies and serializes controlled write payloads" time="0.007503971">
+        </testcase>
+        <testcase classname="src/api.test.ts" name="authenticated REST client &gt; uses PATCH for authorization updates" time="0.000827174">
+        </testcase>
+        <testcase classname="src/api.test.ts" name="authenticated REST client &gt; preserves rejected authorization and validation evidence" time="0.001709762">
+        </testcase>
+        <testcase classname="src/api.test.ts" name="authenticated REST client &gt; does not turn a failed non-JSON response into successful empty data" time="0.00132833">
+        </testcase>
+        <testcase classname="src/api.test.ts" name="authenticated REST client &gt; extracts real list envelopes without fabricating entries" time="0.000856484">
+        </testcase>
+        <testcase classname="src/api.test.ts" name="rejects a gateway HTML success response rather than presenting a fabricated empty result" time="0.000844123">
+        </testcase>
+    </testsuite>
+</testsuites>

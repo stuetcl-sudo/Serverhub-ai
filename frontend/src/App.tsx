@@ -2324,7 +2324,7 @@ function Chat() {
                 value={host}
                 onChange={(e) => setHost(e.target.value)}
               >
-                <option value="">Controller / all permitted hosts</option>
+                <option value="">Controller (no host selected)</option>
                 {hosts.map((h) => (
                   <option key={h.id} value={h.id}>
                     {h.name}
