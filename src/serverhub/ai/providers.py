@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class ProviderError(RuntimeError):
@@ -176,20 +176,34 @@ def load_routes(path: str | Path | None = None) -> dict[str, ProviderConfig]:
         with SessionLocal() as db:
             saved = db.scalars(select(ModelRoute)).all()
             if saved:
-                return {row.name: ProviderConfig.model_validate(row.config) for row in saved if row.enabled}
+                return validate_routes({row.name: row.config for row in saved if row.enabled})
     if path is None:
         try:
             from serverhub.settings import get_settings
             path = getattr(get_settings(), "model_config_path", "/etc/serverhub/models.yaml")
         except ImportError:
             path = "/etc/serverhub/models.yaml"
-    data = read_operator_yaml(path)
+    try:
+        data = read_operator_yaml(path)
+    except yaml.YAMLError as exc:
+        raise ValueError("Invalid model YAML. Use owner Setup or validate the root-owned fallback file; source contents are not returned") from exc
     routes = data.get("routes", {})
     if not isinstance(routes, dict):
         raise ValueError("routes must be a mapping")
     if any(not isinstance(name, str) or not __import__("re").fullmatch(r"[A-Za-z0-9_-]{1,64}", name) for name in routes):
         raise ValueError("Invalid model route name")
-    return {name: ProviderConfig.model_validate(config) for name, config in routes.items()}
+    return validate_routes(routes)
+
+
+def validate_routes(routes):
+    result = {}
+    for name, config in routes.items():
+        try:
+            result[name] = ProviderConfig.model_validate(config)
+        except ValidationError as exc:
+            fields = sorted({".".join(str(part) for part in error["loc"]) or "endpoint" for error in exc.errors()})
+            raise ValueError("Invalid model route " + str(name) + ": check " + ", ".join(fields) + " in owner Setup. Configuration values are withheld") from None
+    return result
 
 
 class ChatProvider:

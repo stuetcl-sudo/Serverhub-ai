@@ -402,3 +402,21 @@ def test_redaction_preserves_policy_scope_but_masks_log_credentials():
         'password=hunter2 api_key="example-secret" postgresql://owner:db-secret@localhost/test Bearer abcdef'
     )
     assert all(secret not in value for secret in ("hunter2", "example-secret", "db-secret", "abcdef"))
+
+
+def test_invalid_legacy_model_settings_never_echo_credentials_into_job_errors(tmp_path, monkeypatch):
+    from serverhub.ai.providers import load_routes
+
+    monkeypatch.setenv("SERVERHUB_DEV_MODE", "true")
+    config = tmp_path / "models.yaml"
+    config.write_text(
+        "routes:\n  default:\n    kind: ollama\n    base_url: http://127.0.0.1\n    model: test\n    api_key: private-secret-should-not-escape\n"
+    )
+    config.chmod(0o600)
+    with pytest.raises(ValueError) as failure:
+        load_routes(config)
+    assert "private-secret-should-not-escape" not in str(failure.value)
+    config.write_text('routes: [broken, "private-secret-should-not-escape]')
+    with pytest.raises(ValueError) as failure:
+        load_routes(config)
+    assert "private-secret-should-not-escape" not in str(failure.value)
