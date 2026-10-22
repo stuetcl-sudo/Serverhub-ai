@@ -36,7 +36,7 @@ For a reviewed existing installation, build with `--build-only`, then run
 `sudo ./scripts/repair-install.sh`. It backs up database/configuration, preserves
 credentials and identities, applies additive `0004_runtime`, refreshes explicit
 PostgreSQL grants and reviewed units/code anchors, and healthchecks activation.
-Normal failure restores previous code/configuration; an independent rollback timer
+An invalid legacy model fallback remains root-only and cannot block access to the new Setup UI. Normal failure restores previous code/configuration; an independent rollback timer
 is armed before service interruption. See [upgrade.md](upgrade.md) for schema and
 legacy-partial-install limitations. No database is deleted to recover installation.
 

@@ -31,6 +31,26 @@ def read_environment(path):
     return result
 
 
+def protect_model_fallback(path):
+    """An obsolete/invalid fallback must not prevent owner access to new Setup.
+
+    Never relax the permissions of a document that failed secret-free schema
+    validation. The owner can provision a database route after the upgrade.
+    """
+    path = trusted_file(path)  # rejects symlinks/unsafe ancestors before chmod
+    from serverhub.ai.providers import load_routes
+
+    try:
+        load_routes(path)
+    except (ValueError, OSError):
+        os.chown(path, 0, 0)
+        path.chmod(0o600)
+        return "needs_setup"
+    os.chown(path, 0, 0)
+    path.chmod(0o644)
+    return "readable_validated_fallback"
+
+
 def repair(source):
     if os.geteuid() != 0:
         raise InstallError("Run repair-install.sh as root on the controller")
@@ -121,12 +141,7 @@ def repair(source):
             installer.write("/etc/systemd/system/" + unit, (source / "packaging/systemd" / unit).read_text())
         # Validate non-secret provider format before relaxing fallback readability.
         models = Path("/etc/serverhub/models.yaml")
-        if models.exists():
-            from serverhub.ai.providers import load_routes
-
-            load_routes(models)
-            os.chown(models, 0, 0)
-            models.chmod(0o644)
+        models_state = protect_model_fallback(models) if models.exists() else "needs_setup"
         for directory in (Path("/etc/serverhub"), release.parent):
             directory.chmod(0o755)
         hashes = {
@@ -162,6 +177,7 @@ def repair(source):
             "previous_release": str(previous),
             "backup_id": backup["id"],
             "credentials": "retained",
+            "models_configuration": models_state,
             "schema_rollback": "0004 is additive; previous code can run without dropping the new tables/column",
         }
     except BaseException:

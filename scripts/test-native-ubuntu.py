@@ -204,8 +204,14 @@ assert checks["worker"]["status"] == "ok", checks["worker"]
 assert checks["database"]["status"] == "ok", checks["database"]
 # Upgrade the same reviewed source to exercise backups, role grants, directory
 # traversal and activation/health in a real native systemd environment.
+legacy_models = Path("/etc/serverhub/models.yaml")
+legacy_models.write_text("routes:\n  default: obsolete-provider-reference\n")
+legacy_models.chmod(0o600)
 upgraded = repair(source)
 assert upgraded["state"] == "upgraded"
+assert upgraded["models_configuration"] == "needs_setup"
+assert legacy_models.stat().st_mode & 0o777 == 0o600
+assert client.get("/api/settings/models", headers=headers).json()["configured"]
 assert Path("/etc/serverhub/api.env").read_bytes() == before
 # Prove a failed post-upgrade healthcheck restores the previous release,
 # credentials and native units. This runs only inside the confirmed disposable VM.

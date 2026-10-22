@@ -451,3 +451,19 @@ def test_invalid_legacy_model_settings_never_echo_credentials_into_job_errors(tm
     with pytest.raises(ValueError) as failure:
         load_routes(config)
     assert "private-secret-should-not-escape" not in str(failure.value)
+
+
+def test_legacy_model_fallback_cannot_block_upgrade_setup_or_be_made_public(tmp_path, monkeypatch):
+    import serverhub.ops.repair as native
+
+    config = tmp_path / "models.yaml"
+    config.write_text("routes:\n  default: obsolete-provider-reference\n")
+    config.chmod(0o600)
+    monkeypatch.setenv("SERVERHUB_DEV_MODE", "true")
+    monkeypatch.setattr(native, "trusted_file", lambda path: Path(path))
+    monkeypatch.setattr(native.os, "chown", lambda *args: None)
+    assert native.protect_model_fallback(config) == "needs_setup"
+    assert config.stat().st_mode & 0o777 == 0o600
+    config.write_text("routes: {}\n")
+    assert native.protect_model_fallback(config) == "readable_validated_fallback"
+    assert config.stat().st_mode & 0o777 == 0o644
