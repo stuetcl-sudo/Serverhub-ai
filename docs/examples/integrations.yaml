@@ -1,0 +1,60 @@
+# Endpoints are owner configuration. Models cannot supply arbitrary URLs.
+# Only explicitly listed operations are available, in addition to per-user policies.
+integrations:
+  home:
+    kind: home_assistant
+    base_url: https://homeassistant.example.invalid
+    token_env: SERVERHUB_HOME_ASSISTANT_TOKEN
+    allowed_entities: [light.kitchen]
+    allowed_operations: [home_assistant.status, home_assistant.states]
+    # Add home_assistant.set_power only after deciding that this entity is safe.
+  dns:
+    kind: adguard
+    base_url: https://adguard.example.invalid
+    username_env: SERVERHUB_ADGUARD_USERNAME
+    password_env: SERVERHUB_ADGUARD_PASSWORD
+    allowed_operations: [adguard.status, adguard.filters]
+    validation_domains:
+      example.org: allowed
+      ads.example.invalid: blocked
+    # Replace these illustrative canaries with domains tested in YOUR DNS instance.
+    # filter_sources:
+    #   vetted-list: https://owner-vetted.example.invalid/domains.txt
+  network:
+    kind: unifi
+    base_url: https://unifi.example.invalid/proxy/network/integration/v1
+    token_env: SERVERHUB_UNIFI_API_KEY
+    allowed_sites: [REPLACE_WITH_SITE_ID]
+    allowed_operations: [unifi.sites, unifi.devices, unifi.clients]
+  uisp:
+    kind: uisp
+    base_url: https://uisp.example.invalid/nms/api/v2.1
+    token_env: SERVERHUB_UISP_API_TOKEN
+    allowed_operations: [uisp.devices, uisp.sites]
+  metrics:
+    kind: prometheus
+    base_url: https://prometheus.example.invalid
+    allowed_operations: [prometheus.query]
+    allowed_queries:
+      targets-up: up
+  dashboards:
+    kind: grafana
+    base_url: https://grafana.example.invalid
+    token_env: SERVERHUB_GRAFANA_TOKEN
+    allowed_operations: [grafana.health, grafana.dashboards]
+  source:
+    kind: github
+    base_url: https://api.github.com
+    token_env: SERVERHUB_GITHUB_TOKEN
+    allowed_repositories: [OWNER/REPOSITORY]
+    allowed_operations: [github.repository]
+  database:
+    kind: postgresql
+    base_url: postgresql
+    token_env: SERVERHUB_READONLY_DATABASE_DSN
+    allowed_operations: [postgresql.health]
+  previous-controller:
+    kind: serverhub_mcp
+    base_url: https://serverhub.example.invalid/mcp
+    token_env: SERVERHUB_PREVIOUS_MCP_TOKEN
+    allowed_operations: [serverhub_mcp.tools]

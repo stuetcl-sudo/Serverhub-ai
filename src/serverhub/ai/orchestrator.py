@@ -1,0 +1,303 @@
+"""Durable, model-independent tool loop with deterministic server-side authorization.
+
+Specialists select instructions/model routes, never privileges. Remote writes are
+journaled before execution and ambiguous interrupted writes stop for reconciliation.
+"""
+from __future__ import annotations
+
+import json
+
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
+
+from serverhub.audit import redact
+from serverhub.integrations.registry import OPERATIONS, IntegrationError, execute, operation_schemas
+from .agents import AGENTS, BASE_INSTRUCTIONS
+from .providers import BudgetExceeded as ProviderBudgetExceeded, ChatProvider, ProviderError, UsageBudget, load_routes
+
+
+class Arguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Service(Arguments):
+    service: str = Field(pattern=r"^[A-Za-z0-9_.@-]{1,160}$")
+
+
+class Container(Arguments):
+    container: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,160}$")
+
+
+class Project(Arguments):
+    project: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
+class Network(Arguments):
+    target: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,100}$")
+
+
+class Scan(Arguments):
+    scanner: str = Field(pattern=r"^(lynis|trivy)$")
+    image: str | None = Field(default=None, max_length=256)
+
+
+class Search(Arguments):
+    query: str = Field(default="", max_length=512)
+
+
+class InventoryQuery(Arguments):
+    section: str = Field(pattern=r"^(packages|services|ports|containers|addresses|routes|hardware)$")
+    query: str = Field(default="", max_length=256)
+    limit: int = Field(default=30, ge=1, le=100)
+
+
+class Specialist(Arguments):
+    specialist: str = Field(pattern="^(" + "|".join(AGENTS) + ")$")
+
+
+class Development(Arguments):
+    project: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    patch: str | None = Field(default=None, max_length=2 * 1024 * 1024)
+    base_commit: str | None = Field(default=None, pattern=r"^[a-f0-9]{40,64}$")
+    stage: bool = False
+
+
+TOOLS: dict[str, tuple[type[BaseModel], str]] = {
+    "inventory.read": (Arguments, "Read the current target host's last observed inventory; collection errors remain explicit"),
+    "inventory.query": (InventoryQuery, "Inspect a bounded inventory section of the selected host with optional text filter"),
+    "inventory.refresh": (Arguments, "Ask the target Linux node for a fresh inventory"),
+    "diagnostics.network": (Network, "Probe a fixed owner-configured network target through the node"),
+    "systemd.status": (Service, "Read an owner-allowlisted service's measured status"),
+    "systemd.restart": (Service, "Restart an owner-allowlisted service and verify status"),
+    "docker.restart": (Container, "Restart a broker-allowlisted safe container and verify health"),
+    "docker.compose.apply": (Project, "Deploy an owner-registered immutable Compose project with broker health validation"),
+    "security.scan": (Scan, "Run an installed allowlisted scanner through the node"),
+    "memory.search": (Search, "Retrieve scoped historical observations and their verification status"),
+    "catalog.search": (Search, "Find curated application plans and their operational limitations"),
+    "agent.specialize": (Specialist, "Delegate the next planning phase to a specialist using the same permissions and durable shared state"),
+    "development.submit": (Development, "Queue a project-policy-gated isolated development job; does not claim deployment"),
+}
+NODE_TOOLS = {"inventory.refresh", "diagnostics.network", "systemd.status", "systemd.restart", "docker.restart", "docker.compose.apply", "security.scan"}
+
+
+def tool_schemas() -> list[dict]:
+    core = [{"type": "function", "function": {"name": name.replace(".", "__"), "description": description,
+             "parameters": model.model_json_schema()}} for name, (model, description) in TOOLS.items()]
+    return core + operation_schemas()
+
+
+def _save(ctx, state: dict) -> None:
+    checkpoint = dict(ctx.job.checkpoint or {})
+    checkpoint["ai"] = state
+    ctx.save_checkpoint(checkpoint)
+
+
+def _memory(ctx, query: str) -> dict:
+    from serverhub.models import Memory, to_dict
+    ctx.require("inventory.read")
+    statement = select(Memory).where(Memory.host_id == ctx.job.host_id, Memory.project == ctx.job.project)
+    if query:
+        # Bound SQL and literal wildcard matching. Memory remains evidence, never authority.
+        statement = statement.where(Memory.content.icontains(query, autoescape=True))
+    rows = ctx.db.scalars(statement.order_by(Memory.created_at.desc()).limit(12)).all()
+    return {"memories": [to_dict(row) for row in rows], "source": "historical; current outcome requires fresh verification"}
+
+
+def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -> dict:
+    if operation in OPERATIONS:
+        op = OPERATIONS[operation]
+        parsed = op.arguments.model_validate(arguments)
+        args = parsed.model_dump(exclude_none=True)
+        ctx.require(operation, arguments=args)
+        def checkpoint(snapshot: dict):
+            state["in_flight"]["checkpoint"] = snapshot
+            _save(ctx, state)
+        return execute(operation, args, checkpoint=checkpoint if op.writes else None)
+    if operation not in TOOLS:
+        raise ValueError("Model requested an unregistered tool")
+    parsed = TOOLS[operation][0].model_validate(arguments)
+    args = parsed.model_dump(exclude_none=True)
+    if operation in NODE_TOOLS:
+        from serverhub.node_api import execute_node
+        return execute_node(ctx, operation, args, idempotency_key=f"{ctx.job.id}:ai:{call_id}")
+    if operation in {"inventory.read", "inventory.query"}:
+        from serverhub.models import Host
+        ctx.require("inventory.read")
+        host = ctx.db.get(Host, ctx.job.host_id) if ctx.job.host_id else None
+        if not host:
+            raise ValueError("Select an enrolled host before inspecting infrastructure")
+        inventory = host.inventory or {}
+        if operation == "inventory.query":
+            section = args["section"]
+            value = (inventory.get("docker") or {}).get("containers", []) if section == "containers" else inventory.get(section, [])
+            if isinstance(value, list):
+                matching = [item for item in value if args["query"].lower() in json.dumps(item, default=str).lower()]
+                return {"section": section, "records": matching[:args["limit"]], "total_matching": len(matching),
+                        "truncated": len(matching) > args["limit"], "last_seen": str(host.last_seen)}
+            return {"section": section, "value": value, "last_seen": str(host.last_seen)}
+        compact = {key: inventory.get(key) for key in ("os", "hardware", "dns", "routes", "errors")}
+        compact["hardware"] = {key: value for key, value in (inventory.get("hardware") or {}).items() if key != "processes_by_memory"}
+        for section in ("services", "ports", "packages", "addresses"):
+            records = inventory.get(section) or []
+            compact[section] = {"total": len(records), "sample": records[:15], "truncated": len(records) > 15}
+        containers = (inventory.get("docker") or {}).get("containers", [])
+        compact["docker"] = {"available": (inventory.get("docker") or {}).get("available"),
+                             "total": len(containers), "containers": containers[:15], "truncated": len(containers) > 15}
+        return {"inventory": compact, "last_seen": host.last_seen.isoformat() + "Z" if host.last_seen else None,
+                "source": "authenticated node's last report; use inventory.query for additional bounded records"}
+    if operation == "memory.search":
+        return _memory(ctx, args["query"])
+    if operation == "catalog.search":
+        from serverhub.catalog import search
+        ctx.require("job.submit")
+        return {"applications": search(args["query"]), "deployment": "plans require owner-registered pinned deployment manifests"}
+    if operation == "agent.specialize":
+        ctx.require("job.submit")
+        state["specialist"] = args["specialist"]
+        agent = AGENTS[args["specialist"]]
+        return {"agent": agent.name, "instructions": agent.instructions, "permissions_changed": False}
+    if operation == "development.submit":
+        from serverhub.jobs import submit_job
+        from serverhub.policy import authorize
+        authorize(ctx.db, ctx.principal, "development.workspace", ctx.job.host_id, args["project"])
+        job = submit_job(ctx.db, ctx.principal, "development", args, host_id=ctx.job.host_id,
+                         project=args["project"], parent_id=ctx.job.id,
+                         idempotency_key=f"{ctx.job.id}:development:{call_id}")
+        ctx.db.commit()
+        return {"job_id": job.id, "state": job.state, "completed": False}
+    raise ValueError("Tool has no installed implementation")
+
+
+def _pending_tools(ctx, state: dict) -> None:
+    for call in list(state.get("pending_calls") or []):
+        operation = call["operation"]
+        call_id = call["id"]
+        if operation not in TOOLS and operation not in OPERATIONS:
+            raise ValueError("Model requested an unregistered tool")
+        prior = state["completed_calls"].get(call_id)
+        if prior is not None:
+            result = prior
+        else:
+            mutating = operation in OPERATIONS and OPERATIONS[operation].writes
+            previous = state.get("in_flight")
+            if previous and previous.get("id") == call_id and previous.get("mutating"):
+                raise ValueError("An interrupted external mutation needs owner reconciliation; its durable checkpoint is retained")
+            state["in_flight"] = {"id": call_id, "operation": operation,
+                                  "arguments": call["arguments"], "mutating": mutating}
+            _save(ctx, state)
+            ctx.log("AI tool request", {"operation": operation, "arguments": call["arguments"],
+                                        "specialist": state["specialist"]})
+            try:
+                result = _run_tool(ctx, operation, call["arguments"], state, call_id)
+            except IntegrationError as exc:
+                state["in_flight"]["failure"] = {"error": str(exc), "rollback": exc.rollback}
+                _save(ctx, state)
+                if mutating:
+                    raise
+                if exc.retryable:
+                    from serverhub.jobs import RetryableError
+                    raise RetryableError(str(exc)) from exc
+                raise
+            cleaned = redact(result)
+            if len(json.dumps(cleaned, default=str).encode()) > 256 * 1024:
+                cleaned = {"truncated": True, "detail": "Tool output exceeds conversation bound; inspect inventory/API directly"}
+            result = cleaned
+            state["completed_calls"][call_id] = result
+            state["evidence"].append({"operation": operation, "result": result})
+            state.pop("in_flight", None)
+            _save(ctx, state)
+        # Persist removal and its tool response in one checkpoint. A crash at any
+        # earlier point reuses the completed result without repeating the effect.
+        state["messages"].append({"role": "tool", "tool_call_id": call_id,
+                                  "name": call["name"], "content": json.dumps(result, default=str)})
+        state["pending_calls"] = [item for item in state["pending_calls"] if item["id"] != call_id]
+        _save(ctx, state)
+
+
+def _finish(ctx, state, budget):
+    evidence = state.get("evidence", [])
+    content = state["final_summary"]
+    if not state.get("memory_recorded"):
+        from serverhub.models import Memory
+        ctx.db.add(Memory(host_id=ctx.job.host_id, project=ctx.job.project, kind="agent_outcome",
+                         content=redact(content)[:16000],
+                         evidence={"job_id": ctx.job.id, "tools": evidence[-30:]}, verified=False))
+        ctx.db.commit()
+        state["memory_recorded"] = True
+        _save(ctx, state)
+    return {"summary": redact(content), "evidence": evidence,
+            "specialist": state["specialist"], "tokens_used": budget.tokens_used,
+            "cost_used": budget.cost_used, "verified": False,
+            "verification": "Tool evidence has individual verification flags; AI summary is not independent verification"}
+
+
+def autonomous_job(ctx, spec: dict) -> dict:
+    if not isinstance(spec, dict) or set(spec) - {"prompt", "model_route", "max_steps", "specialist"}:
+        raise ValueError("Unknown autonomous job fields")
+    prompt = spec.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16000:
+        raise ValueError("A prompt of 1–16000 characters is required")
+    steps = spec.get("max_steps", 20)
+    if isinstance(steps, bool) or not isinstance(steps, int) or not 1 <= steps <= 100:
+        raise ValueError("max_steps must be 1–100")
+    selected = spec.get("specialist", "infrastructure")
+    if selected not in AGENTS:
+        raise ValueError("Unknown specialist")
+    routes = load_routes()
+    if not routes:
+        raise ValueError("No model is configured; provision root-owned models.yaml first")
+    state = dict((ctx.job.checkpoint or {}).get("ai") or {})
+    if not state:
+        state = {"specialist": selected, "step": 0, "messages": [
+            {"role": "system", "content": BASE_INSTRUCTIONS},
+            {"role": "user", "content": prompt}], "evidence": [], "completed_calls": {}}
+        _save(ctx, state)
+    budget = UsageBudget(ctx.job.token_budget, ctx.job.cost_budget, ctx.job.tokens_used, ctx.job.cost_used)
+    # Resume the saved model response before asking the provider for another one.
+    _pending_tools(ctx, state)
+    if "final_summary" in state:
+        return _finish(ctx, state, budget)
+    start_step = int(state.get("step", 0))
+    for index in range(start_step, steps):
+        ctx.check_cancelled()
+        specialist = AGENTS[state["specialist"]]
+        route = spec.get("model_route") or (specialist.route if specialist.route in routes else "default")
+        if route not in routes:
+            raise ValueError("Configured model route is unavailable")
+        messages = list(state["messages"])
+        messages[0] = {"role": "system", "content": BASE_INSTRUCTIONS + "\nCurrent specialist: " + specialist.instructions}
+        previous_tokens, previous_cost = budget.tokens_used, budget.cost_used
+        try:
+            completion = ChatProvider(routes[route]).complete(messages, tool_schemas(), budget,
+                         before_request=lambda: (ctx.check_cancelled(), ctx.heartbeat()))
+        except ProviderBudgetExceeded as exc:
+            from serverhub.jobs import BudgetExceeded
+            raise BudgetExceeded(str(exc)) from exc
+        except ProviderError as exc:
+            if exc.retryable:
+                from serverhub.jobs import RetryableError
+                raise RetryableError(str(exc)) from exc
+            raise
+        finally:
+            charged_tokens = budget.tokens_used - previous_tokens
+            charged_cost = budget.cost_used - previous_cost
+            if charged_tokens or charged_cost:
+                ctx.usage(charged_tokens, charged_cost)
+        state["messages"].append(completion.assistant_message())
+        state["step"] = index + 1
+        state["pending_calls"] = [{"id": call.id, "name": call.name,
+                                    "operation": call.name.replace("__", "."), "arguments": call.arguments}
+                                   for call in completion.tool_calls]
+        if not completion.tool_calls:
+            state["final_summary"] = completion.content
+        _save(ctx, state)
+        if not completion.tool_calls:
+            return _finish(ctx, state, budget)
+        _pending_tools(ctx, state)
+    return {"summary": "Configured planning step limit reached; unfinished work remains", "completed": False,
+            "evidence": state.get("evidence", []), "tokens_used": budget.tokens_used, "cost_used": budget.cost_used}
+
+
+def register() -> None:
+    from serverhub.jobs import register_handler
+    register_handler("autonomous", autonomous_job)

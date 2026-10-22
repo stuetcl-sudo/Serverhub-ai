@@ -1,0 +1,28 @@
+# Root-owned config. The unprivileged worker must not change this file or checks.
+projects:
+  - name: jarvis
+    repository: https://github.com/OWNER/Jarvis-os.git
+    base_ref: main
+    allow_dependency_network: false
+    dependencies: []
+    # Provision dependencies through a reviewed, isolated process. Opt-in network
+    # install requires BOTH this config and development.network policy approval.
+    # dependencies:
+    #   - argv: [/usr/bin/npm, ci, --ignore-scripts]
+    #     network: true
+    #     timeout: 600
+    build:
+      - argv: [/usr/bin/npm, run, build]
+        timeout: 600
+    tests:
+      - argv: [/usr/bin/npm, test, --, --run]
+        timeout: 600
+    checks_path: /etc/serverhub/project-checks/jarvis
+    independent_checks:
+      - argv: [/usr/bin/python3, /checks/verify.py]
+        timeout: 300
+    artifact_paths: [dist]
+    max_artifact_bytes: 134217728
+    max_memory_mb: 4096
+    max_processes: 64
+    # This is a schema example; adapt commands/paths to the actual project before use.

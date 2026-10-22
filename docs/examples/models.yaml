@@ -1,0 +1,20 @@
+# Install root-owned, mode 0640, under /etc/serverhub/models.yaml.
+# Every route shares the caller's actual role and policy. Route names grant nothing.
+routes:
+  default:
+    kind: ollama
+    base_url: http://127.0.0.1:11434
+    model: REPLACE_WITH_INSTALLED_TOOL_CAPABLE_MODEL
+    max_output_tokens: 2048
+    context_limit: 65536
+    timeout_seconds: 90
+    max_retries: 2
+  # Paid provider example: configure current actual prices before enabling.
+  # verification:
+  #   kind: openai
+  #   base_url: https://api.openai.com/v1
+  #   model: REPLACE_WITH_MODEL_ID
+  #   api_key_env: SERVERHUB_MODEL_API_KEY
+  #   max_tokens_parameter: max_completion_tokens
+  #   input_cost_per_million: REPLACE_WITH_CURRENT_PRICE
+  #   output_cost_per_million: REPLACE_WITH_CURRENT_PRICE
