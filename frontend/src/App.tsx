@@ -496,14 +496,22 @@ function loadPerCore(host: Json): number | null {
     ? value / hardware.cpu_count
     : null;
 }
-function Progress({ value, label }: { value: number | null; label?: string }) {
+function Progress({
+  value,
+  label,
+  pressure = true,
+}: {
+  value: number | null;
+  label?: string;
+  pressure?: boolean;
+}) {
   return (
     <div className="resource-line">
       {label && <span>{label}</span>}
       <div className="progress-track">
         <div
           style={{ width: `${Math.min(100, Math.max(0, value || 0))}%` }}
-          className={value && value > 85 ? "danger-fill" : ""}
+          className={pressure && value && value > 85 ? "danger-fill" : ""}
         />
       </div>
       <small>{value === null ? "—" : `${Math.round(value)}%`}</small>
@@ -2012,7 +2020,10 @@ function Jobs() {
                           <Status value={job.state} />
                         </td>
                         <td className="progress-cell">
-                          <Progress value={Number(job.progress) || 0} />
+                          <Progress
+                            value={(Number(job.progress) || 0) * 100}
+                            pressure={false}
+                          />
                         </td>
                         <td>
                           {job.attempts || 0} / {job.max_attempts || 1}
@@ -2107,7 +2118,10 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
                   </span>
                 </div>
               </div>
-              <Progress value={Number(job.progress) || 0} />
+              <Progress
+                value={(Number(job.progress) || 0) * 100}
+                pressure={false}
+              />
               <div className="job-controls">
                 {["queued", "running", "retrying"].includes(job.state) && (
                   <button

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import base64
 import io
+import hashlib
 import json
 import subprocess
 import tarfile
@@ -225,3 +226,28 @@ def test_release_extraction_rejects_duplicate_members_and_normalizes_modes(tmp_p
         output.addfile(member, io.BytesIO(b"ok"))
     safe_extract(archive, tmp_path / "normalized")
     assert (tmp_path / "normalized/index.html").stat().st_mode & 0o777 == 0o644
+
+
+@pytest.mark.parametrize('change', ['policy', 'autostart'])
+def test_signed_release_cannot_lie_about_unchanged_python_code(tmp_path, change):
+    import zipfile
+    manager, bundle, manifest = signed_bundle(tmp_path)
+    manager.code_hashes = tmp_path / 'code-anchor.json'
+    original = b'protected policy implementation\n'
+    manager.code_hashes.write_text(json.dumps({'format':1,'files':{'serverhub/policy.py':hashlib.sha256(original).hexdigest()}}))
+    key = Ed25519PrivateKey.generate()
+    manager.public_key.write_bytes(key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
+    def signed_wheel(content, autostart=False):
+        with zipfile.ZipFile(bundle / 'application.whl', 'w') as wheel:
+            wheel.writestr('serverhub/policy.py', content)
+            if autostart:
+                wheel.writestr('autostart.pth', b'import malicious_startup\n')
+        manifest['files']['application.whl'] = digest(bundle / 'application.whl')
+        (bundle / 'release.json').write_bytes(canonical(manifest))
+        (bundle / 'release.sig').write_text(base64.b64encode(key.sign(canonical(manifest))).decode())
+    signed_wheel(original)
+    assert manager.verify_bundle(bundle)['trust_boundary_digest'] == manifest['trust_boundary_digest']
+    # Even a newly signed bundle claiming the same trust digest must preserve actual code bytes.
+    signed_wheel(b'def authorize(*args): return True\n' if change == 'policy' else original, change == 'autostart')
+    with pytest.raises(ReleaseError, match='protected code'):
+        manager.verify_bundle(bundle)

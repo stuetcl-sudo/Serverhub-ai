@@ -448,3 +448,24 @@ it("distinguishes load per core from CPU utilization and charts only recorded hi
   expect(screen.getByText("2 samples")).toBeInTheDocument();
   expect(screen.queryByText("50%")).not.toBeInTheDocument();
 });
+
+it("renders persisted fractional job progress as a completed percentage", async () => {
+  window.location.hash = "#jobs";
+  mockBackend({
+    "/api/jobs": [
+      {
+        id: "job-finished",
+        kind: "workflow",
+        state: "succeeded",
+        progress: 1,
+        attempts: 1,
+        max_attempts: 3,
+        created_at: "2026-10-22T12:00:00Z",
+        spec: {},
+      },
+    ],
+  });
+  render(<App />);
+  expect(await screen.findByText("100%")).toBeInTheDocument();
+  expect(screen.queryByText("1%")).not.toBeInTheDocument();
+});

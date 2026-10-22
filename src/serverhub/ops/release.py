@@ -13,6 +13,7 @@ import subprocess
 import tarfile
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 from .backup import BackupManager, digest
@@ -53,11 +54,13 @@ class ReleaseManager:
 
     def __init__(self, install_root="/opt/serverhub", state_root="/var/lib/serverhub-release", *,
                  public_key="/etc/serverhub/trusted-release-key.pem", trust_digest="/etc/serverhub/trust-boundaries.sha256",
-                 require_root=True, runner=None, clock=None):
+                 require_root=True, runner=None, clock=None,
+                 code_hashes="/etc/serverhub/trusted-code-hashes.json"):
         self.install_root = Path(install_root)
         self.state_root = Path(state_root)
         self.public_key = Path(public_key)
         self.trust_digest = Path(trust_digest)
+        self.code_hashes = Path(code_hashes)
         self.require_root = require_root
         self.runner = runner or subprocess.run
         self.clock = clock or time.time
@@ -124,6 +127,38 @@ class ReleaseManager:
             path = bundle / name
             if Path(name).is_absolute() or ".." in Path(name).parts or digest(path) != checksum:
                 raise ReleaseError("release artifact checksum failed")
+        # Manifest claims alone do not prove that protected modules are unchanged.
+        # Compare actual wheel bytes with the independent initial-install anchor.
+        if self.require_root or self.code_hashes.is_file():
+            try:
+                if self.require_root:
+                    trusted_file(self.code_hashes)
+                anchor = json.loads(self.code_hashes.read_text())
+                if anchor.get("format") != 1 or not anchor.get("files"):
+                    raise ValueError("invalid code integrity anchor")
+                with zipfile.ZipFile(bundle / "application.whl") as wheel:
+                    if len(wheel.namelist()) != len(set(wheel.namelist())):
+                        raise ValueError("duplicate wheel members")
+                    packaged = {name for name in wheel.namelist() if name.startswith("serverhub/") and not name.endswith("/")}
+                    if packaged != set(anchor["files"]):
+                        raise ValueError("candidate adds or removes package code")
+                    for name in wheel.namelist():
+                        if not name.startswith("serverhub/") and not re.fullmatch(r"serverhub_ai_os-[^/]+\.dist-info/(METADATA|WHEEL|RECORD|entry_points\.txt|licenses/LICENSE)", name):
+                            raise ValueError("unexpected wheel installation payload")
+                    entrypoints = [name for name in wheel.namelist() if name.endswith(".dist-info/entry_points.txt")]
+                    for name in entrypoints:
+                        import configparser
+                        configuration = configparser.ConfigParser()
+                        configuration.read_string(wheel.read(name).decode())
+                        if configuration.sections() != ["console_scripts"] or dict(configuration["console_scripts"]) != {"serverhub": "serverhub.cli:main"}:
+                            raise ValueError("candidate changes executable entry points")
+                    for module, checksum in anchor["files"].items():
+                        if not module.startswith("serverhub/") or ".." in Path(module).parts:
+                            raise ValueError("invalid anchored module")
+                        if hashlib.sha256(wheel.read(module)).hexdigest() != checksum:
+                            raise ValueError("protected module changed")
+            except (OSError, ValueError, KeyError, zipfile.BadZipFile, BrokerDenied) as error:
+                raise ReleaseError("candidate changes protected code or lacks the independent code anchor; explicit offline owner review is required") from error
         if not manifest.get("schema_revision") or not manifest.get("validation", {}).get("passed"):
             raise ReleaseError("release requires a schema revision and successful independent validation")
         return manifest

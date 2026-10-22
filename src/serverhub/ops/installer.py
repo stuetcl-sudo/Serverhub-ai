@@ -133,6 +133,12 @@ class Installer:
         for unit in self.units():
             self.write("/etc/systemd/system/" + unit, (self.source / "packaging/systemd" / unit).read_text())
         self.write("/etc/serverhub/trust-boundaries.sha256", self.trust_digest() + "\n")
+        # Python modules share one interpreter and can monkey-patch each other.
+        # Anchor the whole package, rather than trusting a manifest's claim that
+        # only selected security modules remained unchanged.
+        code_hashes = {str(path.relative_to(self.source / "src")): hashlib.sha256(path.read_bytes()).hexdigest()
+                       for path in sorted((self.source / "src/serverhub").rglob("*.py"))}
+        self.write("/etc/serverhub/trusted-code-hashes.json", json.dumps({"format": 1, "files": code_hashes}, sort_keys=True) + "\n", 0o600)
         self.write("/etc/serverhub/trust-boundaries.json", (self.source / "packaging/trust-boundaries.json").read_text(), 0o600)
         origins = json.dumps([self.public_url], separators=(",", ":"))
         common = (f"SERVERHUB_DEV_MODE=false\nSERVERHUB_PUBLIC_URL={self.public_url}\n"
@@ -219,7 +225,7 @@ class Installer:
             shutil.copytree(self.source / "migrations", release / "migrations")
         if self.role == "controller":
             shutil.copytree(self.source / "frontend/dist", release / "web")
-        installed = {"manifest": {"release_id": release_id, "schema_revision": "0002_oauth", "trust_boundary_digest": self.trust_digest(), "source": "explicit owner local installation"}}
+        installed = {"manifest": {"release_id": release_id, "schema_revision": "0003_schedules", "trust_boundary_digest": self.trust_digest(), "source": "explicit owner local installation"}}
         (release / "installed.json").write_text(json.dumps(installed, indent=2) + "\n")
         self.path("/opt/serverhub/current").symlink_to(release)
         self._configuration(api_password, worker_password, migrate_password, node_uid=pwd.getpwnam("serverhub-node").pw_uid, node_gid=pwd.getpwnam("serverhub-node").pw_gid)

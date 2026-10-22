@@ -39,7 +39,7 @@ ancestors, then:
 sudo ./scripts/upgrade.sh verify --bundle /opt/serverhub-upgrade/bundle
 sudo ./scripts/upgrade.sh prepare --bundle /opt/serverhub-upgrade/bundle
 sudo sh -c '. /etc/serverhub/recovery.env; export SERVERHUB_DATABASE_URL; \
-  /opt/serverhub/current/venv/bin/python -m serverhub.ops.release activate \
+  /opt/serverhub/recovery/venv/bin/python -m serverhub.ops.release activate \
   --release OWNER_VERIFIED_RELEASE_ID'
 ```
 
@@ -69,3 +69,23 @@ sudo ./scripts/upgrade.sh rollback
 This restores the previous executable release for schema-compatible activation.
 It does not roll back application data or migrations. Keep the original archive
 and previous release until a restore drill passes.
+
+## Executable code anchor
+
+Initial installation also stores `/etc/serverhub/trusted-code-hashes.json`. The independent verifier compares actual wheel module bytes and its exact package file set with this root-owned anchor, rejects startup `.pth`/unexpected installation payloads and changed CLI entry points, and checks the signed artifact hashes. Repeating an old trust digest in a new signed manifest cannot conceal changed policy code. Since Python modules share an interpreter, the whole Python package is anchored. Automatic upgrades are therefore limited to unchanged Python code (for example frontend or dependency artifacts); Python-code improvements require explicit offline owner review and maintenance of the stable recovery runtime/anchor. A fully autonomous self-code-update approval service is not implemented.
+
+## Build a signed bundle
+
+Build the wheel and frontend, run the independent checks, then use an external
+owner-controlled mode0600 Ed25519 PEM key:
+
+```sh
+python scripts/build-release.py --release-id OWNER_SELECTED_RELEASE_ID \
+  --output /absolute/path/new-bundle --validation /absolute/path/verification.json \
+  --signing-key /external/private/owner-release.pem
+```
+
+The validation JSON must report `state: passed` and contain check evidence. The
+owner must review that evidence and the source; possession of a JSON report is
+not itself independent approval. The tool packages deterministic web/migration
+archives and signs the manifest. No key is generated or stored in the repository.
