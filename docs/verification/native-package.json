@@ -2,5 +2,7 @@
   "staged_installer": "staged",
   "signature": "verified",
   "real_wheel_code_anchor": "verified",
-  "schema": "0003_schedules"
+  "schema": "0003_schedules",
+  "isolated_release_preparation": "passed",
+  "prepared_wheel_import": "passed"
 }
