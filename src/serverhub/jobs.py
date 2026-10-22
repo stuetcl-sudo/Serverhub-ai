@@ -33,6 +33,13 @@ class BudgetExceeded(Exception):
     pass
 
 
+class PreflightRejected(BudgetExceeded):
+    """No request or tool work in this execution attempt; pause without retry burn."""
+    def __init__(self, message, diagnostics=None):
+        super().__init__(message)
+        self.diagnostics = diagnostics or {}
+
+
 class JobCancelled(Exception):
     pass
 
@@ -166,6 +173,56 @@ class JobContext:
             self.job.progress = max(0.0, min(float(progress), 1.0))
         self.db.commit()
 
+    def _model_accounting_job(self):
+        # Usage settlement is allowed after cancellation/timeout, but never by
+        # an old worker after ownership changed. Serialize with lease recovery.
+        self.db.refresh(self.job, with_for_update=True)
+        if self.job.worker_id != self.worker_id or self.job.state not in {"running", "pause_requested", "cancel_requested"}:
+            raise LeaseLost("Model accounting lease belongs to another worker")
+
+    def reconcile_model_reservation(self):
+        self._model_accounting_job()
+        checkpoint = dict(self.job.checkpoint or {})
+        reservation = checkpoint.pop("model_request_reservation", None)
+        if reservation is not None:
+            # Already charged before dispatch. Unknown outcome must never be
+            # refunded by a restarted worker. Clear atomically, charge once.
+            self.job.checkpoint = checkpoint
+            _event(self.db, self.job, "Retained uncertain model reservation after restart", {
+                "reserved_units": reservation["reserved_units"], "reserved_cost": reservation["reserved_cost"]})
+        self.db.commit()
+
+    def reserve_model_request(self, units, cost):
+        self._model_accounting_job()
+        self.check_cancelled()
+        if isinstance(units, bool) or not isinstance(units, int) or units < 0 or not math.isfinite(cost) or cost < 0:
+            raise ValueError("Invalid model reservation")
+        if self.job.tokens_used + units > self.job.token_budget or self.job.cost_used + cost > self.job.cost_budget:
+            raise BudgetExceeded("Model reservation exceeds remaining job budget")
+        checkpoint = dict(self.job.checkpoint or {})
+        if checkpoint.get("model_request_reservation"):
+            raise RuntimeError("Previous model reservation must be settled first")
+        checkpoint["model_request_reservation"] = {"base_units": self.job.tokens_used,
+            "base_cost": self.job.cost_used, "reserved_units": units, "reserved_cost": cost}
+        self.job.tokens_used += units
+        self.job.cost_used += cost
+        self.job.checkpoint = checkpoint
+        self.db.commit()  # reservation and debit precede any external request
+
+    def record_model_usage(self, total_units, total_cost):
+        self._model_accounting_job()
+        checkpoint = dict(self.job.checkpoint or {})
+        reservation = checkpoint.get("model_request_reservation")
+        base_units = reservation["base_units"] if reservation else self.job.tokens_used
+        base_cost = reservation["base_cost"] if reservation else self.job.cost_used
+        if (isinstance(total_units, bool) or not isinstance(total_units, int) or total_units < base_units
+                or not math.isfinite(total_cost) or total_cost < base_cost):
+            raise ValueError("Model settlement cannot refund earlier requests")
+        self.job.tokens_used, self.job.cost_used = total_units, total_cost
+        checkpoint.pop("model_request_reservation", None)
+        self.job.checkpoint = checkpoint
+        self.db.commit()  # actual usage/refund and ledger clear are one transaction
+
     def usage(self, tokens: int, cost: float):
         if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0 or not math.isfinite(cost) or cost < 0:
             raise ValueError("Usage cannot be negative")
@@ -219,6 +276,8 @@ def _classify(exc):
         return "paused", "paused", False
     if isinstance(exc, LeaseLost):
         return "failed", "lease_lost", False
+    if isinstance(exc, PreflightRejected):
+        return "paused", "preflight", False
     if isinstance(exc, BudgetExceeded):
         return "failed", "budget", False
     if isinstance(exc, TimeoutError):
@@ -265,6 +324,10 @@ def execute_job(job_id: str, worker_id: str):
             if retryable and job.attempts >= job.max_attempts:
                 state = "failed"
             job.state = state
+            if isinstance(exc, PreflightRejected):
+                job.attempts = max(0, job.attempts - 1)
+                job.result = {"completed": False, "preflight": exc.diagnostics,
+                              "verification": "No provider request or tool execution in this attempt. Correct the configuration/scope and resume, or submit a separately authorized larger-budget job."}
             job.failure_class = failure_class
             job.error = redact(str(exc))[:4000]
             if isinstance(exc, PermissionDenied):

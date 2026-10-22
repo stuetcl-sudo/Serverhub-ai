@@ -20,7 +20,7 @@ from typing import Any
 
 import yaml
 
-from .discovery import CollectionError, command, discover
+from .discovery import CollectionError, command, discover, docker_events, caddy_endpoints
 from .security import vulnerability_findings
 
 MAX_REQUEST = 65536
@@ -151,11 +151,24 @@ def _compose_file(entry: dict) -> tuple[Path, Path]:
 
 
 def execute(operation: str, arguments: dict, config: dict) -> dict:
-    if operation not in ALLOWED_OPERATIONS or not isinstance(arguments, dict):
+    if operation not in ALLOWED_OPERATIONS | {"inventory.events"} or not isinstance(arguments, dict):
         raise BrokerDenied("operation is not allowlisted")
     if operation in {"inventory.refresh", "discovery.refresh"}:
         _exact_args(arguments, set())
-        return {"inventory": discover(privileged=True)}
+        inventory = discover(privileged=True)
+        inventory["caddy"] = {"available": False, "reason": "reviewed caddy_json path not configured", "endpoints": []}
+        if config.get("caddy_json"):
+            try:
+                path = trusted_file(config["caddy_json"])
+                if path.stat().st_size > 1024 * 1024:
+                    raise BrokerDenied("Caddy JSON exceeds 1 MiB")
+                inventory["caddy"] = {"available": True, "endpoints": caddy_endpoints(json.loads(path.read_text()))}
+            except (BrokerDenied, OSError, ValueError, TypeError, AttributeError):
+                inventory["errors"].append({"collector": "caddy", "error": "Unavailable", "detail": "check protected adapted JSON path and format"})
+        return {"inventory": inventory}
+    if operation == "inventory.events":
+        _exact_args(arguments, set())
+        return docker_events()
     if operation.startswith("systemd."):
         _exact_args(arguments, {"service"})
         service = _name(arguments.get("service"))

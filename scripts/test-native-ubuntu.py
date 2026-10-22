@@ -179,6 +179,9 @@ unauthorized = client.post(
     },
 )
 assert unauthorized.status_code == 403
+# A local admission failure must pause without spending a model/job attempt.
+limited = client.put("/api/settings/models/default", headers=headers, json={**model, "context_limit": 1024})
+limited.raise_for_status()
 job = client.post(
     "/api/jobs",
     headers=adult_headers,
@@ -186,17 +189,28 @@ job = client.post(
         "kind": "autonomous",
         "host_id": host,
         "spec": {"prompt": "Read CPU, memory and disk usage and verify fresh inventory."},
-        "token_budget": 100000,
+        "token_budget": 20000,
     },
 )
 job.raise_for_status()
 for _ in range(60):
     result = client.get("/api/jobs/" + job.json()["id"], headers=adult_headers).json()
-    if result["state"] in ("succeeded", "partial", "failed", "waiting_approval"):
+    if result["state"] in ("succeeded", "partial", "failed", "waiting_approval", "paused"):
+        break
+    time.sleep(1)
+assert result["state"] == "paused", result
+assert result["attempts"] == 0 and result["tokens_used"] == 0
+corrected = client.put("/api/settings/models/default", headers=headers, json={**model, "context_limit": 16384})
+corrected.raise_for_status()
+client.post("/api/jobs/" + job.json()["id"] + "/resume", headers=adult_headers).raise_for_status()
+for _ in range(60):
+    result = client.get("/api/jobs/" + job.json()["id"], headers=adult_headers).json()
+    if result["state"] in ("succeeded", "partial", "failed", "waiting_approval", "paused"):
         break
     time.sleep(1)
 assert result["state"] == "succeeded", result
 assert result["result"]["verified"]
+assert result["attempts"] == 1 and result["tokens_used"] <= 20000
 diag = client.get("/api/diagnostics", headers=headers)
 diag.raise_for_status()
 checks = {check["id"]: check for check in diag.json()["checks"]}
@@ -243,6 +257,7 @@ print(
             "idempotency": "passed",
             "api_worker": "healthy",
             "model_setup": "mock Ollama API verified",
+            "preflight_pause_refund_resume": "passed",
             "read_only_autonomous_job": result["state"],
             "unauthorized_restart": unauthorized.status_code,
             "upgrade": upgraded["state"],

@@ -13,6 +13,7 @@ from .audit import redact
 from .database import utcnow
 from .models import Finding, GraphEdge, Host, Incident, InventorySample, Memory
 from .node.security import analyze
+from .inventory_history import record_inventory
 
 
 def sanitize_observation(value):
@@ -94,19 +95,29 @@ def _edges(host: Host, inventory: dict):
         for mount in container.get("mounts", []):
             yield (
                 identifier,
-                root + ":mount:" + str(mount.get("source")),
+                root + (":volume:" + str(mount["name"]) if mount.get("type") == "volume" and mount.get("name") else ":mount:" + str(mount.get("source"))),
                 "mounts",
                 True,
                 {"rw": mount.get("rw"), "source": "docker_inspect"},
             )
+        if container.get("image_id"):
+            yield identifier, root + ":image:" + container["image_id"], "uses_image", True, {"source": "docker_inspect"}
+        if container.get("compose_project") and container.get("compose_service"):
+            project = root + ":compose:" + container["compose_project"]
+            service = project + ":service:" + container["compose_service"]
+            yield identifier, service, "implements_service", True, {"source": "compose_label", "runtime_health": "unverified"}
+            yield service, project, "belongs_to_project", True, {"source": "compose_label"}
         for dependency in container.get("dependencies", []):
             yield (
                 identifier,
-                root + ":compose_service:" + dependency,
+                root + ":compose:" + str(container.get("compose_project")) + ":service:" + dependency,
                 "declares_dependency",
                 True,
                 {"source": "compose_label", "runtime_health": "unverified"},
             )
+    for endpoint in (inventory.get("caddy") or {}).get("endpoints", []):
+        for hostname in endpoint.get("hosts", []):
+            yield root + ":proxy:caddy", "hostname:" + hostname, "configured_endpoint", True, {"source": "reviewed_caddy_json", "reachability": "unverified"}
     for port in inventory.get("ports", []):
         identifier = (
             root
@@ -268,7 +279,7 @@ def ingest_inventory(db, host: Host, inventory: dict):
     metrics = metrics_from(cleaned)
     detect_incidents(db, host, cleaned, metrics)
     host.inventory, host.last_seen = cleaned, utcnow()
-    db.add(InventorySample(host_id=host.id, metrics=metrics))
+    record_inventory(db, host, cleaned, metrics)
     update_graph(db, host, cleaned)
     update_findings(db, host, cleaned)
 

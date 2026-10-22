@@ -15,6 +15,7 @@ import shutil
 import socket
 import subprocess
 import resource
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -112,6 +113,7 @@ def _hardware() -> dict:
             continue
     return {"cpu_count": psutil.cpu_count(), "cpu_physical": psutil.cpu_count(logical=False),
             "load_average": os.getloadavg(), "memory": {"total": vm.total, "available": vm.available, "used": vm.used, "percent": vm.percent},
+            "gpus": gpu_inventory(),
             "swap": {"total": swap.total, "used": swap.used, "percent": swap.percent}, "disks": disks, "sensors": sensors,
             "processes_by_memory": sorted(procs, key=lambda p: p.get("memory_percent") or 0, reverse=True)[:20]}
 
@@ -203,16 +205,50 @@ def _docker() -> dict:
             "volumes": [], "networks": [], "compose_projects": []}
 
 
+MAX_CONTAINERS = 1000
+
+
+def _dependency_names(value: str) -> list[str]:
+    # Compose v2 labels encode service:condition:restart, not bare IDs. These
+    # are configuration declarations, never proof of a healthy runtime edge.
+    return sorted({entry.split(":", 1)[0] for entry in str(value).split(",")
+                   if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}(?::[^,]{0,128})?", entry)})
+
+
 def docker_inventory() -> dict:
-    """Broker-only Docker inventory. Environment values, raw commands and labels never leave the broker."""
+    """Broker-only read. No environment, commands, arbitrary labels or health logs.
+
+    Bound inspect batches, skip containers removed during observation and report
+    collection gaps explicitly. An incomplete snapshot cannot prove a deletion.
+    """
     ids = command("docker", "container", "ls", "--all", "--quiet").split()
-    containers = []
-    compose = {}
-    for offset in range(0, len(ids), 50):
-        for raw in json.loads(command("docker", "container", "inspect", *ids[offset:offset + 50])):
-            cfg = raw.get("Config", {})
-            host = raw.get("HostConfig", {})
-            state = raw.get("State", {})
+    truncated = len(ids) > MAX_CONTAINERS
+    ids = ids[:MAX_CONTAINERS]
+    containers, gaps, compose = [], [], {}
+    deadline = time.monotonic() + 30
+    for offset in range(0, len(ids), 25):
+        batch = ids[offset:offset + 25]
+        if time.monotonic() >= deadline:
+            gaps.append({"reason": "inspect time budget exhausted", "uninspected": len(ids) - offset})
+            break
+        try:
+            inspected = json.loads(command("docker", "container", "inspect", *batch, timeout=max(1, min(10, int(deadline-time.monotonic())))))
+        except CollectionError:
+            # One container can disappear between ls and inspect. Do not throw
+            # away every other container; at most one bounded retry per ID.
+            inspected = []
+            for identifier in batch:
+                if time.monotonic() >= deadline:
+                    gaps.append({"reason": "inspect time budget exhausted"})
+                    break
+                try:
+                    inspected.extend(json.loads(command("docker", "container", "inspect", identifier, timeout=3)))
+                except CollectionError:
+                    gaps.append({"id": identifier, "reason": "inspect unavailable or removed during collection"})
+        for raw in inspected:
+            cfg = raw.get("Config") or {}
+            host = raw.get("HostConfig") or {}
+            state = raw.get("State") or {}
             labels = cfg.get("Labels") or {}
             project = labels.get("com.docker.compose.project")
             service = labels.get("com.docker.compose.service")
@@ -225,13 +261,13 @@ def docker_inventory() -> dict:
                                "network_mode": host.get("NetworkMode"), "user": cfg.get("User", ""), "readonly_rootfs": host.get("ReadonlyRootfs", False),
                                "cap_add": host.get("CapAdd") or [], "security_opt": host.get("SecurityOpt") or [],
                                "memory_limit": host.get("Memory", 0), "nano_cpus": host.get("NanoCpus", 0),
-                               "mounts": [{"source": m.get("Source"), "destination": m.get("Destination"), "rw": m.get("RW"),
+                               "mounts": [{"name": m.get("Name"), "source": m.get("Source"), "destination": m.get("Destination"), "rw": m.get("RW"),
                                            "type": m.get("Type")} for m in raw.get("Mounts", [])],
                                "ports": raw.get("NetworkSettings", {}).get("Ports", {}),
                                "networks": {name: {"ipv4": n.get("IPAddress"), "ipv6": n.get("GlobalIPv6Address"), "gateway": n.get("Gateway")}
                                             for name, n in raw.get("NetworkSettings", {}).get("Networks", {}).items()},
                                "compose_project": project, "compose_service": service,
-                               "dependencies": labels.get("com.docker.compose.depends_on", "").split(",") if labels.get("com.docker.compose.depends_on") else []})
+                               "dependencies": _dependency_names(labels.get("com.docker.compose.depends_on", ""))})
     def json_lines(args: tuple[str, ...]) -> list[dict]:
         return [json.loads(line) for line in command("docker", *args, "--format", "{{json .}}").splitlines() if line]
     images = [{"id": x.get("ID"), "repository": x.get("Repository"), "tag": x.get("Tag"), "size": x.get("Size")}
@@ -240,8 +276,69 @@ def docker_inventory() -> dict:
                for x in json_lines(("volume", "ls"))]
     networks = [{"id": x.get("ID"), "name": x.get("Name"), "driver": x.get("Driver"), "scope": x.get("Scope")}
                 for x in json_lines(("network", "ls"))]
-    return {"available": True, "containers": containers, "images": images, "volumes": volumes,
+    for project in compose.values():
+        project["services"] = sorted({name for name in project["services"] if name})
+    return {"available": True, "complete": not gaps and not truncated, "gaps": gaps, "truncated": truncated,
+            "container_limit": MAX_CONTAINERS, "containers": containers, "images": images, "volumes": volumes,
             "networks": networks, "compose_projects": list(compose.values())}
+
+
+def docker_events() -> dict:
+    """Local broker hint only. Fixed recent window; do not return event labels.
+
+    Overlap is intentional: refreshes are debounced in the node. Periodic full
+    snapshots reconcile missed events after downtime; this is not an event log.
+    """
+    until = int(time.time())
+    text = command("docker", "events", "--since", str(until - 30), "--until", str(until),
+                   "--filter", "type=container", "--filter", "type=network", "--filter", "type=volume",
+                   "--filter", "type=image", "--format", "{{json .}}", timeout=3)
+    return {"changed": bool(text.strip()), "window_seconds": 30}
+
+
+def gpu_inventory() -> dict:
+    devices = []
+    # Linux DRM sysfs is read-only and available without vendor SDKs or root.
+    for card in sorted(Path("/sys/class/drm").glob("card[0-9]*")):
+        if not re.fullmatch(r"card[0-9]+", card.name):
+            continue
+        device = card / "device"
+        item = {"name": card.name, "source": "linux_drm_sysfs"}
+        for field, filename in (("vendor_id", "vendor"), ("device_id", "device"),
+                                ("vram_total_bytes", "mem_info_vram_total"), ("vram_used_bytes", "mem_info_vram_used")):
+            try:
+                value = (device / filename).read_text()[:128].strip()
+                item[field] = int(value) if field.startswith("vram") else value
+            except (OSError, ValueError):
+                continue
+        devices.append(item)
+    return {"devices": devices, "source": "linux_drm_sysfs", "utilization": "unavailable",
+            "coverage": "DRM devices only; missing devices are not proof of no GPU"}
+
+
+def caddy_endpoints(document: dict) -> list[dict]:
+    """Extract only declarative listeners/host matchers from reviewed adapted JSON.
+
+    No admin API, credentials, handler bodies, TLS keys or raw config returned.
+    Configured endpoints are not network reachability/health evidence.
+    """
+    endpoints = []
+    servers = ((document.get("apps") or {}).get("http") or {}).get("servers") or {}
+    def hosts(routes, depth=0):
+        if depth > 8:
+            return set()
+        names = set()
+        for route in routes[:1000]:
+            for match in route.get("match", [])[:100]:
+                names.update(name for name in match.get("host", [])[:100] if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9*_.:-]{1,253}", name))
+            for handler in route.get("handle", [])[:100]:
+                names.update(hosts(handler.get("routes", []), depth+1))
+        return names
+    for name, server in list(servers.items())[:100]:
+        listeners = [value for value in server.get("listen", [])[:100] if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:\[\]-]{1,256}", value)]
+        endpoints.append({"server": str(name)[:128], "listen": listeners, "hosts": sorted(hosts(server.get("routes", []))),
+                          "source": "reviewed_caddy_json", "relationship": "verified_configuration", "reachability": "unverified"})
+    return endpoints
 
 
 def firewall_inventory() -> dict:

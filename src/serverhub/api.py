@@ -229,11 +229,24 @@ def host_inventory(host_id: str, principal: Authenticated, db=Depends(get_db)):
     return host.inventory
 
 
+@router.get("/hosts/{host_id}/inventory/history")
+def host_inventory_history(host_id: str, principal: Authenticated, limit: int = 30, db=Depends(get_db)):
+    _host_scope(db, principal, host_id)
+    samples = db.scalars(select(InventorySample).where(InventorySample.host_id == host_id)
+                        .order_by(InventorySample.id.desc()).limit(min(max(limit, 1), 100))).all()
+    return [{"id": row.id, "received_at": row.created_at, "observed_at": row.metrics.get("observed_at"),
+             "diff": row.metrics.get("inventory_diff", {}), "collection_errors": row.metrics.get("collection_errors", 0)} for row in samples]
+
+
 @router.get("/hosts/{host_id}/metrics")
 def host_metrics(host_id: str, principal: Authenticated, limit: int = 120, db=Depends(get_db)):
     _host_scope(db, principal, host_id)
-    return [to_dict(row) for row in db.scalars(select(InventorySample).where(InventorySample.host_id == host_id)
-                                              .order_by(InventorySample.id.desc()).limit(min(max(limit, 1), 1000))).all()]
+    samples = db.scalars(select(InventorySample).where(InventorySample.host_id == host_id)
+                         .order_by(InventorySample.id.desc()).limit(min(max(limit, 1), 1000))).all()
+    # Keep chart responses small; structural state is retained in the database,
+    # while the scoped history endpoint exposes bounded change summaries.
+    return [{**to_dict(row), "metrics": {key: value for key, value in row.metrics.items()
+                                        if key not in {"inventory_state", "inventory_diff"}}} for row in samples]
 
 
 @router.get("/topology")
