@@ -1,0 +1,67 @@
+name: validate
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: serverhub
+          POSTGRES_PASSWORD: isolated-ci-only
+          POSTGRES_DB: serverhub_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd 'pg_isready -U serverhub'
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[test]'
+      - run: python -m pytest --junitxml=test-results/backend.xml
+        env:
+          SERVERHUB_DEV_MODE: 'true'
+          SERVERHUB_DATABASE_URL: postgresql+psycopg://serverhub:isolated-ci-only@127.0.0.1:5432/serverhub_test
+          SERVERHUB_TEST_POSTGRES_URL: postgresql+psycopg://serverhub:isolated-ci-only@127.0.0.1:5432/serverhub_test
+      - run: python -m build
+      - run: python -m serverhub.ops.installer --stage --root "$RUNNER_TEMP/serverhub-stage" --source .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-results
+          path: test-results/
+  frontend:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test -- --run
+      - run: npm audit --audit-level=high
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+  dependencies:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pip-audit
+      - run: pip-audit -r requirements.lock

@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "policy_writers": ["authenticated owner through controller API", "offline migration identity"],
+  "worker": {"root": false, "sudo": false, "docker_socket": false, "policy_write": false, "audit_mutation": false, "protected_backup_access": false},
+  "node": {"root": false, "sudo": false, "docker_socket": false, "broker_peer_identity": true},
+  "broker": {"root": true, "configuration": "root-owned exact target allowlists", "shell_endpoint": false, "network_mutation": false},
+  "recovery": {"root": true, "independent_of_ai_worker": true, "backup_destination_mode": "0700"},
+  "self_update": {"ed25519_signature": true, "trust_digest_must_match": true, "schema_changing_online_upgrade": false},
+  "limitations": ["Controller API is a trusted control plane and can write policy following authenticated owner requests", "Database administrators and root remain trust anchors", "No autonomous firewall, SSH, credential, or destructive database operations"]
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=ServerHub protected PostgreSQL and configuration backup
+After=postgresql.service
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/serverhub/recovery.env
+ExecStart=/opt/serverhub/recovery/venv/bin/python -m serverhub.ops.backup create --config /etc/serverhub --status-file /var/lib/serverhub-status/backups.json
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/serverhub /var/lib/serverhub-status
+TimeoutStartSec=1800

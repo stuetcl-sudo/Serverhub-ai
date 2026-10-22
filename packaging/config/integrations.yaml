@@ -1,0 +1,3 @@
+# Root-owned endpoints and allowlists. Secrets are environment variable references.
+integrations: {}
+# See docs/integrations.md for each adapter's tested operation names.

@@ -1,0 +1,11 @@
+# Root-owned. Add a provider explicitly; empty configuration disables AI requests.
+providers: {}
+routes: {}
+# Example (verify current pricing and provision the named secret separately):
+# providers:
+#   local:
+#     kind: ollama
+#     base_url: http://127.0.0.1:11434
+#     model: YOUR_INSTALLED_TOOL_CAPABLE_MODEL
+# routes:
+#   default: local

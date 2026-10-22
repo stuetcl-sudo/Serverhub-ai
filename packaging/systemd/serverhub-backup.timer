@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily protected ServerHub backups
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=serverhub-backup.service
+[Install]
+WantedBy=timers.target

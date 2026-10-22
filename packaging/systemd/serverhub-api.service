@@ -1,0 +1,33 @@
+[Unit]
+Description=ServerHub AI OS controller API
+After=network-online.target postgresql.service
+Wants=network-online.target
+[Service]
+Type=simple
+User=serverhub-api
+Group=serverhub-api
+WorkingDirectory=/opt/serverhub/current
+EnvironmentFile=/etc/serverhub/api.env
+ExecStart=/opt/serverhub/current/venv/bin/serverhub serve
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/serverhub-api
+InaccessiblePaths=/etc/serverhub/worker.env /etc/serverhub/recovery.env /etc/serverhub/broker.yaml /var/backups/serverhub /var/lib/serverhub-recovery /var/lib/serverhub-release
+MemoryMax=1G
+TasksMax=128
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,277 @@
+"""Read-only Linux discovery. Every collector reports incomplete observations explicitly.
+
+Docker and firewall inspection require the separately configured broker; the ordinary
+agent has neither Docker-group membership nor a privileged socket.
+"""
+from __future__ import annotations
+
+import hashlib
+import ipaddress
+import json
+import os
+import platform
+import re
+import shutil
+import socket
+import subprocess
+import resource
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import psutil
+
+MAX_OUTPUT = 16 * 1024 * 1024
+SECRET_KEYS = re.compile(r"password|passwd|secret|token|credential|authorization|api.?key", re.I)
+
+
+class CollectionError(RuntimeError):
+    pass
+
+
+def bounded_run(argv: list[str], *, timeout: int = 15, limit: int = MAX_OUTPUT) -> str:
+    """No shell or caller environment. A tempfile bounds memory even for noisy tools."""
+    import tempfile
+    if not argv or not Path(argv[0]).is_absolute():
+        raise CollectionError("executable must use an absolute path")
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
+        try:
+            proc = subprocess.Popen(argv, stdout=output, stderr=error, stdin=subprocess.DEVNULL,
+                                    env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C", "HOME": "/nonexistent"},
+                                    start_new_session=True, preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit)))
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                import signal
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+                raise CollectionError(f"{Path(argv[0]).name} timed out") from None
+            size = output.tell()
+            if size > limit:
+                raise CollectionError(f"{Path(argv[0]).name} exceeded output limit")
+            if proc.returncode:
+                raise CollectionError(f"{Path(argv[0]).name} exited {proc.returncode}; permission or tool failure")
+            output.seek(0)
+            return output.read(limit + 1).decode("utf-8", "replace")
+        except OSError as exc:
+            raise CollectionError(f"{Path(argv[0]).name}: {type(exc).__name__}") from exc
+
+
+def command(name: str, *args: str, timeout: int = 15) -> str:
+    executable = shutil.which(name, path="/usr/sbin:/usr/bin:/sbin:/bin")
+    if not executable:
+        raise CollectionError(f"{name} not installed")
+    return bounded_run([executable, *args], timeout=timeout)
+
+
+def _read(path: str, limit: int = 1024 * 1024) -> str:
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return fh.read(limit)
+
+
+def _os() -> dict:
+    release = {}
+    for line in _read("/etc/os-release").splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            release[key.lower()] = value.strip('"')
+    machine = _read("/etc/machine-id", 128).strip() if Path("/etc/machine-id").exists() else ""
+    return {"hostname": socket.gethostname(), "kernel": platform.release(), "architecture": platform.machine(),
+            "distribution": release, "boot_time": datetime.fromtimestamp(psutil.boot_time(), timezone.utc).isoformat(),
+            "machine_id_sha256": hashlib.sha256(machine.encode()).hexdigest() if machine else None}
+
+
+def _hardware() -> dict:
+    vm = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    disks = []
+    for part in psutil.disk_partitions(all=False):
+        try:
+            usage = psutil.disk_usage(part.mountpoint)
+            disks.append({"device": part.device, "mountpoint": part.mountpoint, "fstype": part.fstype,
+                          "total": usage.total, "used": usage.used, "free": usage.free, "percent": usage.percent})
+        except (PermissionError, OSError):
+            continue
+    # Container overlay roots may not appear in disk_partitions.
+    if not any(item["mountpoint"] == "/" for item in disks):
+        usage = psutil.disk_usage("/")
+        disks.append({"device": "root", "mountpoint": "/", "fstype": "unknown", "total": usage.total,
+                      "used": usage.used, "free": usage.free, "percent": usage.percent})
+    sensors = {}
+    if hasattr(psutil, "sensors_temperatures"):
+        for name, entries in psutil.sensors_temperatures().items():
+            sensors[name] = [{"label": x.label, "current": x.current, "high": x.high, "critical": x.critical} for x in entries]
+    procs = []
+    for proc in psutil.process_iter(["pid", "name", "memory_percent", "cpu_times"]):
+        try:
+            info = proc.info
+            times = info.pop("cpu_times", None)
+            info["cpu_seconds"] = times.user + times.system if times else 0
+            procs.append(info)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return {"cpu_count": psutil.cpu_count(), "cpu_physical": psutil.cpu_count(logical=False),
+            "load_average": os.getloadavg(), "memory": {"total": vm.total, "available": vm.available, "used": vm.used, "percent": vm.percent},
+            "swap": {"total": swap.total, "used": swap.used, "percent": swap.percent}, "disks": disks, "sensors": sensors,
+            "processes_by_memory": sorted(procs, key=lambda p: p.get("memory_percent") or 0, reverse=True)[:20]}
+
+
+def _packages() -> list[dict]:
+    lines = command("dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\\n").splitlines()
+    packages = []
+    for line in lines:
+        fields = line.split("\t")
+        if len(fields) == 4 and fields[3] == "installed":
+            packages.append({"name": fields[0], "version": fields[1], "architecture": fields[2]})
+    return packages
+
+
+def _interfaces() -> list[dict]:
+    stats = psutil.net_if_stats()
+    result = []
+    for name, addrs in psutil.net_if_addrs().items():
+        st = stats.get(name)
+        result.append({"name": name, "is_up": bool(st and st.isup), "mtu": st.mtu if st else None,
+                       "speed_mbps": st.speed if st else None,
+                       "addresses": [{"family": x.family.name, "address": x.address,
+                                      "netmask": x.netmask, "broadcast": x.broadcast} for x in addrs]})
+    return result
+
+
+def _routes() -> dict:
+    return {"ipv4": json.loads(command("ip", "-j", "-4", "route", "show", "table", "all")),
+            "ipv6": json.loads(command("ip", "-j", "-6", "route", "show", "table", "all"))}
+
+
+def _dns() -> dict:
+    servers, search = [], []
+    for line in _read("/etc/resolv.conf", 32768).splitlines():
+        parts = line.split()
+        if len(parts) > 1 and parts[0] == "nameserver":
+            servers.append(parts[1])
+        elif parts and parts[0] in {"search", "domain"}:
+            search.extend(parts[1:])
+    return {"nameservers": servers, "search": search, "source": "/etc/resolv.conf"}
+
+
+def _scope(address: str) -> str:
+    if address in {"0.0.0.0", "::", "*"}:
+        return "all_interfaces"
+    try:
+        addr = ipaddress.ip_address(address.split("%", 1)[0])
+        return "loopback" if addr.is_loopback else "link_local" if addr.is_link_local else "private" if addr.is_private else "global_address"
+    except ValueError:
+        return "unknown"
+
+
+def _ports() -> list[dict]:
+    connections = psutil.net_connections(kind="inet")
+    result = []
+    for conn in connections:
+        if not conn.laddr or (conn.type == socket.SOCK_STREAM and conn.status != psutil.CONN_LISTEN):
+            continue
+        if conn.type == socket.SOCK_DGRAM and conn.raddr:
+            continue
+        address, port = conn.laddr.ip, conn.laddr.port
+        process = None
+        if conn.pid:
+            try:
+                process = psutil.Process(conn.pid).name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        result.append({"protocol": "tcp" if conn.type == socket.SOCK_STREAM else "udp", "address": address,
+                       "port": port, "pid": conn.pid, "process": process, "scope": _scope(address),
+                       "internet_exposure": "unverified", "lan_reachability": "unverified"})
+    return sorted(result, key=lambda x: (x["protocol"], x["port"], x["address"]))
+
+
+def _services() -> list[dict]:
+    units = json.loads(command("systemctl", "list-units", "--type=service", "--all", "--output=json", "--no-pager"))
+    result = []
+    for unit in units:
+        name = unit.get("unit")
+        if not name:
+            continue
+        result.append({"name": name, "load": unit.get("load"), "active": unit.get("active"),
+                       "sub": unit.get("sub"), "description": unit.get("description")})
+    return result
+
+
+def _docker() -> dict:
+    # Explicitly unsupported in the unprivileged process; root broker performs this collector.
+    return {"available": False, "reason": "privileged broker inventory required", "containers": [], "images": [],
+            "volumes": [], "networks": [], "compose_projects": []}
+
+
+def docker_inventory() -> dict:
+    """Broker-only Docker inventory. Environment values, raw commands and labels never leave the broker."""
+    ids = command("docker", "container", "ls", "--all", "--quiet").split()
+    containers = []
+    compose = {}
+    for offset in range(0, len(ids), 50):
+        for raw in json.loads(command("docker", "container", "inspect", *ids[offset:offset + 50])):
+            cfg = raw.get("Config", {})
+            host = raw.get("HostConfig", {})
+            state = raw.get("State", {})
+            labels = cfg.get("Labels") or {}
+            project = labels.get("com.docker.compose.project")
+            service = labels.get("com.docker.compose.service")
+            if project:
+                compose.setdefault(project, {"name": project, "services": [], "relationship": "verified_label"})["services"].append(service)
+            containers.append({"id": raw["Id"], "name": raw.get("Name", "").lstrip("/"), "image": cfg.get("Image"),
+                               "image_id": raw.get("Image"), "state": state.get("Status"), "running": state.get("Running"),
+                               "restart_count": raw.get("RestartCount", 0), "health": (state.get("Health") or {}).get("Status"),
+                               "has_healthcheck": bool(cfg.get("Healthcheck")), "privileged": host.get("Privileged", False),
+                               "network_mode": host.get("NetworkMode"), "user": cfg.get("User", ""), "readonly_rootfs": host.get("ReadonlyRootfs", False),
+                               "cap_add": host.get("CapAdd") or [], "security_opt": host.get("SecurityOpt") or [],
+                               "memory_limit": host.get("Memory", 0), "nano_cpus": host.get("NanoCpus", 0),
+                               "mounts": [{"source": m.get("Source"), "destination": m.get("Destination"), "rw": m.get("RW"),
+                                           "type": m.get("Type")} for m in raw.get("Mounts", [])],
+                               "ports": raw.get("NetworkSettings", {}).get("Ports", {}),
+                               "networks": {name: {"ipv4": n.get("IPAddress"), "ipv6": n.get("GlobalIPv6Address"), "gateway": n.get("Gateway")}
+                                            for name, n in raw.get("NetworkSettings", {}).get("Networks", {}).items()},
+                               "compose_project": project, "compose_service": service,
+                               "dependencies": labels.get("com.docker.compose.depends_on", "").split(",") if labels.get("com.docker.compose.depends_on") else []})
+    def json_lines(args: tuple[str, ...]) -> list[dict]:
+        return [json.loads(line) for line in command("docker", *args, "--format", "{{json .}}").splitlines() if line]
+    images = [{"id": x.get("ID"), "repository": x.get("Repository"), "tag": x.get("Tag"), "size": x.get("Size")}
+              for x in json_lines(("image", "ls"))]
+    volumes = [{"name": x.get("Name"), "driver": x.get("Driver"), "scope": x.get("Scope")}
+               for x in json_lines(("volume", "ls"))]
+    networks = [{"id": x.get("ID"), "name": x.get("Name"), "driver": x.get("Driver"), "scope": x.get("Scope")}
+                for x in json_lines(("network", "ls"))]
+    return {"available": True, "containers": containers, "images": images, "volumes": volumes,
+            "networks": networks, "compose_projects": list(compose.values())}
+
+
+def firewall_inventory() -> dict:
+    try:
+        rules = json.loads(command("nft", "--json", "list", "ruleset"))
+        # Rule AST can include log prefixes, but never fetch files or resolve secrets.
+        return {"available": True, "backend": "nftables", "ruleset": rules, "effectiveness": "unverified"}
+    except CollectionError:
+        try:
+            status = command("ufw", "status", "verbose")
+            return {"available": True, "backend": "ufw", "status": status, "effectiveness": "unverified"}
+        except CollectionError:
+            return {"available": False, "backend": "unknown", "effectiveness": "unverified", "reason": "insufficient privileges or no supported tool"}
+
+
+def discover(*, privileged: bool = False) -> dict[str, Any]:
+    inventory: dict[str, Any] = {"schema_version": 1, "observed_at": datetime.now(timezone.utc).isoformat(), "errors": []}
+    collectors = {"os": _os, "hardware": _hardware, "packages": _packages, "interfaces": _interfaces,
+                  "routes": _routes, "dns": _dns, "ports": _ports, "services": _services, "docker": docker_inventory if privileged else _docker,
+                  "firewall": firewall_inventory if privileged else lambda: {"available": False, "effectiveness": "unverified", "reason": "broker required"},
+                  "neighbors": lambda: json.loads(command("ip", "-j", "neigh", "show"))}
+    for name, collector in collectors.items():
+        try:
+            inventory[name] = collector()
+        except Exception as exc:
+            inventory[name] = [] if name in {"packages", "interfaces", "ports", "services", "neighbors"} else {}
+            inventory["errors"].append({"collector": name, "error": type(exc).__name__, "detail": str(exc)[:256]})
+    inventory["addresses"] = [{"interface": item["name"], **address}
+                              for item in inventory.get("interfaces", []) for address in item.get("addresses", [])
+                              if address.get("family") in {"AF_INET", "AF_INET6"}]
+    inventory["reverse_proxies"] = [{"name": x.get("name"), "evidence": "service_name", "confidence": "inferred"}
+                                    for x in inventory.get("services", []) if re.search(r"nginx|caddy|traefik|haproxy|apache2", x.get("name", ""), re.I)]
+    return inventory

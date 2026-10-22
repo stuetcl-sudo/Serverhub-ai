@@ -1,0 +1,11 @@
+[Unit]
+Description=ServerHub independent native release rollback watchdog
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/serverhub/recovery/venv/bin/python -m serverhub.ops.release watchdog
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+TimeoutStartSec=120

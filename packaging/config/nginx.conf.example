@@ -1,0 +1,20 @@
+# Merge into your existing reverse proxy deliberately. Installation does not
+# replace the existing proxy or obtain certificates automatically.
+server {
+    listen 443 ssl;
+    server_name serverhub.example.net;
+    ssl_certificate /etc/ssl/serverhub/fullchain.pem;
+    ssl_certificate_key /etc/ssl/serverhub/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 8m;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    location / {
+        proxy_pass http://127.0.0.1:9080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_read_timeout 3600;
+        proxy_buffering off;
+    }
+}

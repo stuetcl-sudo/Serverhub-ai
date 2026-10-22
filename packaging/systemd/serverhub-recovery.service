@@ -1,0 +1,13 @@
+[Unit]
+Description=ServerHub independent configuration rollback watchdog
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/serverhub/recovery/venv/bin/python -m serverhub.node.watchdog --directory /var/lib/serverhub-recovery tick
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+# Recovery must write the specific root-approved checkpoint target. It is never
+# callable by the AI worker; journals and service units are protected from it.
+TimeoutStartSec=120
