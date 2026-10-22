@@ -2553,6 +2553,14 @@
             "maxItems": 50,
             "title": "Containers"
           },
+          "storage_targets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Storage Targets"
+          },
           "network_targets": {
             "items": {
               "type": "string"

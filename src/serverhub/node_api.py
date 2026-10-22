@@ -27,7 +27,7 @@ NODE_OPERATIONS = frozenset(
     {
         "inventory.refresh",
         "discovery.refresh",
-        "diagnostics.network",
+        "diagnostics.network", "diagnostics.storage",
         "security.scan",
         "systemd.status", "systemd.logs",
         "systemd.restart",

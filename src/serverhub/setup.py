@@ -119,6 +119,7 @@ class ProfileGrant(BaseModel):
     hours: int = Field(default=24, ge=1, le=24 * 366)
     services: list[str] = Field(default_factory=list, max_length=50)
     containers: list[str] = Field(default_factory=list, max_length=50)
+    storage_targets: list[str] = Field(default_factory=list, max_length=20)
     network_targets: list[str] = Field(default_factory=list, max_length=30)
     allow_dependency_network: bool = False
 
@@ -133,7 +134,7 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
         raise HTTPException(422, "Choose an enrolled, non-revoked host")
     if any(
         not re.fullmatch(r"[A-Za-z0-9_.@-]{1,160}", value)
-        for value in body.services + body.containers + body.network_targets
+        for value in body.services + body.containers + body.network_targets + body.storage_targets
     ):
         raise HTTPException(422, "Invalid target name")
     if body.profile == "development" and not body.project:
@@ -152,11 +153,14 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
                 "discovery.refresh",
                 "task.verify",
                 "monitoring.read",
+                "host.audit",
             ],
             {},
             "read",
         )
     ]
+    if body.storage_targets:
+        operations.append((["diagnostics.storage"], {"target": body.storage_targets}, "read"))
     if body.network_targets:
         operations.append((["diagnostics.network"], {"target": body.network_targets}, "read"))
     if body.services:

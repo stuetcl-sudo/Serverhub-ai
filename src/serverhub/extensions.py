@@ -111,6 +111,9 @@ def execute_operation(ctx, spec):
         spec.get("idempotency_key")
         or hashlib.sha256(json.dumps([ctx.job.id, operation, arguments], sort_keys=True).encode()).hexdigest()
     )
+    if operation == "host.audit":
+        from .host_audit import run_audit
+        return run_audit(ctx, arguments)
     if operation in NODE_OPERATIONS:
         return execute_node(ctx, operation, arguments, idempotency_key=key)
     if operation == "catalog.search":

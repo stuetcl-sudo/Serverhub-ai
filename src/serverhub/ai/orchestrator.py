@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from serverhub.audit import redact
 from serverhub.integrations.registry import OPERATIONS, IntegrationError, execute, operation_schemas
+from serverhub.host_audit import AuditArguments
 from .agents import AGENTS, BASE_INSTRUCTIONS
 from .providers import BudgetExceeded as ProviderBudgetExceeded, ChatProvider, ProviderError, UsageBudget, load_routes
 
@@ -72,6 +73,7 @@ class Development(Arguments):
 
 
 TOOLS: dict[str, tuple[type[BaseModel], str]] = {
+    "host.audit": (AuditArguments, "Collect fresh read-only host inventory and generate ordered capacity/security/update/zone plans; no repairs, deletion, reboot or network changes. Historical baseline inputs remain unverified."),
     "inventory.read": (Arguments, "Read the current target host's last observed inventory; collection errors remain explicit"),
     "inventory.query": (InventoryQuery, "Inspect a bounded inventory section of the selected host with optional text filter"),
     "inventory.refresh": (Arguments, "Ask the target Linux node for a fresh inventory"),
@@ -128,6 +130,9 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
         raise ValueError("Model requested an unregistered tool")
     parsed = TOOLS[operation][0].model_validate(arguments)
     args = parsed.model_dump(exclude_none=True)
+    if operation == "host.audit":
+        from serverhub.host_audit import run_audit
+        return run_audit(ctx, args)
     if operation in NODE_TOOLS:
         from serverhub.node_api import execute_node
         return execute_node(ctx, operation, args, idempotency_key=f"{ctx.job.id}:ai:{call_id}")

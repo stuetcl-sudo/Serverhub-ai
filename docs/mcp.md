@@ -57,3 +57,11 @@ Only an owner token with `serverhub:policies` may activate this template. The ca
 ## Existing ServerHub Control MCP
 
 Its credentials/OAuth/configuration are not modified. The optional legacy adapter can perform the documented initialize/tools-list handshake and return metadata. It does not fabricate names for unknown existing tools or forward unrestricted commands. Existing tool compatibility requires the actual external server's schema and an explicitly implemented adapter; it is not implied by both products using MCP.
+
+
+## Read-only host audit
+
+`audit_host` requires `serverhub:jobs` and a concrete authorized `host_id`. It
+queues a durable `operation`/`host.audit` job and returns its ID immediately.
+`job_progress` and `job_result` expose the same state as the dashboard. It never
+executes a repair or claims synchronous completion. See [host-audit.md](host-audit.md).

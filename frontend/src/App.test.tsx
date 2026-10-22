@@ -488,3 +488,14 @@ it("loads scoped structural history when the host Changes tab is selected", asyn
   expect(await screen.findByText("removed: retired-container")).toBeInTheDocument();
   expect(fetch).toHaveBeenCalledWith("/api/hosts/host-a/inventory/history", expect.any(Object));
 });
+
+it("launches a persistent read-only host audit without a model budget", async () => {
+  window.location.hash = "#hosts";
+  const fetch = mockBackend({ "POST /api/jobs": { id: "audit-1", state: "queued" } });
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: /Linux node A/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Run read-only audit" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, options]) => path === "/api/jobs" && options?.method === "POST")).toBe(true));
+  const call = fetch.mock.calls.find(([path, options]) => path === "/api/jobs" && options?.method === "POST")!;
+  expect(JSON.parse(String(call[1]?.body))).toEqual({ kind: "operation", host_id: "host-a", spec: { operation: "host.audit", arguments: {} }, token_budget: 0, cost_budget: 0 });
+});
