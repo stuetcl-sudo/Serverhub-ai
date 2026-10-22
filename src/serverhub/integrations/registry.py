@@ -302,6 +302,7 @@ def _set_rules(client, cfg, args, checkpoint):
         try:
             client.request("POST", "/control/filtering/set_rules", body={"rules": previous})
             restored = client.request("GET", "/control/filtering/status").get("user_rules") == previous
+            _canaries(client, cfg)
         except IntegrationError:
             restored = False
         raise IntegrationError("AdGuard rule change failed; rollback attempted", rollback={"verified": restored}) from exc
@@ -362,10 +363,14 @@ def _replace_filter(client, cfg, args, checkpoint, transport):
         try:
             restore_data = {k: old[k] for k in ("name", "url", "enabled") if k in old}
             client.request("POST", "/control/filtering/set_url", body={"url": old["url"], "whitelist": False, "data": restore_data})
-            if added:
+            # A timeout after add_url may still have applied the change. Reconcile
+            # actual state instead of trusting the local acknowledgement flag.
+            observed = client.request("GET", "/control/filtering/status")
+            if added or any(f.get("url") == candidate_url for f in observed.get("filters", [])):
                 client.request("POST", "/control/filtering/remove_url", body={"url": candidate_url, "whitelist": False})
             actual = client.request("GET", "/control/filtering/status")
-            restored = any(f.get("id") == args.old_filter_id and f.get("enabled") for f in actual.get("filters", []))
+            restored = (any(f.get("id") == args.old_filter_id and f.get("enabled") for f in actual.get("filters", []))
+                        and not any(f.get("url") == candidate_url for f in actual.get("filters", [])))
             _canaries(client, cfg)
         except IntegrationError:
             restored = False

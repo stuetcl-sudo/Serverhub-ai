@@ -212,8 +212,11 @@ class ChatProvider:
                         for chunk in response.iter_bytes():
                             raw += chunk
                             if len(raw) > 4 * 1024 * 1024:
+                                self._charge_unknown(budget, estimated_input, output_limit)
                                 raise ProviderError("Provider response exceeded 4 MiB")
                         status = response.status_code
+                    if status >= 500:
+                        self._charge_unknown(budget, estimated_input, output_limit)
                     if status == 429 or status >= 500:
                         raise ProviderError(f"Provider temporarily unavailable (HTTP {status})", retryable=True)
                     if status >= 300:
