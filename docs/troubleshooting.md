@@ -19,3 +19,20 @@
 | Update rejected | Signature, exact file set/hashes, trusted signing key, validation metadata, installed schema revision and trust-boundary digest. Trust-boundary changes require an owner-reviewed maintenance release. |
 
 Collect bounded, redacted logs. Do not paste secrets, full environment variables or production database dumps into chat. No claim is made that all secret-like text in arbitrary application output can be recognized automatically.
+
+
+## Installation/autonomy overhaul diagnostics
+
+| Symptom | Check and action |
+| --- | --- |
+| Interrupted installer | Rerun the same reviewed-source command; keep `/var/lib/serverhub-install/state.json` and environment files. |
+| Inaccessible migration cwd | New installer runs migrations from the installed absolute release with source import paths removed. Legacy installs use the backed-up repair workflow. |
+| Worker exits before Python | Inspect `journalctl -u serverhub-worker`; new units mask optional absent sockets with `-` and preserve strict filesystem isolation. |
+| Assets 403 on loopback | Use the same localhost origin/port through the tunnel. Foreign Origins remain rejected; verify assets and directory traversal in diagnostics. |
+| Empty model routes | Setup → AI provider → discover/test/save `default`. A file merely existing no longer means a model is configured. |
+| Permission denied reading models | Inspect leaf and ancestors with `namei -l`; worker must read non-secret root-owned fallback config. Prefer owner-managed DB routes; never expose secret environment files. |
+| Private Ollama HTTP rejected | Use a literal RFC1918/ULA IP and explicit endpoint consent, or HTTPS. DNS/public/metadata HTTP endpoints are deliberately refused. |
+| Approval-blocked job | Inspect exact denial fields, grant only the intended subject/host/arguments/environment until expiry, then resume its saved job. |
+| Controller grant but node failure | Broker allowlists and protected-service checks are independent. Controller policy cannot bypass an offline/misconfigured broker. |
+| Partial AI result | Inspect completed tool evidence and verification checks. A fluent model summary without successful measurable verification is not success. |
+| Stale model-readiness timestamp | Run the live model connection/tool test again; diagnostics does not silently generate paid model requests. |

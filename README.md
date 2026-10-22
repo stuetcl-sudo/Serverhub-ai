@@ -1,5 +1,11 @@
 # ServerHub AI OS
 
+The stability/autonomy overhaul adds resumable native installation, owner-managed
+Ollama discovery/tool testing, expiring autonomy profiles, actionable diagnostics
+and verified/partial job outcomes. Start with [the native Ubuntu workflow](docs/installation.md)
+and [legacy migration guidance](docs/upgrade.md). See [the overhaul verification report](docs/overhaul-report.md)
+for exact tests and remaining limitations. No production deployment is implied.
+
 Native Linux infrastructure management with a FastAPI controller, PostgreSQL-backed durable jobs, independently authenticated node agents and a React/TypeScript administration interface.
 
 **Delivery status:** implemented software with automated verification, not a certification of production readiness. Read [the delivery report](docs/delivery-report.md) for exact tested functionality and remaining limitations before installing. Broad autonomous administration, every possible repair, and automatic elimination of all security issues are not claimed.

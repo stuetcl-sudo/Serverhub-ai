@@ -1,0 +1,50 @@
+{
+  "started_at": "2026-10-22T16:31:31.399488+00:00",
+  "environment": "disposable namespace; PostgreSQL16.2; test-only UID shim on postgres/initdb only; no host installation",
+  "checks": {
+    "automated_backend": "passed; see backend-junit.xml",
+    "backend_startup": {
+      "status": "ok",
+      "version": "1.0.0",
+      "database": "reachable"
+    },
+    "built_frontend_served": "passed",
+    "live_node_job_lifecycle": {
+      "state": "succeeded",
+      "durable_commands": 2,
+      "native_packages": 696,
+      "collection_errors": [
+        {
+          "collector": "interfaces",
+          "error": "PermissionError",
+          "detail": "[Errno 1] Operation not permitted"
+        },
+        {
+          "collector": "routes",
+          "error": "CollectionError",
+          "detail": "ip exited 1; permission or tool failure"
+        },
+        {
+          "collector": "services",
+          "error": "CollectionError",
+          "detail": "systemctl exited 1; permission or tool failure"
+        },
+        {
+          "collector": "neighbors",
+          "error": "CollectionError",
+          "detail": "ip exited 1; permission or tool failure"
+        }
+      ],
+      "distinct_service_uids": "not verified in constrained container"
+    },
+    "live_audit_chain": "passed",
+    "browser": {
+      "desktop": "login, live host overview and persisted job result passed",
+      "mobile": "390px no horizontal overflow",
+      "javascript_errors": []
+    }
+  },
+  "postgres": "PostgreSQL 16.2 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 10.2.1 20210130 (Red Hat 10.2.1-11), 64-bit",
+  "state": "passed",
+  "finished_at": "2026-10-22T16:31:55.243777+00:00"
+}

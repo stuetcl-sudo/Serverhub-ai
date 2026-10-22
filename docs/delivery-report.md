@@ -1,4 +1,6 @@
-# Leveringsrapport — ServerHub AI OS
+# Oprindelig leveringsrapport — ServerHub AI OS
+
+Denne rapport beskriver den første leverance. Den efterfølgende stabilitets-/autonomiopdatering og dens aktuelle verifikationsstatus er dokumenteret i [overhaul-report.md](overhaul-report.md), [installation.md](installation.md) og [upgrade.md](upgrade.md).
 
 **Dato: 22. oktober 2026 · Softwareversion 1.0.0 · Status: implementeret og testet kildekodeleverance; ikke erklæret produktionsklar.**
 

@@ -14,4 +14,4 @@ Confirmed causes in baseline 69de5c1:
 - `diagnostics.network` and `inventory.refresh` are omitted from the read classifier although the node identifies them as reads.
 - Policy errors contain no operation, target or candidate mismatch. AI jobs with `completed=false` are still marked succeeded; no durable idle-worker heartbeat exists.
 
-Implementation and verification details are recorded in `overhaul-report.md` after the changes. Fresh Ubuntu VM acceptance remains separate from simulated filesystem staging and unit tests.
+Implementation and verification details are recorded in `overhaul-report.md`. Native Ubuntu 24.04/systemd CI is verified separately from filesystem staging and unit tests.

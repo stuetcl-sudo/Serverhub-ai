@@ -378,6 +378,30 @@ def test_upgrade_of_existing_0003_schema_adds_runtime_without_erasing_grants(tmp
     monkeypatch.setenv("SERVERHUB_DATABASE_URL", f"sqlite:///{tmp_path / 'legacy.sqlite'}")
     get_settings.cache_clear()
     Base.metadata.create_all(get_engine())
+    from serverhub.models import User
+
+    with SessionLocal() as db:
+        db.add(
+            User(
+                id="legacy-owner",
+                username="legacy-owner",
+                password_hash="isolated-test-placeholder",
+                role="owner",
+            )
+        )
+        db.flush()
+        db.add(
+            Policy(
+                id="legacy-policy",
+                name="preserved grant",
+                subject_id="legacy-owner",
+                operations=["systemd.restart"],
+                constraints={"service_names": ["example.service"]},
+                expires_at=utcnow() + timedelta(hours=1),
+                created_by="legacy-owner",
+            )
+        )
+        db.commit()
     with get_engine().begin() as connection:
         connection.execute(text("DROP TABLE model_routes"))
         connection.execute(text("DROP TABLE worker_heartbeats"))
@@ -387,7 +411,14 @@ def test_upgrade_of_existing_0003_schema_adds_runtime_without_erasing_grants(tmp
     command.upgrade(_alembic_config(), "head")
     with get_engine().connect() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0004_runtime"
-        connection.execute(text("SELECT environment FROM policies"))
+        assert (
+            connection.execute(text("SELECT environment FROM policies WHERE id='legacy-policy'")).scalar()
+            == "any"
+        )
+        assert (
+            "systemd.restart"
+            in connection.execute(text("SELECT operations FROM policies WHERE id='legacy-policy'")).scalar()
+        )
         connection.execute(text("SELECT name FROM model_routes"))
     get_engine().dispose()
     get_settings.cache_clear()
