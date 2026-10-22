@@ -8,7 +8,7 @@ Der er bygget fungerende software og en native installationspakke. Den fulde vis
 
 Leverancen er `serverhub-ai-os.zip`, med repository, meningsfuld Git-historik, Python-kildekode og wheel, React/TypeScript-kildekode og bygget frontend, låste/hashkontrollerede afhængigheder, migrationer, native scripts/systemd-definitioner, automatiske tests, CI og dokumentation.
 
-GitHub-forbindelsen identificerede kontoen `stuetcl-sudo`, men der var intet tilgængeligt værktøj til at oprette et nyt repository; opslaget på `stuetcl-sudo/serverhub-ai-os` returnerede 404. Der er derfor ikke offentliggjort et GitHub-repository eller opfundet en repository-URL. Arkivet kan pakkes ud og pushes til et nyt repository. Ingen produktionsdata, API-nøgler eller private signeringsnøgler indgår.
+Kildekode og commit-forløb offentliggøres i [stuetcl-sudo/Serverhub-ai](https://github.com/stuetcl-sudo/Serverhub-ai). GitHub-importen bevarer filindhold og rækkefølgen af de meningsfulde commits; GitHub tildeler nye commit-identiteter ved API-import. Det oprindelige arkiv indeholder den lokale Git-historik samt byggede artefakter. Ved kloning fra GitHub skal artefakter bygges som beskrevet i installationsguiden. Ingen produktionsdata, API-nøgler eller private signeringsnøgler indgår.
 
 ## 2. Installation
 
