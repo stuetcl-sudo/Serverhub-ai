@@ -45,3 +45,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE serverhub_migrate IN SCHEMA public
     GRANT SELECT ON TABLES TO serverhub_api;
 ALTER DEFAULT PRIVILEGES FOR ROLE serverhub_migrate IN SCHEMA public
     GRANT USAGE, SELECT ON SEQUENCES TO serverhub_api, serverhub_worker;
+
+-- Owner-managed model endpoints must never be mutable by an AI worker.
+GRANT SELECT, INSERT, UPDATE, DELETE ON model_routes TO serverhub_api;
+GRANT SELECT ON model_routes TO serverhub_worker;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON model_routes FROM serverhub_worker;
+GRANT SELECT ON worker_heartbeats TO serverhub_api;
+GRANT SELECT, INSERT, UPDATE ON worker_heartbeats TO serverhub_worker;

@@ -12,7 +12,10 @@ from .models import Host, Policy, SystemState, User
 
 
 class PermissionDenied(Exception):
-    pass
+    def __init__(self, message, *, details=None):
+        super().__init__(message)
+        self.details = details or {}
+
 
 
 FORBIDDEN = {
@@ -31,7 +34,9 @@ STANDARD_OPS = {"inventory.read", "network.diagnose", "diagnostics.network", "dn
 
 
 def is_read(operation: str) -> bool:
-    return operation.endswith(READ_SUFFIXES) or operation in {"inventory.read", "homeassistant.states", "homeassistant.health", "adguard.status"}
+    return operation.endswith(READ_SUFFIXES) or operation in {
+        "inventory.read", "inventory.refresh", "discovery.refresh", "diagnostics.network",
+        "systemd.logs", "task.verify", "homeassistant.states", "homeassistant.health", "adguard.status"}
 
 
 def operation_matches(pattern: str, operation: str) -> bool:
@@ -70,7 +75,7 @@ def constraints_match(constraints: dict, arguments: dict) -> bool:
     return True
 
 
-def authorize(db, principal, operation: str, host_id: str | None = None, project: str | None = None,
+def _authorize(db, principal, operation: str, host_id: str | None = None, project: str | None = None,
               arguments: dict | None = None, production: bool = False) -> Policy | None:
     user = db.get(User, principal.id)
     if user:
@@ -118,6 +123,9 @@ def authorize(db, principal, operation: str, host_id: str | None = None, project
             continue
         if production and not grant.production:
             continue
+        environment = operation_environment(operation, arguments or {}, production)
+        if grant.environment not in {"any", environment}:
+            continue
         if not any(operation_matches(pattern, operation) for pattern in grant.operations):
             continue
         if not constraints_match(grant.constraints or {}, arguments or {}):
@@ -125,6 +133,28 @@ def authorize(db, principal, operation: str, host_id: str | None = None, project
         return grant
     raise PermissionDenied("No active policy permits this operation on the requested target")
 
+
+
+def operation_environment(operation, arguments=None, production=False):
+    if production or operation in {"release.production", "development.release", "production.deploy", "network.apply", "firewall.apply"}:
+        return "production"
+    if operation == "development.stage" or (arguments or {}).get("stage") is True:
+        return "staging"
+    if operation.startswith("development."):
+        return "development"
+    return "read" if is_read(operation) else "maintenance"
+
+
+def authorize(db, principal, operation: str, host_id=None, project=None, arguments=None, production=False):
+    try:
+        return _authorize(db, principal, operation, host_id, project, arguments, production)
+    except PermissionDenied as exc:
+        from .audit import redact
+        details = {"operation": operation, "host_id": host_id, "project": project,
+                   "arguments": redact(arguments or {}), "environment": operation_environment(operation, arguments, production),
+                   "reason": str(exc), "missing_permission": operation,
+                   "remediation": "An owner must grant this exact operation for this identity, target, arguments and environment with a future expiry, then resume the original job. Node broker allowlists are checked separately."}
+        raise PermissionDenied(f"{operation} denied for host={host_id or '(none)'} project={project or '(none)'}: {exc}", details=details) from exc
 
 def visible_host_ids(db, principal) -> list[str]:
     result = []

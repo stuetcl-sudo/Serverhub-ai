@@ -111,3 +111,12 @@ def test_native_real_postgres_backup_checksum_and_restore_drill(native_pg, tmp_p
     result = manager.restore_drill(manifest["id"], native_pg["admin"])
     assert result["state"] == "verified"
     assert result["restored_tables"] >= 20
+
+
+def test_worker_cannot_reconfigure_models_but_can_publish_liveness(native_pg):
+    url = native_pg['urls']['worker'].set(drivername='postgresql').render_as_string(hide_password=False)
+    with psycopg.connect(url, autocommit=True) as worker:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            worker.execute("UPDATE model_routes SET enabled=false")
+        worker.execute("INSERT INTO worker_heartbeats (worker_id,seen_at) VALUES ('isolated-worker',CURRENT_TIMESTAMP)")
+        assert worker.execute("SELECT worker_id FROM worker_heartbeats").fetchone()[0]=='isolated-worker'

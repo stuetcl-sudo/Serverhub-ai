@@ -21,7 +21,7 @@ from .policy import PermissionDenied, authorize
 from .settings import get_settings
 
 HANDLERS: dict[str, object] = {}
-TERMINAL = {"succeeded", "failed", "cancelled"}
+TERMINAL = {"succeeded", "partial", "failed", "cancelled"}
 RUNNABLE = {"queued", "retry"}
 
 
@@ -248,12 +248,13 @@ def execute_job(job_id: str, worker_id: str):
             ctx.check_cancelled()
             job.result = redact(result if isinstance(result, dict) else {"value": result})
             job.progress = 1.0
-            job.state = "succeeded"
+            unverified = job.result.get("completed") is False or (job.kind == "autonomous" and not job.result.get("verified"))
+            job.state = "partial" if unverified else "succeeded"
             job.finished_at = utcnow()
             job.error = None
             job.failure_class = None
-            _event(db, job, "Job completed", {"state": "succeeded"})
-            append_audit(db, user.id, "job.succeeded", job.id, {"kind": job.kind})
+            _event(db, job, "Job completed" if not unverified else "Job stopped with partial or unverified results", {"state": job.state, "verification": job.result.get("verification")})
+            append_audit(db, user.id, "job." + job.state, job.id, {"kind": job.kind})
         except BaseException as exc:
             # A failed transaction must not prevent persisting the failure classification.
             db.rollback()
@@ -266,6 +267,8 @@ def execute_job(job_id: str, worker_id: str):
             job.state = state
             job.failure_class = failure_class
             job.error = redact(str(exc))[:4000]
+            if isinstance(exc, PermissionDenied):
+                job.result = {"completed": False, "denial": redact(exc.details), "verification": "No permission was bypassed; saved progress is retained for resume"}
             if state == "retry":
                 job.run_after = utcnow() + timedelta(seconds=min(300, 2 ** job.attempts))
             if state in TERMINAL:
@@ -289,6 +292,16 @@ class Worker:
         self.worker_id = worker_id or f"{os.uname().nodename}:{os.getpid()}:{uuid4().hex[:8]}"
         self.isolated = isolated
         self.stopping = False
+
+    def heartbeat(self, job_id=None):
+        from .models import WorkerHeartbeat
+        with SessionLocal() as db:
+            row = db.get(WorkerHeartbeat, self.worker_id)
+            if not row:
+                row = WorkerHeartbeat(worker_id=self.worker_id)
+                db.add(row)
+            row.seen_at, row.job_id = utcnow(), job_id
+            db.commit()
 
     def _claim(self):
         settings = get_settings()
@@ -336,7 +349,7 @@ class Worker:
                     if host_running >= settings.max_host_jobs:
                         continue
                 dependencies = [db.get(Job, dep) for dep in job.depends_on]
-                if any(dep is None or dep.state in {"failed", "cancelled"} for dep in dependencies):
+                if any(dep is None or dep.state in {"failed", "partial", "cancelled"} for dep in dependencies):
                     job.state = "failed"
                     job.failure_class = "dependency"
                     job.error = "A dependency failed or was cancelled"
@@ -364,6 +377,7 @@ class Worker:
         settings = get_settings()
         interrupted = None
         while process.is_alive():
+            self.heartbeat(job_id)
             process.join(timeout=min(1.0, settings.lease_seconds / 4))
             with SessionLocal() as db:
                 job = db.get(Job, job_id)
@@ -406,6 +420,7 @@ class Worker:
                 db.commit()
 
     def run_once(self) -> bool:
+        self.heartbeat()
         job_id = self._claim()
         if not job_id:
             return False

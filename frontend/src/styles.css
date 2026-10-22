@@ -3059,3 +3059,15 @@ details summary {
   font-size: 7px;
   color: #8aabc8;
 }
+
+.setup-panel { margin-bottom: 20px; padding: 24px; }
+.setup-panel h2 { margin: 0 0 16px; }
+.setup-panel p { line-height: 1.6; }
+.setup-panel .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 24px 0; }
+.setup-panel label { display: grid; gap: 8px; font-size: 13px; }
+.setup-panel input, .setup-panel select { min-width: 0; width: 100%; }
+.setup-panel .check-label { display: flex; align-items: center; }
+.setup-panel input[type=checkbox] { width: auto; }
+.diagnostic-check { border-top: 1px solid var(--border, #263242); padding: 18px 0; }
+.diagnostic-check pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; }
+.setup-panel .toolbar { flex-wrap: wrap; }

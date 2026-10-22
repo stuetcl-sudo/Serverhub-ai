@@ -29,7 +29,7 @@ NODE_OPERATIONS = frozenset(
         "discovery.refresh",
         "diagnostics.network",
         "security.scan",
-        "systemd.status",
+        "systemd.status", "systemd.logs",
         "systemd.restart",
         "docker.restart",
         "docker.compose.apply",
