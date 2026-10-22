@@ -207,3 +207,21 @@ def test_independent_recovery_units_do_not_execute_current_candidate():
         unit = (SOURCE / "packaging/systemd" / name).read_text()
         assert "ExecStart=/opt/serverhub/recovery/venv/bin/python" in unit
         assert "ExecStart=/opt/serverhub/current" not in unit
+
+
+def test_release_extraction_rejects_duplicate_members_and_normalizes_modes(tmp_path):
+    archive = tmp_path / "duplicate.tar.gz"
+    with tarfile.open(archive, "w:gz") as output:
+        for _ in range(2):
+            member = tarfile.TarInfo("index.html")
+            member.size = 2
+            output.addfile(member, io.BytesIO(b"ok"))
+    with pytest.raises(ReleaseError, match="unsafe"):
+        safe_extract(archive, tmp_path / "duplicate")
+    with tarfile.open(archive, "w:gz") as output:
+        member = tarfile.TarInfo("index.html")
+        member.size = 2
+        member.mode = 0o777
+        output.addfile(member, io.BytesIO(b"ok"))
+    safe_extract(archive, tmp_path / "normalized")
+    assert (tmp_path / "normalized/index.html").stat().st_mode & 0o777 == 0o644

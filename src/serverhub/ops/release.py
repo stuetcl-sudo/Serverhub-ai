@@ -32,13 +32,19 @@ def safe_extract(archive: Path, destination: Path):
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive) as source:
         members = source.getmembers()
+        if len(members) > 50000 or sum(member.size for member in members) > 1024 * 1024 * 1024:
+            raise ReleaseError("release archive exceeds extraction limits")
+        seen = set()
         for member in members:
+            normalized = str(Path(member.name))
             target = destination / member.name
-            if (Path(member.name).is_absolute() or ".." in Path(member.name).parts
+            if (normalized in seen or Path(member.name).is_absolute() or ".." in Path(member.name).parts
                     or not (member.isfile() or member.isdir())
                     or not target.resolve().is_relative_to(destination.resolve())
                     or target.exists()):
                 raise ReleaseError("unsafe release archive member")
+            seen.add(normalized)
+            member.mode = 0o755 if member.isdir() else 0o644
         source.extractall(destination, members=members, filter="data")
 
 
