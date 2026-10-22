@@ -1,5 +1,9 @@
 # ServerHub AI OS
 
+The first [issue #2 increment](docs/host-autonomy.md) fixes model token accounting
+and adds bounded read-only discovery history. See [its verification report](docs/issue-2-report.md)
+for implemented scope, tests and remaining multi-agent/optimization work.
+
 The stability/autonomy overhaul adds resumable native installation, owner-managed
 Ollama discovery/tool testing, expiring autonomy profiles, actionable diagnostics
 and verified/partial job outcomes. Start with [the native Ubuntu workflow](docs/installation.md)

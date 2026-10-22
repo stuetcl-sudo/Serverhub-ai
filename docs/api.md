@@ -5,7 +5,7 @@ The running controller publishes an OpenAPI schema at `/openapi.json` and intera
 | Area | Routes |
 | --- | --- |
 | Authentication | POST `/api/auth/login`, GET `/api/auth/me`, POST `/api/auth/logout` |
-| Inventory | GET `/api/overview`, `/api/hosts`, `/api/hosts/{id}`, `/api/hosts/{id}/inventory`, `/api/hosts/{id}/metrics`, `/api/topology` |
+| Inventory | GET `/api/overview`, `/api/hosts`, `/api/hosts/{id}`, `/api/hosts/{id}/inventory`, `/api/hosts/{id}/inventory/history`, `/api/hosts/{id}/metrics`, `/api/topology` |
 | Node control | POST `/api/nodes/enrollment`, `/api/nodes/enroll`, `/api/nodes/report`, `/api/nodes/heartbeat`, GET `/api/nodes/commands`, POST `/api/nodes/commands/{id}/result`, `/api/hosts/{id}/revoke` |
 | Persistent work | GET/POST `/api/jobs`, GET `/api/jobs/{id}`, `/api/jobs/{id}/events`, POST `/api/jobs/{id}/pause`, `/resume`, `/cancel`, GET `/api/events` SSE |
 | Recurring work | GET/POST `/api/schedules`, PATCH `/api/schedules/{id}` |

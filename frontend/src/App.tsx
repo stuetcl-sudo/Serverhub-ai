@@ -1,3 +1,4 @@
+import { InventoryHistory } from "./InventoryHistory";
 import {
   createContext,
   useCallback,
@@ -1480,6 +1481,7 @@ function HostDetail({ host }: { host: Json }) {
   const r = useResource<Json>(`/hosts/${host.id}/inventory`),
     notice = useContext(ToastContext),
     [tab, setTab] = useState("inventory");
+  const history = useResource<Json[]>(`/hosts/${host.id}/inventory/history`);
   const data = r.data?.inventory || r.data || inventory(host);
   async function refresh() {
     try {
@@ -1513,26 +1515,42 @@ function HostDetail({ host }: { host: Json }) {
         >
           Identity
         </button>
+        <button
+          className={tab === "changes" ? "active" : ""}
+          onClick={() => setTab("changes")}
+        >
+          Changes
+        </button>
         <button className="text-button" onClick={refresh}>
           <RefreshCw size={14} /> Refresh inventory
         </button>
       </div>
-      <Load loading={r.loading} error={r.error} onRetry={r.reload}>
-        <JsonView
-          value={
-            tab === "inventory"
-              ? data
-              : {
-                  id: host.id,
-                  name: host.name,
-                  group: host.group_name,
-                  agent_version: host.agent_version,
-                  revoked: host.revoked,
-                  last_seen: host.last_seen,
-                }
-          }
-        />
-      </Load>
+      {tab === "changes" ? (
+        <Load
+          loading={history.loading}
+          error={history.error}
+          onRetry={history.reload}
+        >
+          <InventoryHistory entries={history.data || []} />
+        </Load>
+      ) : (
+        <Load loading={r.loading} error={r.error} onRetry={r.reload}>
+          <JsonView
+            value={
+              tab === "inventory"
+                ? data
+                : {
+                    id: host.id,
+                    name: host.name,
+                    group: host.group_name,
+                    agent_version: host.agent_version,
+                    revoked: host.revoked,
+                    last_seen: host.last_seen,
+                  }
+            }
+          />
+        </Load>
+      )}
     </div>
   );
 }
