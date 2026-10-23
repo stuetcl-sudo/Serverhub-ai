@@ -98,8 +98,8 @@ node. Actual selected provider/model/route are recorded in job events.
 New broker audit records are append-oriented, fsynced and hash-linked under a
 locked root-only regular file, defaulting to
 `/var/lib/serverhub-broker/audit/events.jsonl`. Systemd creates the broker state
-directory as root-owned 0700. The default avoids `/var/log` ancestors that may be
-group-writable on Ubuntu: a protected child alone cannot prevent parent-directory
+directory as root-owned 0700. The native Ubuntu test recorded `/var/log` mode 0775 and `/var/lib` mode
+0755. The default avoids the group-writable `/var/log` ancestor: a protected child alone cannot prevent parent-directory
 replacement. Existing `/var/log/serverhub-broker/events.jsonl` files are retained;
 an operator may copy a reviewed legacy audit file to the new protected location
 before broker activation to preserve one chain. Explicit custom audit paths still
@@ -162,3 +162,65 @@ Outstanding production gates:
 Do not label this candidate fully production-ready until these gates have
 independent evidence. The original master-task message was truncated in section
 6; requirements beyond the received text cannot be assessed here.
+
+
+## Received master-task acceptance status
+
+| Area | Candidate result | Evidence or remaining gate |
+|---|---|---|
+| Branch reconciliation | Preserved both feature histories and combined conflict resolutions | Merge commit has token-fix and host-audit parents; native test retains both workflows |
+| Token accounting | Provider-aware estimates, durable reservations, measured usage and preflight pause/resume | Provider/budget regressions plus native delegated fixture job; real private Ollama unavailable |
+| Long-context recovery | Bounded previews retain original request and durable full tool results | Resumed persisted Ollama-format job test completes with deterministic verification |
+| Frontend assets | Canonical-origin fix, routing 404s and direct TLS authentication checks | Asset/API regressions, TypeScript/Vite build, desktop/mobile browser smoke |
+| Installation | Native install, interruption/resume/repeat and dedicated worker | Disposable Ubuntu 24.04 systemd CI; existing worker-identity migration is not automated |
+| Access | Persistent TLS API or explicitly configured HTTPS proxy, no terminal tunnel required | TLS service restart test and API 401; private VM routing/PKI enrollment and real reboot remain blocked |
+| Authorization | Exact expiring grants, independent broker allowlists and protected mutations retained | Unauthorized SSH restart 403; direct AI socket access denied; critical-unit read requires explicit grant |
+| Full administration | Not implemented as unrestricted/sudo-equivalent host policy | Compiled broker allowlist and forbidden-operation tests reject arbitrary execution; no production enrollment performed |
+| Durable execution | Existing PostgreSQL leases, checkpoints, recovery, budgets and deterministic verification retained | PostgreSQL restart/cancellation/ledger tests and complete native read-only lifecycle |
+| Repair adaptation | Read-only integration errors become observations; identical failures execute at most twice | Durable repeated-tool test; mutating ambiguity remains blocked for reconciliation |
+| Host operations | Inventory and registered status/log/restart/initial Compose operations retained | Live disposable Linux discovery and broker status; general packages/config writes/image updates remain unfinished |
+| Development | Existing isolated registered workflow/patch/test/staging path retained | Existing development regressions; a complete autonomous Jarvis pilot remains unfinished |
+| Audit | Database append protections plus protected correlated/hash-linked broker log | PostgreSQL denial tests and actual native root broker audit chain; independent off-host retention not configured |
+| Backup/rollback | Controller DB/config backup and reviewed upgrade rollback | Native backup/failed-upgrade checks; Docker application backup/restore has not run and is unfinished |
+
+Unavailable environments and missing implementations are separate limitations.
+Passing the scoped regression suite does not certify the unfinished capabilities.
+
+
+## Final verification
+
+Validated source: `77374d7302a0d02bd1d27184c44ddb1bb5004c41`.
+[GitHub CI](https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39920897882)
+passed all four jobs: backend, frontend, dependency audits and native Ubuntu.
+
+- Local disposable PostgreSQL 16.2: **222 passed, 1 skipped**, 19.69 seconds.
+  The skip is the optional real Ollama endpoint. Actual API startup, migrations,
+  separate database roles, Linux discovery (696 native packages), two durable node
+  commands, persisted read-only audit, database audit chain and desktop/mobile
+  browser smoke passed. Restricted-container network/systemd collectors report
+  explicit gaps; distinct real service UIDs are tested separately in Ubuntu CI.
+- Hosted PostgreSQL suite: **219 passed, 4 skipped**, 18.23 seconds. Three root-only
+  fixture checks are skipped on the unprivileged test runner; the fourth is real
+  Ollama. The root fixture checks passed in the isolated local root suite.
+- Frontend: **30 passed**; TypeScript/Vite build passed; no browser JavaScript
+  errors and no horizontal overflow at 390px. Python wheel/sdist build and Ruff
+  checks passed. Dependency audits passed.
+- Native Ubuntu 24.04: documented fresh build/install, injected interruption,
+  resume/repeat with credentials preserved, `serverhub-ai` worker identity,
+  API/worker health, Ollama HTTP **fixture** setup, budget pause at zero attempts
+  followed by verified read-only completion, honest partial host audit,
+  unauthorized SSH restart **403**, actual root broker status/audit and denied
+  direct AI socket access, controller backup, upgrade, injected-failure rollback,
+  certificate-verified TLS service restarts and **independent systemd watchdog
+  rollback after abandoned activation** all passed.
+
+The expanded native broker test first failed at `29c08fb` because the audit path
+traversed Ubuntu's group-writable `/var/log` (0775). The fix at `de01618` moved its
+default to a root-only systemd state directory; the final native run proves the
+correlated root audit and unchanged socket isolation. This failure was fixed;
+its run is retained as evidence, not counted as passing.
+
+Machine-readable results: [local](verification/readiness/local-results.json) and
+[CI](verification/readiness/ci-results.json). They contain fixture metadata and no
+credentials or production configuration. These results do not remove the
+production gates and unfinished features listed above.

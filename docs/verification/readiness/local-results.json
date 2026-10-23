@@ -1,0 +1,76 @@
+{
+  "started_at": "2026-10-23T07:49:43.195184+00:00",
+  "environment": "disposable namespace; PostgreSQL16.2; test-only UID shim on postgres/initdb only; no host installation",
+  "checks": {
+    "automated_backend": "passed; see backend-junit.xml",
+    "backend_startup": {
+      "status": "ok",
+      "version": "1.0.0",
+      "database": "reachable"
+    },
+    "built_frontend_served": "passed",
+    "live_node_job_lifecycle": {
+      "state": "succeeded",
+      "durable_commands": 2,
+      "native_packages": 696,
+      "collection_errors": [
+        {
+          "collector": "interfaces",
+          "error": "PermissionError",
+          "detail": "[Errno 1] Operation not permitted"
+        },
+        {
+          "collector": "routes",
+          "error": "CollectionError",
+          "detail": "ip exited 1; permission or tool failure"
+        },
+        {
+          "collector": "services",
+          "error": "CollectionError",
+          "detail": "systemctl exited 1; permission or tool failure"
+        },
+        {
+          "collector": "neighbors",
+          "error": "CollectionError",
+          "detail": "ip exited 1; permission or tool failure"
+        }
+      ],
+      "distinct_service_uids": "not verified in constrained container"
+    },
+    "live_read_only_audit": {
+      "state": "partial",
+      "model_tokens": 0,
+      "sample_id": 4,
+      "writes": []
+    },
+    "live_audit_chain": "passed",
+    "browser": {
+      "desktop": "login, live inventory history, read-only audit and persisted job result passed",
+      "mobile": "390px no horizontal overflow",
+      "javascript_errors": []
+    }
+  },
+  "postgres": "PostgreSQL 16.2 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 10.2.1 20210130 (Red Hat 10.2.1-11), 64-bit",
+  "state": "passed",
+  "finished_at": "2026-10-23T07:50:17.553073+00:00",
+  "source_commit": "77374d7302a0d02bd1d27184c44ddb1bb5004c41",
+  "backend": {
+    "tests": "223",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "1",
+    "time": "19.680"
+  },
+  "frontend": {
+    "tests_passed": 30,
+    "production_build": "TypeScript and Vite passed"
+  },
+  "private_environment": {
+    "test_vm_health": "192.168.122.10:9080: proxy request timed out after 3s; direct httpx trust_env=False: ConnectError [Errno 101] Network is unreachable",
+    "old_forward_health": "192.168.68.135:19080: proxy request timed out after 3s; direct httpx trust_env=False: ConnectError [Errno 101] Network is unreachable",
+    "actual_installed_revision": "unverified",
+    "real_ollama": "unavailable; optional test skipped",
+    "production_deployment": "not performed",
+    "docker_application_backup": "not performed; connector does not expose backup writes"
+  }
+}
