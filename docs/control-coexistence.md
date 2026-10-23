@@ -140,8 +140,9 @@ CI has separate disposable Ubuntu 24.04 drills for:
   failed-health rollback, host operations and staging tests.
 * Rejection of real service/path/user/group/listening-port conflicts before any
   installer account/path/unit creation.
-* Installation of exact legacy commit `1905abc`, deliberate namespace health
-  failure and rollback, credential preservation, then successful migration retry.
+* Installation of exact legacy commit `1905abc`, an actual killed migration
+  recovered by the independent systemd timer (test-shortened deadline), deliberate
+  namespace health failure and rollback, credential preservation and successful retry.
 
 These fixtures are not the owner's actual Control application. Observed CI results
 are recorded in the PR; physical-host compatibility still requires its read-only

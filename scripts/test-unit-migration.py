@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from serverhub.ops.migrate_units import plan, migrate
 from serverhub.ops.installer import Installer
 from unittest.mock import patch
@@ -31,6 +32,34 @@ previous = Path('/opt/serverhub/current').resolve()
 metadata = (previous / 'installed.json').stat()
 print('LEGACY_METADATA=' + json.dumps({'uid': metadata.st_uid, 'gid': metadata.st_gid, 'mode': oct(metadata.st_mode & 0o777)}), flush=True)
 assert plan(source)['state'] == 'reviewed'
+# Kill the migration after namespace conversion but before reviewed repair.
+# Only the installed standalone systemd timer can recover this dead process.
+child = "from unittest.mock import patch; import os, signal; from pathlib import Path; from serverhub.ops.migrate_units import migrate; "
+child += "killer=lambda *args,**kwargs: os.kill(os.getpid(), signal.SIGKILL); "
+child += "context=patch('serverhub.ops.repair.repair', side_effect=killer); context.start(); "
+child += "migrate(Path(" + repr(str(source)) + "), repair_legacy_permissions=True)"
+process = subprocess.run([sys.executable, '-c', child], env=dict(os.environ, PYTHONPATH=str(source / 'src')))
+assert process.returncode == -9, 'Expected real killed migration process'
+migration_journal = Path('/var/lib/serverhub-install/unit-migration.json')
+armed = json.loads(migration_journal.read_text())
+assert armed['state'] == 'armed'
+armed['deadline'] = 0  # deterministic test expiry; do not wait 30 minutes in CI
+migration_journal.write_text(json.dumps(armed))
+limit = time.monotonic() + 75
+while time.monotonic() < limit and json.loads(migration_journal.read_text())['state'] == 'armed':
+    time.sleep(1)
+assert json.loads(migration_journal.read_text())['state'] == 'reverted', 'Independent namespace timer did not recover killed migration'
+while time.monotonic() < limit and subprocess.run(['systemctl', 'is-active', '--quiet', 'serverhub-ai-namespace-recovery.service'], capture_output=True).returncode == 0:
+    time.sleep(0.2)
+assert Path('/opt/serverhub/current').resolve() == previous
+assert not Path('/var/lib/serverhub-install/ownership.json').exists()
+for name, content in before.items():
+    assert Path('/etc/serverhub', name).read_bytes() == content
+for unit in ['serverhub-api.service', 'serverhub-worker.service', 'serverhub-broker.service']:
+    subprocess.run(['systemctl', 'is-active', '--quiet', unit], check=True)
+print('NAMESPACE_WATCHDOG_EVIDENCE=' + json.dumps({'state': 'passed', 'process_killed': True,
+    'independent_systemd_timer_recovered': True, 'deadline_shortened_for_disposable_test': True}), flush=True)
+
 # Real services, DB migration and backup run, then acceptance deliberately fails.
 with patch.object(Installer, '_healthchecks', side_effect=RuntimeError('Intentional namespace health failure')):
     try:
@@ -59,5 +88,5 @@ assert Path('/opt/serverhub/recovery/venv/bin/python').exists(), 'Legacy indepen
 assert Path('/opt/serverhub/recovery-ai/venv/bin/python').exists()
 print('LEGACY_UNIT_MIGRATION_EVIDENCE=' + json.dumps({'state': 'passed',
     'legacy_commit': '1905abcc244767cc58a2dbbf950e033be940c6ed',
-    'intentional_failed_health_rollback': True, 'credentials_retained': True,
+    'intentional_failed_health_rollback': True, 'killed_migration_independent_timer_recovery': True, 'credentials_retained': True,
     'retry_succeeded': True, 'new_units_active': True, 'production_modified': False}), flush=True)
