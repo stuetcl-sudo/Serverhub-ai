@@ -23,7 +23,7 @@ def test_qwen_read_only_job_with_real_tool_calls_and_accounting(client, monkeypa
         db.add(InventorySample(host_id='node1', metrics={}))
         db.commit()
     response = client.post('/api/jobs', headers=headers, json={'kind':'autonomous','host_id':'node1',
-        'token_budget':100000,'time_limit':1200, 'spec': {'max_steps':8,
+        'token_budget':20000,'time_limit':1200, 'spec': {'max_steps':8,
         'prompt':'Read the existing host inventory using inventory__read. Then call task__verify with checks [{"kind":"inventory.fresh"}]. After both tools succeed, finish with a short report. Do not refresh inventory or delegate; the test host is already fresh.'}})
     assert response.status_code == 202, response.text
     identity = response.json()['id']

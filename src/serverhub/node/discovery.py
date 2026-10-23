@@ -39,7 +39,7 @@ def bounded_run(argv: list[str], *, timeout: int = 15, limit: int = MAX_OUTPUT) 
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
         try:
             proc = subprocess.Popen(argv, stdout=output, stderr=error, stdin=subprocess.DEVNULL,
-                                    env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C", "HOME": "/nonexistent"},
+                                    env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C", "HOME": "/nonexistent", "DEBIAN_FRONTEND": "noninteractive", "APT_LISTCHANGES_FRONTEND": "none"},
                                     start_new_session=True, preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit)))
             try:
                 proc.wait(timeout=timeout)

@@ -12,6 +12,7 @@ import os
 import signal
 import sqlite3
 import time
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,7 @@ from .broker import ALLOWED_OPERATIONS, BrokerDenied, call_broker
 from .discovery import discover
 
 LOG = logging.getLogger("serverhub.node")
-READ_OPERATIONS = {"inventory.refresh", "discovery.refresh", "systemd.status", "systemd.logs", "diagnostics.network", "diagnostics.storage", "security.scan"}
+READ_OPERATIONS = {"inventory.refresh", "discovery.refresh", "systemd.status", "systemd.logs", "diagnostics.network", "diagnostics.storage", "security.scan", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "package.plan", "configuration.plan"}
 
 
 class AgentError(RuntimeError):
@@ -189,10 +190,20 @@ class NodeAgent:
                 broker = self.config.get("broker_socket")
                 if not broker:
                     raise AgentError("privileged operation requires the separately configured broker")
-                if cmd.get("audit_context") is not None:
-                    result = call_broker(broker, operation, arguments, audit_context=cmd["audit_context"])
-                else:
-                    result = call_broker(broker, operation, arguments)
+                stopped = threading.Event()
+                def keep_alive():
+                    while not stopped.wait(15):
+                        try:
+                            self._request("POST", "/api/nodes/heartbeat", {})
+                        except (httpx.HTTPError, AgentError):
+                            pass
+                heartbeat = threading.Thread(target=keep_alive, daemon=True)
+                heartbeat.start()
+                try:
+                    result = call_broker(broker, operation, arguments, audit_context=cmd.get("audit_context"), timeout=3600 if operation.startswith(("docker.backup.", "docker.restore.")) else 180)
+                finally:
+                    stopped.set()
+                    heartbeat.join(timeout=1)
             state = "succeeded"
         except (AgentError, BrokerDenied, OSError, ValueError) as exc:
             state, result = "failed", {"error": str(exc)[:256], "failure_class": "execution", "retry_safe": operation in READ_OPERATIONS}

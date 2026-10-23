@@ -120,6 +120,10 @@ class ProfileGrant(BaseModel):
     services: list[str] = Field(default_factory=list, max_length=50)
     containers: list[str] = Field(default_factory=list, max_length=50)
     storage_targets: list[str] = Field(default_factory=list, max_length=20)
+    backup_targets: list[str] = Field(default_factory=list, max_length=20)
+    package_targets: list[str] = Field(default_factory=list, max_length=20)
+    configuration_targets: list[str] = Field(default_factory=list, max_length=20)
+    compose_targets: list[str] = Field(default_factory=list, max_length=20)
     network_targets: list[str] = Field(default_factory=list, max_length=30)
     allow_dependency_network: bool = False
 
@@ -134,7 +138,7 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
         raise HTTPException(422, "Choose an enrolled, non-revoked host")
     if any(
         not re.fullmatch(r"[A-Za-z0-9_.@-]{1,160}", value)
-        for value in body.services + body.containers + body.network_targets + body.storage_targets
+        for value in body.services + body.containers + body.network_targets + body.storage_targets + body.backup_targets + body.package_targets + body.configuration_targets + body.compose_targets
     ):
         raise HTTPException(422, "Invalid target name")
     if body.profile == "development" and not body.project:
@@ -165,9 +169,17 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
         operations.append((["diagnostics.network"], {"target": body.network_targets}, "read"))
     if body.services:
         operations.append((["systemd.status", "systemd.logs"], {"service_names": body.services}, "read"))
+    if body.backup_targets:
+        operations.append((["docker.backup.list", "docker.backup.verify", "docker.restore.plan"], {"target": body.backup_targets}, "read"))
     if body.profile == "maintenance":
-        if not (body.services or body.containers):
+        if not (body.services or body.containers or body.backup_targets or body.package_targets or body.configuration_targets or body.compose_targets):
             raise HTTPException(422, "Maintenance requires at least one explicit service or container")
+        for targets, names in ((body.backup_targets, ["docker.backup.create", "docker.restore.apply"]),
+                               (body.package_targets, ["package.plan", "package.apply"]),
+                               (body.configuration_targets, ["configuration.plan", "configuration.apply"]),
+                               (body.compose_targets, ["docker.compose.update"])):
+            if targets:
+                operations.append((names, {"target": targets}, "maintenance"))
         if body.services:
             operations.append((["systemd.restart"], {"service_names": body.services}, "maintenance"))
         if body.containers:

@@ -38,6 +38,14 @@ class Network(Arguments):
     target: str = Field(pattern=r"^[A-Za-z0-9_.-]{1,100}$")
 
 
+class BackupTarget(Arguments):
+    target: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+
+
+class BackupIdentity(BackupTarget):
+    backup_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
 class Scan(Arguments):
     scanner: str = Field(pattern=r"^(lynis|trivy)$")
     image: str | None = Field(default=None, max_length=256)
@@ -74,6 +82,16 @@ class Development(Arguments):
 
 
 TOOLS: dict[str, tuple[type[BaseModel], str]] = {
+    "docker.compose.update": (BackupTarget, "Update a pinned root-enrolled stateless Compose release, verify health and automatically roll back failed verification"),
+    "package.plan": (BackupTarget, "Inspect exact root-enrolled package versions and their cached rollback versions"),
+    "package.apply": (BackupTarget, "Apply root-enrolled stateless package artifacts, verify versions and acceptance checks; automatically roll back failures"),
+    "configuration.plan": (BackupTarget, "Inspect checksums for an enrolled configuration change without modifying it"),
+    "configuration.apply": (BackupTarget, "Checkpoint and apply an enrolled configuration candidate, verify checksum/service, and restore on failure"),
+    "docker.backup.create": (BackupTarget, "Create a root-enrolled encrypted offline-consistent backup; quiesces exact approved containers, verifies SHA-256 and restarts them"),
+    "docker.backup.list": (BackupTarget, "List authenticated backup manifests for a named root-enrolled target"),
+    "docker.backup.verify": (BackupIdentity, "Verify manifest authentication and all backup artifact SHA-256 values"),
+    "docker.restore.plan": (BackupIdentity, "Validate an isolated restore plan without overwriting source data"),
+    "docker.restore.apply": (BackupIdentity, "Restore into new isolated Docker resources, verify stored data and container health; source resources remain unchanged"),
     "host.audit": (AuditArguments, "Collect fresh read-only host inventory and generate ordered capacity/security/update/zone plans; no repairs, deletion, reboot or network changes. Historical baseline inputs remain unverified."),
     "inventory.read": (Arguments, "Read the current target host's last observed inventory; collection errors remain explicit"),
     "inventory.query": (InventoryQuery, "Inspect a bounded inventory section of the selected host with optional text filter"),
@@ -91,7 +109,7 @@ TOOLS: dict[str, tuple[type[BaseModel], str]] = {
     "agent.specialize": (Specialist, "Delegate the next planning phase to a specialist using the same permissions and durable shared state"),
     "development.submit": (Development, "Queue a project-policy-gated isolated development job; does not claim deployment"),
 }
-NODE_TOOLS = {"inventory.refresh", "diagnostics.network", "systemd.status", "systemd.logs", "systemd.restart", "docker.restart", "docker.compose.apply", "security.scan"}
+NODE_TOOLS = {"docker.compose.update","package.plan", "package.apply", "configuration.plan", "configuration.apply","docker.backup.create", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "docker.restore.apply", "inventory.refresh", "diagnostics.network", "systemd.status", "systemd.logs", "systemd.restart", "docker.restart", "docker.compose.apply", "security.scan"}
 
 
 def tool_schemas(profile: str = "all") -> list[dict]:

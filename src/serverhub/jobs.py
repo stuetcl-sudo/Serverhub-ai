@@ -77,7 +77,7 @@ def _event(db, job: Job, message: str, data=None, level="info"):
 def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | None = None,
                project: str | None = None, parent_id: str | None = None, depends_on: list | None = None,
                idempotency_key: str | None = None, run_after=None, max_attempts: int = 3,
-               time_limit: int = 3600, token_budget: int = 20000, cost_budget: float = 1.0) -> Job:
+               time_limit: int = 3600, token_budget: int = 20000, cost_budget: float = 1.0, priority: int = 0) -> Job:
     authorize(db, principal, "job.submit", host_id, project)
     if kind not in HANDLERS:
         raise ValueError(f"Unknown job kind: {kind}")
@@ -86,6 +86,8 @@ def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | N
     if not (1 <= max_attempts <= 10 and 1 <= time_limit <= 86400 and 0 <= token_budget <= 2_000_000
             and math.isfinite(cost_budget) and 0 <= cost_budget <= 1000):
         raise ValueError("job execution limits outside supported bounds")
+    if isinstance(priority, bool) or not isinstance(priority, int) or not -100 <= priority <= 100:
+        raise ValueError("priority must be -100..100")
     dependencies = depends_on or []
     for dependency in dependencies + ([parent_id] if parent_id else []):
         linked = db.get(Job, dependency)
@@ -113,7 +115,7 @@ def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | N
             authorize(db, principal, step.get("operation", ""), host_id, project, step.get("arguments", {}),
                       bool(step.get("production", False)))
     job = Job(owner_id=principal.id, kind=kind, spec=spec, host_id=host_id, project=project,
-              parent_id=parent_id, depends_on=dependencies, idempotency_key=idempotency_key,
+              parent_id=parent_id, depends_on=dependencies, idempotency_key=idempotency_key, priority=priority,
               run_after=run_after or utcnow(), max_attempts=max_attempts, time_limit=time_limit,
               token_budget=token_budget, cost_budget=cost_budget)
     db.add(job)
@@ -402,7 +404,7 @@ class Worker:
                 db.commit()
                 return None
             candidates = db.scalars(select(Job).where(Job.state.in_(RUNNABLE), Job.run_after <= utcnow())
-                                    .order_by(Job.run_after, Job.created_at).limit(100)
+                                    .order_by(Job.priority.desc(), Job.run_after, Job.created_at).limit(100)
                                     .with_for_update(skip_locked=True)).all()
             chosen = None
             for job in candidates:

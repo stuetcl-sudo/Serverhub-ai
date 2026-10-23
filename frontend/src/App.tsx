@@ -1,3 +1,4 @@
+import { DockerOperations } from "./DockerOperations";
 import { HostAuditReport } from "./HostAuditReport";
 import { InventoryHistory } from "./InventoryHistory";
 import {
@@ -3231,6 +3232,7 @@ function Backups() {
   ];
   return (
     <>
+      <DockerOperations />
       <div className="toolbar">
         <div className="scope-note">
           <Shield size={17} />

@@ -63,6 +63,8 @@ NODE_UNITS = [
     "serverhub-broker.service",
     "serverhub-recovery.service",
     "serverhub-recovery.timer",
+    "serverhub-operation-watchdog.service",
+    "serverhub-operation-watchdog.timer",
 ]
 
 
@@ -252,6 +254,8 @@ class Installer:
         if self.ai_identity and self.role == "controller":
             self.write("/etc/systemd/system/serverhub-worker.service.d/10-ai-identity.conf",
                        "[Service]\nUser=serverhub-ai\nGroup=serverhub-worker\n")
+        self.write("/opt/serverhub/recovery/operation_watchdog.py",
+                   (self.source / "src/serverhub/ops/operation_watchdog.py").read_text(), 0o600)
         self.write("/etc/serverhub/trust-boundaries.sha256", self.trust_digest() + "\n")
         # Python modules share one interpreter and can monkey-patch each other.
         # Anchor the whole package, rather than trusting a manifest's claim that
@@ -587,7 +591,7 @@ class Installer:
                         {
                             "manifest": {
                                 "release_id": state["release_id"],
-                                "schema_revision": "0004_runtime",
+                                "schema_revision": "0005_priority",
                                 "trust_boundary_digest": self.trust_digest(),
                             }
                         }
@@ -759,7 +763,7 @@ class Installer:
                     ]
                 )
                 self._healthchecks(release)
-            self._run(["systemctl", "enable", "--now", "serverhub-recovery.timer"])
+            self._run(["systemctl", "enable", "--now", "serverhub-recovery.timer", "serverhub-operation-watchdog.timer"])
             if enable_broker:
                 self._run(["systemctl", "enable", "--now", "serverhub-broker.service"])
             state["state"] = "installed"

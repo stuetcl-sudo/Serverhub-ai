@@ -439,6 +439,14 @@ TOOLS = [
         ),
         "serverhub:policies",
     ),
+    ("docker_backup", "Queue a scoped encrypted backup, verification or isolated restore through the privileged broker",
+     _object({"host_id": HOST, "target": {"type":"string","pattern":"^[A-Za-z0-9_-]{1,64}$"},
+              "action":{"type":"string","enum":["create","list","verify","restore_plan","restore_apply"]},
+              "backup_id":{"type":"string","pattern":"^[a-f0-9]{32}$"}}, ["host_id","target","action"]), "serverhub:jobs"),
+    ("host_maintenance", "Queue an enrolled package, configuration or Compose transaction; no command execution",
+     _object({"host_id": HOST, "target":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,64}$"},
+              "operation":{"type":"string","enum":["package.plan","package.apply","configuration.plan","configuration.apply","docker.compose.update"]}},
+             ["host_id","target","operation"]), "serverhub:jobs"),
     ("audit_host", "Queue a persistent read-only host audit; returns job ID, no repairs or fake synchronous completion",
      _object({"host_id": HOST}, ["host_id"]), "serverhub:jobs"),
     ("list_hosts", "List authorized managed hosts", _object(), "serverhub:read"),
@@ -510,6 +518,16 @@ def _call(name, arguments, actor, db):
         return policy_templates()
     if name == "activate_policy":
         return activate_policy(arguments, actor, db)
+    if name in {"docker_backup", "host_maintenance"}:
+        action = arguments.get("action")
+        operation = arguments.get("operation") if name == "host_maintenance" else {
+            "create":"docker.backup.create", "list":"docker.backup.list", "verify":"docker.backup.verify",
+            "restore_plan":"docker.restore.plan", "restore_apply":"docker.restore.apply"}[action]
+        payload = {"target": arguments["target"]}
+        if arguments.get("backup_id"):
+            payload["backup_id"] = arguments["backup_id"]
+        return api.add_job(api.NewJob(kind="operation", host_id=arguments["host_id"],
+            spec={"operation":operation,"arguments":payload}, time_limit=7200), actor, db)
     if name == "audit_host":
         return api.add_job(api.NewJob(kind="operation", host_id=arguments["host_id"],
                                      spec={"operation": "host.audit", "arguments": {}}, token_budget=0, cost_budget=0), actor, db)

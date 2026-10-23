@@ -28,7 +28,7 @@ from .security import vulnerability_findings
 
 MAX_REQUEST = 65536
 ALLOWED_OPERATIONS = frozenset({"inventory.refresh", "discovery.refresh", "diagnostics.network", "diagnostics.storage", "systemd.status", "systemd.logs", "systemd.restart",
-                                "docker.restart", "docker.compose.apply", "security.scan"})
+                                "docker.restart", "docker.compose.apply", "security.scan", "docker.backup.create", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "docker.restore.apply", "package.plan", "package.apply", "configuration.plan", "configuration.apply", "docker.compose.update"})
 PROTECTED_UNITS = re.compile(r"^(serverhub|ssh|sshd|network|systemd-network|NetworkManager|docker|containerd|ufw|nftables|postgresql|dbus|polkit|sudo|cron)", re.I)
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}$")
 
@@ -156,6 +156,26 @@ def _compose_file(entry: dict) -> tuple[Path, Path]:
 def execute(operation: str, arguments: dict, config: dict) -> dict:
     if operation not in ALLOWED_OPERATIONS | {"inventory.events"} or not isinstance(arguments, dict):
         raise BrokerDenied("operation is not allowlisted")
+    if operation == "docker.compose.update":
+        from .compose_update import update
+        from .docker_backup import DockerBackupError
+        try:
+            return update(arguments, config)
+        except (DockerBackupError, KeyError) as error:
+            raise BrokerDenied(str(error)) from error
+    if operation.startswith(("package.", "configuration.")):
+        from .administration import execute_administration
+        from .docker_backup import DockerBackupError
+        try:
+            return execute_administration(operation, arguments, config)
+        except (DockerBackupError, KeyError) as error:
+            raise BrokerDenied(str(error)) from error
+    if operation.startswith(("docker.backup.", "docker.restore.")):
+        from .docker_backup import execute_backup, DockerBackupError
+        try:
+            return execute_backup(operation, arguments, config)
+        except (DockerBackupError, KeyError) as error:
+            raise BrokerDenied(str(error)) from error
     if operation in {"inventory.refresh", "discovery.refresh"}:
         _exact_args(arguments, set())
         inventory = discover(privileged=True)
@@ -168,6 +188,18 @@ def execute(operation: str, arguments: dict, config: dict) -> dict:
                 inventory["caddy"] = {"available": True, "endpoints": caddy_endpoints(json.loads(path.read_text()))}
             except (BrokerDenied, OSError, ValueError, TypeError, AttributeError):
                 inventory["errors"].append({"collector": "caddy", "error": "Unavailable", "detail": "check protected adapted JSON path and format"})
+        inventory["administration"] = {key: sorted(config.get(key, {})) for key in
+            ("docker_backup_plans", "package_plans", "configuration_plans", "compose_updates")}
+        operation_state = Path(config.get("operations_state", "/var/lib/serverhub-broker/operations"))
+        transactions = []
+        for journal in sorted(operation_state.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:100]:
+            try:
+                record = json.loads(trusted_file(journal).read_text())
+                transactions.append({"id": journal.stem, **{key: record.get(key) for key in
+                    ("kind", "target_name", "state", "deadline", "restored_at")}})
+            except (OSError, ValueError, BrokerDenied):
+                transactions.append({"id": journal.stem, "state": "unreadable"})
+        inventory["administration"]["transactions"] = transactions
         return {"inventory": inventory}
     if operation == "inventory.events":
         _exact_args(arguments, set())

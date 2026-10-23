@@ -108,7 +108,9 @@ def repair(source):
         for path in release.rglob("*"):
             if not path.is_symlink():
                 path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
-        installer._run(["systemctl", "enable", "--now", "serverhub-release-watchdog.timer"])
+        installer.write("/opt/serverhub/recovery/operation_watchdog.py",
+                        (source / "src/serverhub/ops/operation_watchdog.py").read_text(), 0o600)
+        installer._run(["systemctl", "enable", "--now", "serverhub-release-watchdog.timer", "serverhub-operation-watchdog.timer"])
         recovery_journal = {
             "state": "armed",
             "previous": str(previous),
@@ -159,7 +161,7 @@ def repair(source):
                 {
                     "manifest": {
                         "release_id": release.name,
-                        "schema_revision": "0004_runtime",
+                        "schema_revision": "0005_priority",
                         "trust_boundary_digest": installer.trust_digest(),
                     }
                 }

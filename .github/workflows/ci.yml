@@ -79,6 +79,8 @@ jobs:
         run: ./scripts/install-ubuntu.sh --build-only
       - name: Native install, interruption, resume, model setup, delegated job and upgrade
         run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-native-ubuntu.py
+      - name: Actual package transactions and database-consistent Docker restore
+        run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-host-operations.py
       - name: Native service diagnostics
         if: failure()
         run: |

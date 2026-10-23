@@ -70,6 +70,7 @@ class PolicyUpdate(StrictModel):
 
 
 class NewJob(StrictModel):
+    priority: int = Field(default=0, ge=-100, le=100)
     kind: str = Field(min_length=1, max_length=60)
     spec: dict
     host_id: str | None = None

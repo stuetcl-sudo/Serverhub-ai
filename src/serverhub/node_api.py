@@ -32,11 +32,12 @@ NODE_OPERATIONS = frozenset(
         "systemd.status", "systemd.logs",
         "systemd.restart",
         "docker.restart",
-        "docker.compose.apply",
+        "package.plan", "package.apply", "configuration.plan", "configuration.apply",
+        "docker.compose.update", "docker.compose.apply", "docker.backup.create", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "docker.restore.apply",
     }
 )
 READ_OPERATIONS = frozenset(
-    {"inventory.refresh", "discovery.refresh", "diagnostics.network", "security.scan", "systemd.status", "systemd.logs"}
+    {"inventory.refresh", "discovery.refresh", "diagnostics.network", "security.scan", "systemd.status", "systemd.logs", "package.plan", "configuration.plan", "docker.backup.list", "docker.backup.verify", "docker.restore.plan"}
 )
 
 
@@ -283,7 +284,7 @@ def dispatch_command(
     job_id: str,
     *,
     idempotency_key: str | None = None,
-    timeout: int = 300,
+    timeout: int = 3600,
 ) -> AgentCommand:
     if operation not in NODE_OPERATIONS:
         raise PermissionDenied("Node operation is not in the compiled allowlist")
