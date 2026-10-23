@@ -467,7 +467,8 @@ class BrokerHandler(socketserver.StreamRequestHandler):
                 raise BrokerDenied("invalid audit correlation metadata")
             append_broker_audit(self.server.config, {"at": time.time(), "uid": uid,
                                 "operation": operation, "arguments": payload["arguments"], "correlation": context,
-                                "privilege": privilege, "phase": "before"})
+                                "privilege": privilege, "phase": "before",
+                                "broker_contract_sha256": hashlib.sha256(json.dumps(self.server.config,sort_keys=True,default=str).encode()).hexdigest()})
             result = execute(operation, payload["arguments"], self.server.config)
             result["execution_context"] = privilege
             response = {"ok": True, "result": result}
@@ -482,7 +483,9 @@ class BrokerHandler(socketserver.StreamRequestHandler):
                                     "operation": operation if isinstance(operation, str) else "invalid",
                                     "phase": "after", "ok": response["ok"], "correlation": context,
                                     "privilege": privilege, "result": {"verified": response.get("result", {}).get("verified"),
-                                    "exit_code": response.get("result", {}).get("exit_code"),
+                                    "exit_code": 0 if response["ok"] else 1, "exit_code_kind": "structured_adapter",
+                                    "effects": {key:value for key,value in response.get("result",{}).items() if key in
+                                        {"target","transaction_id","packages","project","backup_id","id","artifact_id","unit","verified","completed","verification"}},
                                     "error": response.get("error")}})
             except (OSError, BrokerDenied) as error:
                 logging.getLogger(__name__).error("Protected broker audit unavailable (%s): %s", type(error).__name__, error)

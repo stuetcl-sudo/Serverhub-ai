@@ -70,7 +70,7 @@ def execute_administration(operation, arguments, config):
         for name, version in before.items():
             if version is not None and previous_versions.get(name) != version:
                 raise DockerBackupError('Every installed package requires its exact cached rollback .deb')
-        simulation = command('apt-get','-s','--no-download','--no-remove','--allow-downgrades','install',*[str(path) for path in candidates],timeout=45)
+        simulation = command('apt-get','-o','APT::Sandbox::User=root','-s','--no-download','--no-remove','--allow-downgrades','install',*[str(path) for path in candidates],timeout=45)
         changed = set(re.findall(r'^Inst ([a-z0-9+.-]+)(?::\S+)? ',simulation,re.M))
         if changed - set(before) or re.search(r'^Remv ',simulation,re.M):
             raise DockerBackupError('Dependency changes outside the enrolled artifact set are forbidden')
@@ -88,7 +88,7 @@ def execute_administration(operation, arguments, config):
         record.update(kind='package', previous_debs=copies,new_packages=[name for name,version in before.items() if version is None])
         atomic(journal,record)
         try:
-            command('apt-get','-y','--no-download','--no-remove','--allow-downgrades','install',*[str(path) for path in candidates],timeout=180)
+            command('apt-get','-o','APT::Sandbox::User=root','-y','--no-download','--no-remove','--allow-downgrades','install',*[str(path) for path in candidates],timeout=180)
             if any(installed_version(item['name']) != item['version'] for item in descriptions):
                 raise DockerBackupError('Installed package version verification failed')
             if plan.get('verify_file'):

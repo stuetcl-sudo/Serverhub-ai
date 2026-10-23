@@ -379,6 +379,15 @@ class DockerBackups:
                     'overwrites_source': False, 'network': 'new internal Docker network', 'container_count': manifest['container_count']}
         if self.plan.get('allow_isolated_restore') is not True:
             raise DockerBackupError('Isolated restore not explicitly enrolled')
+        # Reserve plaintext plus extracted Docker data before decrypting anything.
+        docker_root=Path(json.loads(command('docker','info','--format','{{json .DockerRootDir}}')))
+        required_by_device={}
+        for directory in (self.state,docker_root):
+            device=directory.stat().st_dev
+            required_by_device[device]=required_by_device.get(device,0)+manifest['estimated_required_bytes']
+        for directory in (self.state,docker_root):
+            if shutil.disk_usage(directory).free < required_by_device[directory.stat().st_dev]:
+                raise DockerBackupError('Insufficient restore capacity for plaintext and extracted data')
         stage = self.state / prefix
         stage.mkdir(mode=0o700)
         created, volumes, network = [], [], None
