@@ -28,6 +28,8 @@ subprocess.run([sys.executable, '-m', 'serverhub.ops.installer', '--source', str
 
 before = {name: Path('/etc/serverhub', name).read_bytes() for name in ('api.env', 'worker.env', 'recovery.env', 'node.yaml', 'broker.yaml')}
 previous = Path('/opt/serverhub/current').resolve()
+metadata = (previous / 'installed.json').stat()
+print('LEGACY_METADATA=' + json.dumps({'uid': metadata.st_uid, 'gid': metadata.st_gid, 'mode': oct(metadata.st_mode & 0o777)}), flush=True)
 assert plan(source)['state'] == 'reviewed'
 # Real services, DB migration and backup run, then acceptance deliberately fails.
 with patch.object(Installer, '_healthchecks', side_effect=RuntimeError('Intentional namespace health failure')):

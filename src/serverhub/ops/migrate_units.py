@@ -47,7 +47,7 @@ def plan(source, *, root=Path('/')):
         import grp
         if (record.is_symlink() or info.st_uid != 0 or info.st_mode & 0o002
                 or (info.st_mode & 0o020 and (info.st_gid != 0 or any(name != 'root' for name in grp.getgrgid(0).gr_mem)))):
-            raise ConflictError('Unsafe legacy installed.json ownership or world write permission')
+            raise ConflictError(f'Unsafe legacy installed.json: uid={info.st_uid}, gid={info.st_gid}, mode={oct(info.st_mode & 0o777)}. Review the root-owned legacy record before migration; no service changed')
     if json.loads(installed.read_text())['manifest']['trust_boundary_digest'] != data['trust_digest']:
         raise ConflictError('Legacy release and installer trust records disagree')
     units = []
