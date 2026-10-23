@@ -462,3 +462,14 @@ def test_project_group_namespace_fits_linux_group_name_limit():
         text = (SOURCE / name).read_text()
         assert 'serverhub-ai-prj-' in text
         assert 'serverhub-ai-project-' not in text
+
+
+@pytest.mark.parametrize('path', ['/opt/serverhub-control/config', '/var/lib/serverhub-api',
+    '/var/lib/serverhub-worker', '/var/lib/serverhub-node', '/var/lib/serverhub-ai-api',
+    '/var/lib/serverhub-ai-worker', '/var/lib/serverhub-ai-node'])
+def test_docker_backup_cannot_read_control_or_retained_legacy_identity_state(path):
+    from serverhub.node.docker_backup import DockerBackups, DockerBackupError
+    backups = DockerBackups.__new__(DockerBackups)
+    backups.plan = {'allowed_bind_roots': ['/opt', '/var/lib']}
+    with pytest.raises(DockerBackupError, match='Sensitive'):
+        backups._source(path)
