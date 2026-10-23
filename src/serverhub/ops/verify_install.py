@@ -12,7 +12,9 @@ from pathlib import Path
 import re
 import ssl
 import stat
+import sys
 import time
+import warnings
 from urllib.parse import urlsplit
 
 import httpx
@@ -83,7 +85,7 @@ def verify(client, token, *, host_id=None, model_route=None, timeout=180,
                 + "; inspect Setup diagnostics and the authenticated account's permissions")
         except httpx.HTTPError:
             add(name, "failed", "Connection, TLS or timeout failure; verify routing, certificate trust and service health")
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError, AttributeError):
             add(name, "failed", "Acceptance response invalid; inspect the named check in Setup diagnostics")
 
     def health():
@@ -197,6 +199,8 @@ def main(argv=None):
     parser.add_argument("--probe-model", metavar="ROUTE", help="Opt in to a live harmless provider probe (existing $0.10 cap)")
     parser.add_argument("--timeout", type=int, default=180)
     args = parser.parse_args(argv)
+    if args.username and not sys.stdin.isatty():
+        parser.error("Password login requires an interactive terminal; use --token-file for unattended checks")
     created_session = False
     token = None
     try:
@@ -207,8 +211,13 @@ def main(argv=None):
                 if args.token_file:
                     token = read_token(args.token_file)
                 else:
+                    with warnings.catch_warnings():
+                        # getpass must never fall back to an echoing password read.
+                        warnings.simplefilter("error", getpass.GetPassWarning)
+                        password = getpass.getpass("Owner password: ")
                     response = client.post("/api/auth/login", headers={"Origin": origin},
-                                           json={"username": args.username, "password": getpass.getpass("Owner password: ")})
+                                           json={"username": args.username, "password": password})
+                    del password
                     response.raise_for_status()
                     token = response.json()["token"]
                     created_session = True
@@ -225,7 +234,7 @@ def main(argv=None):
                                                  "message": "Temporary session revocation failed; revoke it through account administration"})
         print(json.dumps(report, indent=2))
         return {"passed": 0, "failed": 1, "partial": 2}[report["state"]]
-    except (OSError, ValueError, KeyError, httpx.HTTPError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, EOFError, getpass.GetPassWarning, httpx.HTTPError):
         print(json.dumps({"state": "failed", "message": "Unable to authenticate or verify; check the origin, TLS CA, private token permissions and owner credentials. No response bodies or credentials are printed."}))
         return 1
 

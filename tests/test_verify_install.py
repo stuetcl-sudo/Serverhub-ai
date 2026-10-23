@@ -1,5 +1,6 @@
 """Installed-system verifier: real HTTP request shapes, no changes by default."""
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -133,6 +134,7 @@ def test_password_login_revokes_only_the_created_session(monkeypatch, capsys, lo
     original = httpx.Client
     monkeypatch.setattr(verify_install.httpx, 'Client', lambda **kw: original(**kw, transport=httpx.MockTransport(handler)))
     monkeypatch.setattr(verify_install.getpass, 'getpass', lambda prompt: 'never-print-password')
+    monkeypatch.setattr(verify_install.sys, 'stdin', SimpleNamespace(isatty=lambda: True))
     assert verify_install.main(['--url', 'https://controller.test', '--username', 'owner']) == expected
     output = capsys.readouterr().out
     assert 'private-token' not in output and 'never-print-password' not in output
@@ -145,6 +147,36 @@ def test_missing_core_diagnostics_are_not_accepted():
     def handler(request):
         if request.url.path == '/api/diagnostics':
             return httpx.Response(200, json={'checks': [{'id': 'models', 'status': 'ok'}]})
+        return base.handle_request(request)
+    with httpx.Client(base_url='https://controller.test', transport=httpx.MockTransport(handler)) as client:
+        assert verify(client, 'private-token')['state'] == 'failed'
+
+
+def test_password_login_refuses_noninteractive_input(monkeypatch):
+    monkeypatch.setattr(verify_install.sys, 'stdin', SimpleNamespace(isatty=lambda: False))
+    monkeypatch.setattr(verify_install.getpass, 'getpass', lambda prompt: pytest.fail('Must not read password'))
+    with pytest.raises(SystemExit) as error:
+        verify_install.main(['--url', 'https://controller.test', '--username', 'owner'])
+    assert error.value.code == 2
+
+
+def test_getpass_echo_fallback_is_an_error(monkeypatch, capsys):
+    import warnings
+    monkeypatch.setattr(verify_install.sys, 'stdin', SimpleNamespace(isatty=lambda: True))
+    def no_echo_unavailable(prompt):
+        warnings.warn('cannot turn off echo', verify_install.getpass.GetPassWarning)
+        pytest.fail('Must not continue after insecure prompt warning')
+    monkeypatch.setattr(verify_install.getpass, 'getpass', no_echo_unavailable)
+    assert verify_install.main(['--url', 'https://controller.test', '--username', 'owner']) == 1
+    assert json.loads(capsys.readouterr().out)['state'] == 'failed'
+
+
+def test_malformed_json_shapes_produce_a_failed_report():
+    requests = []
+    base = fixture_transport(requests)
+    def handler(request):
+        if request.url.path == '/health':
+            return httpx.Response(200, json=['invalid-health-shape'])
         return base.handle_request(request)
     with httpx.Client(base_url='https://controller.test', transport=httpx.MockTransport(handler)) as client:
         assert verify(client, 'private-token')['state'] == 'failed'

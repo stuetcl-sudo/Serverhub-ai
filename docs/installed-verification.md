@@ -10,7 +10,9 @@ It needs no root privileges, service environment files or database password.
 ```
 
 The owner password is prompted without echo. It is never a command-line argument,
-environment variable or report field. A newly created login session is revoked at
+environment variable or report field. Password login requires an interactive
+terminal and refuses an echoing getpass fallback; unattended checks must use
+`--token-file`. A newly created login session is revoked at
 the end. Existing sessions supplied with `--token-file` are retained; that file
 must be an owned regular file with private permissions (0600). Symlinks and
 group/world-readable token files are rejected.
