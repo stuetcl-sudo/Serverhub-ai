@@ -175,7 +175,7 @@ class ReleaseManager:
         release = self.install_root / "releases" / manifest["release_id"]
         if release.exists():
             raise ReleaseError("release directory already exists")
-        release.mkdir(parents=True, mode=0o755)
+        release.mkdir(parents=True, mode=0o700)
         try:
             self._run(["python3", "-m", "venv", str(release / "venv")])
             argv = [str(release / "venv/bin/pip"), "install", "--require-hashes", "-r", str(bundle / "requirements.lock")]
@@ -198,7 +198,10 @@ class ReleaseManager:
             if not (release / "web/index.html").is_file():
                 raise ReleaseError("web archive must contain index.html at its root")
             installed = {"manifest": manifest, "manifest_sha256": hashlib.sha256(canonical(manifest)).hexdigest(), "prepared_at": self.clock()}
+            from .runtime_permissions import seal_runtime
+            seal_runtime(release, require_root=self.require_root)
             (release / "installed.json").write_text(json.dumps(installed, indent=2) + "\n")
+            (release / "installed.json").chmod(0o644)
             return {"release_id": manifest["release_id"], "state": "prepared", "path": str(release)}
         except BaseException:
             shutil.rmtree(release, ignore_errors=True)

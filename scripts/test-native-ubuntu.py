@@ -66,6 +66,9 @@ assert installer.apply(install_dependencies=True, enable_broker=True)["state"] =
 assert Path("/etc/serverhub/api.env").read_bytes() == before
 assert subprocess.check_output(["systemctl", "show", "serverhub-ai-worker", "--property=User", "--value"], text=True).strip() == "serverhub-ai"
 assert pwd.getpwnam("serverhub-ai").pw_shell.endswith("nologin")
+assert (Path('/opt/serverhub/current').resolve() / 'installed.json').stat().st_mode & 0o777 == 0o644
+for tree in [Path('/opt/serverhub/current').resolve(), Path('/opt/serverhub/recovery-ai')]:
+    assert all(not (p.stat().st_mode & 0o022) for p in tree.rglob('*') if not p.is_symlink())
 
 
 # A loopback fixture implements only documented Ollama HTTP API messages. It never

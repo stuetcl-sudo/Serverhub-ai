@@ -49,6 +49,7 @@ TRUST_FILES = [
     "src/serverhub/node/watchdog.py",
     "src/serverhub/ops/installer.py",
     "src/serverhub/ops/coexistence.py",
+    "src/serverhub/ops/runtime_permissions.py",
     "src/serverhub/ops/migrate_units.py",
     "src/serverhub/ops/unit_recovery.py",
     "src/serverhub/ops/release.py",
@@ -562,14 +563,15 @@ class Installer:
             release = self.path("/opt/serverhub/releases/" + state["release_id"])
 
             def artifacts():
-                release.mkdir(parents=True, mode=0o755, exist_ok=True)
+                release.mkdir(parents=True, mode=0o700, exist_ok=True)
                 release.parent.chmod(0o755)
-                release.chmod(0o755)
+                release.chmod(0o700)
                 wheels = sorted((self.source / "dist").glob("*.whl"))
                 if len(wheels) != 1:
                     raise InstallError("dist must contain exactly one application wheel")
                 for runtime in (release, self.path("/opt/serverhub/recovery-ai")):
-                    runtime.mkdir(mode=0o755, exist_ok=True)
+                    runtime.mkdir(mode=0o700, exist_ok=True)
+                    runtime.chmod(0o700)
                     self._run([sys.executable, "-m", "venv", str(runtime / "venv")])
                     self._run(
                         [
@@ -589,17 +591,9 @@ class Installer:
                     from serverhub.diagnostics import verify_frontend_files
 
                     verify_frontend_files(release / "web")
-                # Code contains no credentials: normalize read/traversal modes for
-                # both runtimes even when the invoking root uses umask 0077.
-                for runtime in (release, self.path("/opt/serverhub/recovery-ai")):
-                    runtime.chmod(0o755)
-                    for target in runtime.rglob("*"):
-                        if target.is_symlink():
-                            continue
-                        if target.is_dir():
-                            target.chmod(target.stat().st_mode | 0o055)
-                        elif target.is_file():
-                            target.chmod(target.stat().st_mode | 0o044)
+                from .runtime_permissions import seal_runtime
+                for runtime in (release, self.path('/opt/serverhub/recovery-ai')):
+                    seal_runtime(runtime)
                 (release / "installed.json").write_text(
                     json.dumps(
                         {

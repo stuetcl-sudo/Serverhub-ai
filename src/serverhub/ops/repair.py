@@ -109,7 +109,7 @@ def repair(source):
     release = Path("/opt/serverhub/releases") / (
         "repair-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:6]
     )
-    release.mkdir(mode=0o755)
+    release.mkdir(mode=0o700)
     from .release import ReleaseManager
 
     recovery = ReleaseManager()
@@ -142,13 +142,15 @@ def repair(source):
         from serverhub.diagnostics import verify_frontend_files
 
         verify_frontend_files(release / "web")
-        for path in release.rglob("*"):
-            if not path.is_symlink():
-                path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
+        from .runtime_permissions import seal_runtime
+        seal_runtime(release)
         stable_runtime = Path('/opt/serverhub/recovery-ai')
+        stable_runtime.mkdir(mode=0o700, exist_ok=True)
+        stable_runtime.chmod(0o700)
         installer._run([sys.executable, '-m', 'venv', str(stable_runtime / 'venv')])
         installer._run([str(stable_runtime / 'venv/bin/pip'), 'install', '--require-hashes', '-r', str(source / 'requirements.lock')], timeout=1800)
         installer._run([str(stable_runtime / 'venv/bin/pip'), 'install', '--no-deps', '--force-reinstall', str(wheels[0])])
+        seal_runtime(stable_runtime)
         ensure_staging_account(installer)
         from .sandbox_setup import configure
         configure(installer)

@@ -39,6 +39,7 @@ def plan(source, *, root=Path('/')):
         raise ConflictError('Legacy current release is not an AI OS release symlink')
     installed = current / 'installed.json'
     metadata_mode = installed.stat().st_mode & 0o777
+    unsafe_runtime = []
     if root == Path('/'):
         # installed.json was not chmod'ed by older installers. It is not a trust
         # anchor. Independently validate the root-only code anchor and actual
@@ -63,7 +64,14 @@ def plan(source, *, root=Path('/')):
             if not name.startswith('serverhub/') or '..' in Path(name).parts:
                 raise ConflictError('Invalid legacy code anchor path')
             module = site / name
-            protected(module)
+            for item in (module, *module.parents):
+                if item == current.resolve():
+                    break
+                info = item.lstat()
+                if item.is_symlink() or info.st_uid != 0:
+                    raise ConflictError('Foreign owner or symlink in anchored legacy code: ' + str(item))
+                if info.st_mode & 0o022:
+                    unsafe_runtime.append(str(item))
             if hashlib.sha256(module.read_bytes()).hexdigest() != checksum:
                 raise ConflictError('Installed legacy code hash mismatch: ' + name)
         if installed.is_symlink() or installed.stat().st_uid != 0:
@@ -120,6 +128,7 @@ def plan(source, *, root=Path('/')):
         units.append({'old': old, 'new': new})
     return {'units': units, 'previous': str(current.resolve()), 'state': 'reviewed',
             'legacy_metadata_mode': oct(metadata_mode), 'metadata_normalization': metadata_mode != 0o644,
+            'unsafe_runtime_paths': sorted(set(unsafe_runtime)),
             'preserved': '/opt/serverhub-control and all foreign services; accounts, data and database remain in place'}
 
 
@@ -183,12 +192,14 @@ def recover(*, force=False):
     return {'state': 'reverted'}
 
 
-def migrate(source):
+def migrate(source, *, repair_legacy_permissions=False):
     if os.geteuid() != 0:
         raise ConflictError('Unit migration requires explicit local root')
     if JOURNAL.exists() and json.loads(JOURNAL.read_text()).get('state') == 'armed':
         raise ConflictError('Migration is armed; wait for recovery or run --rollback')
     data = plan(source)
+    if data['unsafe_runtime_paths'] and not repair_legacy_permissions:
+        raise ConflictError('Anchored legacy runtime has writable files. Review --plan and explicitly use --repair-legacy-permissions to seal only the verified AI OS runtime; no service changed')
     for name in ('serverhub-ai-namespace-recovery.service', 'serverhub-ai-namespace-recovery.timer'):
         result = _run(['systemctl', 'show', name, '--property=LoadState', '--value'])
         if result.stdout.strip() != 'not-found':
@@ -236,6 +247,19 @@ def migrate(source):
     _run(['systemctl', 'enable', '--now', timer.name])
     try:
         _run(['systemctl', 'disable', '--now', *[x['old'] for x in data['units']]])
+        if repair_legacy_permissions:
+            from .runtime_permissions import seal_runtime
+            # The root code anchor was checked immediately above; source bytes
+            # must match again after closing the tree to service identities.
+            runtime = Path(data['previous'])
+            runtime.chmod(0o700)
+            verified = plan(source)
+            if verified['previous'] != data['previous']:
+                raise ConflictError('Legacy release changed during enrollment')
+            seal_runtime(runtime)
+            legacy_recovery = Path('/opt/serverhub/recovery')
+            if legacy_recovery.exists():
+                seal_runtime(legacy_recovery)
         for item in data['units']:
             old = Path('/etc/systemd/system', item['old'])
             new = old.with_name(item['new'])
@@ -284,11 +308,12 @@ def main():
     action.add_argument('--plan', action='store_true')
     action.add_argument('--apply', action='store_true')
     action.add_argument('--rollback', action='store_true')
+    parser.add_argument('--repair-legacy-permissions', action='store_true', help='Explicit root enrollment: seal independently hash-verified legacy AI OS runtime permissions')
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error('Explicit local root is required')
     try:
-        print(json.dumps(plan(args.source) if args.plan else recover(force=True) if args.rollback else migrate(args.source), indent=2))
+        print(json.dumps(plan(args.source) if args.plan else recover(force=True) if args.rollback else migrate(args.source, repair_legacy_permissions=args.repair_legacy_permissions), indent=2))
     except (RuntimeError, OSError, ValueError) as error:
         parser.exit(1, f'Namespace migration refused/failed: {error}\n')
 

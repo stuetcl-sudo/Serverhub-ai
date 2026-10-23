@@ -34,7 +34,7 @@ assert plan(source)['state'] == 'reviewed'
 # Real services, DB migration and backup run, then acceptance deliberately fails.
 with patch.object(Installer, '_healthchecks', side_effect=RuntimeError('Intentional namespace health failure')):
     try:
-        migrate(source)
+        migrate(source, repair_legacy_permissions=True)
     except RuntimeError as error:
         assert 'Intentional' in str(error)
     else:
@@ -47,7 +47,7 @@ for name, content in before.items():
 for unit in ['serverhub-api.service', 'serverhub-worker.service', 'serverhub-broker.service']:
     subprocess.run(['systemctl', 'is-active', '--quiet', unit], check=True)
 
-assert migrate(source)['state'] == 'migrated'
+assert migrate(source, repair_legacy_permissions=True)['state'] == 'migrated'
 for name in ('api.env', 'worker.env', 'recovery.env'):
     assert Path('/etc/serverhub', name).read_bytes() == before[name]
 for unit in ['serverhub-ai-api.service', 'serverhub-ai-worker.service', 'serverhub-ai-broker.service']:

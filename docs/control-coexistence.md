@@ -73,17 +73,34 @@ migration of ServerHub Control. Do not run it against a host that has only Contr
 ```bash
 ./scripts/install-ubuntu.sh --build-only
 sudo env PYTHONPATH="$PWD/src" .build-venv/bin/python -m serverhub.ops.migrate_units --source "$PWD" --plan
-sudo env PYTHONPATH="$PWD/src" .build-venv/bin/python -m serverhub.ops.migrate_units --source "$PWD" --apply
+sudo env PYTHONPATH="$PWD/src" .build-venv/bin/python -m serverhub.ops.migrate_units --source "$PWD" --apply --repair-legacy-permissions
 ```
 
-The plan verifies the completed legacy installer journal, current release trust
-record, every old unit's exact expected content, and the known optional worker
+The plan verifies the completed legacy installer journal, independent root-owned
+code/trust anchors against every installed AI OS module, current release identity,
+and every old unit's exact expected content, and the known optional worker
 identity and root-enrolled broker administration drop-ins. It also checks that
 loaded systemd fragments match the reviewed files without a pending daemon reload. A foreign or customized legacy worker/broker, mixed Control/AI
 installation, occupied new namespace or pending operation **aborts before any
 service change**. No generic `serverhub-*` snapshot/stop operation is used.
 Customized/older unit layouts require manual review; do not replace a Control
 unit to make the migration pass.
+
+Older installers could preserve group/world write bits in executable trees and
+write `installed.json` as 0666. The release record is **not** used as a trust
+anchor: its identity/schema/digest must match the independently protected code
+anchor and actual module hashes. A previously repaired host may have a newer
+root trust anchor than its initial install journal; that current protected anchor
+is authoritative. Any code hash, file set, owner or symlink mismatch blocks adoption.
+
+`--repair-legacy-permissions` is explicit local-root authorization to seal the
+verified AI OS executable/recovery trees, preserving source bytes and executable
+bits while removing group/world writes and stale bytecode. It is never an AI/MCP
+tool and never changes Control paths. Without this flag, writable anchored runtime
+files cause refusal before stopping services. This is permission repair for a
+reviewed host, not forensic recovery of a potentially compromised machine; a hash
+mismatch requires a separate trusted restore. Fresh install, repair and signed
+release preparation now seal new runtimes before exposing them to service users.
 
 Before stopping proven AI OS units, migration writes a root-only file/config/unit
 checkpoint and arms a standalone systemd rollback timer that also runs after boot.

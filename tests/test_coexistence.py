@@ -210,3 +210,29 @@ def test_watchdog_and_interactive_recovery_have_identical_implementation():
     from serverhub.ops.migrate_units import recover
     from serverhub.ops.unit_recovery import recover as standalone
     assert inspect.getsource(recover) == inspect.getsource(standalone)
+
+
+def test_runtime_sealing_removes_writes_without_following_symlinks(tmp_path):
+    from serverhub.ops.runtime_permissions import seal_runtime
+    runtime = tmp_path / 'runtime'
+    runtime.mkdir(mode=0o777)
+    source = runtime / 'package'
+    source.mkdir(mode=0o777)
+    code = source / 'module.py'
+    code.write_text('verified code bytes\n')
+    code.chmod(0o666)
+    executable = runtime / 'tool'
+    executable.write_text('#!/bin/sh\nexit 0\n')
+    executable.chmod(0o777)
+    (source / 'module.pyc').write_bytes(b'untrusted old bytecode')
+    outside = tmp_path / 'outside'
+    outside.write_text('untouched')
+    outside.chmod(0o666)
+    (runtime / 'link').symlink_to(outside)
+    seal_runtime(runtime, require_root=False)
+    assert code.read_text() == 'verified code bytes\n'
+    assert code.stat().st_mode & 0o022 == 0
+    assert runtime.stat().st_mode & 0o777 == 0o755
+    assert executable.stat().st_mode & 0o111 == 0o111
+    assert not (source / 'module.pyc').exists()
+    assert outside.stat().st_mode & 0o777 == 0o666
