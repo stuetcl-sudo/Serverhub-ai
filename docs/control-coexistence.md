@@ -144,7 +144,8 @@ completed migration. The protected `unit-migration.json` contains configuration
 secrets; never paste it into issues. The same command handles both generic legacy units and the exact namespace-2
 claim from `7da8bea`. Normal installation/repair refuses that old claim and tells
 the operator to use explicit migration; it is never silently adopted. Occupied
-new accounts or homes abort. Active enrolled staging projects must be stopped,
+new accounts or homes abort. Queued, paused and active jobs must finish or be cancelled before migration;
+historical checkpoints are retained without rewriting them. Active enrolled staging projects must be stopped,
 archived and unenrolled before migration, then reviewed/re-enrolled afterward;
 old project groups, deployments and AppArmor profile are retained. Unrecognized
 custom unit files/drop-ins or identity homes require manual review. A failed

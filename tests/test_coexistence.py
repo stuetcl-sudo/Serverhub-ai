@@ -406,3 +406,36 @@ def test_namespace_two_claim_requires_explicit_migration(tmp_path, monkeypatch):
         module.claim(tmp_path)
     assert previous_claim(tmp_path) == value
     assert target.read_bytes() == before
+
+
+def test_identity_home_copy_verifies_bytes_and_never_chowns_originals(tmp_path, monkeypatch):
+    import serverhub.ops.migrate_units as module
+    original = tmp_path / 'legacy-home'
+    original.mkdir(mode=0o700)
+    (original / 'identity.json').write_bytes(b'private enrolled identity fixture')
+    (original / 'link').symlink_to('/opt/serverhub-control/foreign')
+    target = tmp_path / 'new-home'
+    real_path = Path
+    def rooted(value):
+        return tmp_path / 'configuration' if str(value) == '/etc/serverhub' else real_path(value)
+    calls, ownership = [], []
+    monkeypatch.setattr(module, 'Path', rooted)
+    monkeypatch.setattr(module, '_run', lambda command: calls.append(command))
+    monkeypatch.setattr(module, '_save', lambda data: None)
+    monkeypatch.setattr(module.pwd, 'getpwnam', lambda name: SimpleNamespace(pw_uid=2001, pw_gid=2002))
+    monkeypatch.setattr(module.grp, 'getgrnam', lambda name: SimpleNamespace(gr_gid=2002))
+    monkeypatch.setattr(module.os, 'chown', lambda path, uid, gid, **kwargs: ownership.append((path, uid, gid, kwargs)))
+    def metadata(path):
+        info = path.stat()
+        return (info.st_uid, info.st_gid, info.st_mode, info.st_mtime_ns)
+    before = (metadata(original), metadata(original / 'identity.json'))
+    data = {'identities': [{'old': 'serverhub-node', 'new': 'serverhub-ai-node',
+            'source': str(original), 'destination': str(target),
+            'old_uid': os.getuid(), 'old_gid': os.getgid()}]}
+    module.copy_identities(data)
+    assert (target / 'identity.json').read_bytes() == (original / 'identity.json').read_bytes()
+    assert os.readlink(target / 'link') == '/opt/serverhub-control/foreign'
+    assert before == (metadata(original), metadata(original / 'identity.json'))
+    assert ownership and all(path.is_relative_to(target) for path, *_ in ownership)
+    assert all(options == {'follow_symlinks': False} for *_, options in ownership)
+    assert all(command[0] == 'useradd' and command[-1] == 'serverhub-ai-node' for command in calls)

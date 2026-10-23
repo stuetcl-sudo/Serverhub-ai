@@ -112,6 +112,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Start the disposable image PostgreSQL for legacy read-only preflight
+        run: sudo systemctl start postgresql.service
       - name: Secure shared image directories on this disposable CI VM only
         run: sudo chown root:root /opt /var/log && sudo chmod 0755 /opt /var/log
       - name: Build reviewed candidate without changing the installed namespace

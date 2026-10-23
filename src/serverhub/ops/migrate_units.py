@@ -70,13 +70,20 @@ def identity_plan(root):
                 or grp.getgrnam('serverhub-ai').gr_gid != optional.pw_gid
                 or set(os.getgrouplist('serverhub-ai', optional.pw_gid)) != {optional.pw_gid}):
             raise ConflictError('Foreign optional serverhub-ai identity; no adoption')
+        drops = [Path('/etc/systemd/system', name + '.service.d/10-ai-identity.conf')
+                 for name in ('serverhub-worker', 'serverhub-ai-worker')]
+        if not any(path.is_file() and path.read_text() == '[Service]\nUser=serverhub-ai\nGroup=serverhub-worker\n' for path in drops):
+            raise ConflictError('Optional serverhub-ai identity has no proven legacy worker assignment')
         optional_uids = (optional.pw_uid,)
     except KeyError:
         optional_uids = ()
     for new, home in INSTALL_ACCOUNTS.items():
         old, old_home = legacy_resources(new), legacy_resources(home)
-        entry = pwd.getpwnam(old)
-        group = grp.getgrnam(old)
+        try:
+            entry = pwd.getpwnam(old)
+            group = grp.getgrnam(old)
+        except KeyError as error:
+            raise ConflictError('Missing legacy service identity; explicit review required: ' + old) from error
         if (entry.pw_uid == 0 or entry.pw_dir != old_home
                 or entry.pw_shell not in ('/usr/sbin/nologin', '/sbin/nologin')
                 or entry.pw_gid != group.gr_gid or group.gr_mem
@@ -120,6 +127,15 @@ def copy_identities(data):
         item['copied'] = True
         _save(data)
         shutil.copytree(source, target, symlinks=True)
+        for original in source.rglob('*'):
+            copied = target / original.relative_to(source)
+            if original.is_symlink():
+                if not copied.is_symlink() or os.readlink(original) != os.readlink(copied):
+                    raise ConflictError('Identity copy link verification failed')
+            elif original.is_file():
+                with original.open('rb') as left, copied.open('rb') as right:
+                    if hashlib.file_digest(left, 'sha256').digest() != hashlib.file_digest(right, 'sha256').digest():
+                        raise ConflictError('Identity data copy SHA-256 verification failed')
         for path in (target, *target.rglob('*')):
             info = path.lstat()
             os.chown(path, uids.get(info.st_uid, info.st_uid), gids.get(info.st_gid, info.st_gid),
@@ -481,6 +497,12 @@ def migrate(source, *, repair_legacy_permissions=False):
             legacy_recovery = Path('/opt/serverhub/recovery')
             if legacy_recovery.exists():
                 seal_runtime(legacy_recovery)
+        # Quiesce old jobs before moving state-path references. We never edit
+        # historical job checkpoints or silently abandon a resumable workspace.
+        unfinished = _run(['runuser', '-u', 'postgres', '--', 'psql', '-XAt', '-d', 'serverhub', '-c',
+            "SELECT count(*) FROM jobs WHERE state NOT IN ('succeeded','failed','cancelled','partial')"]).stdout.strip()
+        if unfinished != '0':
+            raise ConflictError('Finish/cancel all queued, paused or active jobs before identity migration; original checkpoints retained')
         copy_identities(data)
         for item in data['units']:
             old = Path('/etc/systemd/system', item['old'])
