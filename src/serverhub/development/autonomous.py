@@ -230,8 +230,13 @@ def autonomous_development(ctx,spec):
         return result
     if state.get('ready'):
         return finalize()
+    def progress_marker():
+        return (git(workspace,'rev-parse','HEAD').strip(),state.get('checked_commit'),
+                json.dumps(state.get('read_hashes',{}),sort_keys=True),json.dumps(state.get('plan',[])),
+                tuple(state.get('completed',[])))
     for index in range(state.get('step',0),min(50,max(1,int(spec.get('max_steps',20))))):
         ctx.check_cancelled()
+        previous_progress=progress_marker()
         if not state.get('pending'):
             request_messages=development_messages(state,cfg,budget.token_limit-budget.tokens_used)
             def before():
@@ -270,10 +275,17 @@ def autonomous_development(ctx,spec):
             receipt=state['completed_calls'].get(call['id'])
             if receipt is None:
                 ctx.log('Development tool',{'tool':call['name'],'model':cfg.model,'project':project.name})
+                fingerprint=None
                 try:
                     activity[0] = True
+                    fingerprint=hashlib.sha256(json.dumps([call['name'],call['arguments'],git(workspace,'rev-parse','HEAD').strip()],sort_keys=True).encode()).hexdigest()
+                    failures=state.setdefault('failed_tools',{})
+                    if failures.get(fingerprint,0)>=2:
+                        raise DevelopmentError('Identical failed tool suppressed; change the arguments/source or select a stronger model')
                     receipt=tool(call)
                 except (DevelopmentError,ValidationError,OSError,UnicodeError) as error:
+                    if fingerprint is not None:
+                        failures[fingerprint]=failures.get(fingerprint,0)+1
                     detail='Invalid tool arguments: '+json.dumps([{'field':str(item['loc']),'reason':item['msg']} for item in error.errors(include_input=False)]) if isinstance(error,ValidationError) else str(error)
                     receipt={'verified':False,'error':str(redact(detail))[:2000],'test_output':redact(state.get('commands',[])[-1:])}
                 state['completed_calls'][call['id']]=redact(receipt)
@@ -286,6 +298,11 @@ def autonomous_development(ctx,spec):
                 save()
                 return finalize()
         state['step']=index+1
+        state['stalled_rounds']=state.get('stalled_rounds',0)+1 if progress_marker()==previous_progress else 0
         save()
+        if state['stalled_rounds']>=3:
+            return {'completed':False,'verified':False,'plan':state.get('plan',[]),'commands':state.get('commands',[]),
+                    'branch':'serverhub/'+ctx.job.id,'reason':'Three rounds without source, inspection or acceptance progress; choose a stronger model or resolve the recorded prerequisite'}
+
     return {'completed':False,'verified':False,'plan':state.get('plan',[]),'commands':state.get('commands',[]),
             'reason':'Development step/repair budget exhausted; progress and source changes retained'}

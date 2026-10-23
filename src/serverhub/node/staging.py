@@ -116,8 +116,14 @@ def _deploy(arguments, config, state, identity, artifact):
         path.chmod(0o750 if path.is_dir() or path.stat().st_mode&0o111 else 0o640)
     # Root chooses this immutable acceptance executable; it runs as a separate
     # nonprivileged identity, outside the AI worker's writable receipt state.
-    command('runuser','-u','serverhub-staging','-G',group,'--','/usr/bin/python3','-I',
-            str(acceptance),str(release),timeout=90)
+    command('systemd-run','--quiet','--wait','--pipe','--collect','--unit','serverhub-check-'+identity,
+            '--property','User=serverhub-staging','--property','Group='+group,
+            '--property','NoNewPrivileges=yes','--property','CapabilityBoundingSet=',
+            '--property','ProtectSystem=strict','--property','ProtectHome=yes','--property','PrivateNetwork=yes',
+            '--property','PrivateTmp=yes','--property','MemoryMax=256M','--property','TasksMax=32',
+            '--property','RuntimeMaxSec=90',
+            '--property','InaccessiblePaths=-/etc/serverhub -/var/lib/serverhub-worker -/var/lib/serverhub-broker -/var/run/docker.sock',
+            '--','/usr/bin/python3','-I',str(acceptance),str(release),timeout=100)
     data_dir=Path('/var/lib/serverhub-stage-data')/identity
     state=protected(config.get('operations_state','/var/lib/serverhub-broker/operations'),create=True)
     current=state/('stage-'+target+'.state')

@@ -1,5 +1,6 @@
 """Model fixtures test durable development semantics; native isolation is tested separately."""
 from datetime import timedelta
+import pytest
 
 from test_core import core_env as core_env, owner as owner
 from test_development_workspaces import repository
@@ -12,7 +13,8 @@ from serverhub.jobs import HANDLERS, Worker, submit_job
 from serverhub.models import Job, Policy
 
 
-def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_env,owner,monkeypatch,tmp_path):
+@pytest.mark.parametrize('scenario',['repair','stall'])
+def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_env,owner,monkeypatch,tmp_path,scenario):
     source=repository(tmp_path/'source')
     project=Project(name='example',repository=str(source),tests=[Command(argv=['/usr/bin/true'])])
     monkeypatch.setattr(autonomous,'load_projects',lambda:{'example':project})
@@ -32,6 +34,9 @@ def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_
         Completion('',tool_calls=[ToolCall('edit','edit_file',{'path':'app.py','old':"print('old')",'new':"print('new')"})]),
         Completion('',tool_calls=[ToolCall('checks','run_checks',{})]),
         Completion('',tool_calls=[ToolCall('finish','finish',{})])])
+    if scenario=='stall':
+        responses=iter([Completion('',tool_calls=[ToolCall('read','read_file',{'path':'app.py'})]),
+            *[Completion('',tool_calls=[ToolCall('bad-'+str(index),'edit_file',{'path':'app.py','old':'no matching content','new':'new'})]) for index in range(3)]])
     class ProviderFixture:
         def __init__(self,config): self.config=config
         def complete(self,messages,tools,budget,before_request=None):
@@ -55,6 +60,12 @@ def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_
     assert Worker(isolated=False).run_once()
     with SessionLocal() as db:
         job=db.get(Job,identity)
+        if scenario=='stall':
+            assert job.state=='partial',job.error
+            assert not job.result['verified'] and 'Three rounds' in job.result['reason']
+            assert job.tokens_used==72
+            assert (source/'app.py').read_text()=="print('old')\n"
+            return
         assert job.state=='succeeded',job.error
         assert job.result['verified'] and job.result['tests_passed']
         assert job.tokens_used==72 and job.checkpoint['developer']['ready']

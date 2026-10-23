@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import time
+import uuid
 
 
 def protected(path):
@@ -76,8 +77,16 @@ def stage_health(spec, *, timeout=90):
     while True:
         pid=subprocess.run(['/usr/bin/systemctl','show',spec['unit'],'--property=MainPID','--value'],text=True,capture_output=True,check=False).stdout.strip()
         if pid.isdigit() and int(pid)>0:
-            response=subprocess.run(['/usr/bin/nsenter','--target',pid,'--net','--','/usr/bin/python3','-I','-c',script],
-                text=True,capture_output=True,check=False,timeout=5,env={'PATH':'/usr/bin:/bin'})
+            response=subprocess.run(['/usr/bin/systemd-run','--quiet','--wait','--pipe','--collect',
+                '--unit','serverhub-health-'+uuid.uuid4().hex[:12],
+                '--property','User=serverhub-staging','--property','Group=serverhub-staging',
+                '--property','NetworkNamespacePath=/proc/'+pid+'/ns/net',
+                '--property','NoNewPrivileges=yes','--property','CapabilityBoundingSet=',
+                '--property','ProtectSystem=strict','--property','ProtectHome=yes','--property','PrivateTmp=yes',
+                '--property','MemoryMax=128M','--property','TasksMax=16','--property','RuntimeMaxSec=5',
+                '--property','InaccessiblePaths=-/etc/serverhub -/var/lib/serverhub-worker -/var/lib/serverhub-broker -/var/run/docker.sock',
+                '--','/usr/bin/python3','-I','-c',script],
+                text=True,capture_output=True,check=False,timeout=10,env={'PATH':'/usr/bin:/bin','HOME':'/nonexistent'})
             if response.returncode==0 and expected in response.stdout:
                 return True
         if time.monotonic()>=deadline:

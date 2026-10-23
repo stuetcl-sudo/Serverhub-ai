@@ -110,10 +110,14 @@ grant.raise_for_status()
 
 def await_job(identity, timeout=1800):
     deadline=time.monotonic()+timeout
+    last_report=0
     while time.monotonic()<deadline:
         run(['runuser','-u','serverhub-node','--',python,'-c',
              'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],cwd='/')
         job=client.get('/api/jobs/'+identity,headers=headers).json()
+        if time.monotonic()-last_report>20:
+            print('JARVIS_PROGRESS='+json.dumps({'job_id':identity,'state':job['state'],'progress':job.get('progress'),'used_units':job.get('tokens_used'),'step':(job.get('checkpoint',{}).get('developer') or {}).get('step')}),flush=True)
+            last_report=time.monotonic()
         if job['state'] in {'succeeded','partial','failed','cancelled','paused','waiting_approval'}:
             return job
         time.sleep(1)
