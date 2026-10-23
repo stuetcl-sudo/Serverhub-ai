@@ -419,7 +419,7 @@ it("submits configured development workflow without arbitrary command arguments"
     await screen.findByRole("button", { name: "Run project workflow" }),
   );
   await userEvent.click(
-    screen.getByLabelText("Include configured staging checks"),
+    screen.getByLabelText(/Deploy to enrolled isolated staging/),
   );
   await userEvent.click(
     screen.getByRole("button", { name: "Submit workflow" }),
