@@ -21,7 +21,7 @@ if not Path('/etc/serverhub/native-ci-node.json').exists():
     raise SystemExit('Run only after the guarded native installation suite')
 
 os.umask(0o077)
-root=Path('/opt/serverhub-operation-fixtures')
+root=Path('/var/lib/serverhub-operation-fixtures')
 root.mkdir(mode=0o700)
 output={}
 
@@ -109,7 +109,7 @@ plans={
             'previous':{'path':str(root),'compose_file':'compose-new.yaml','sha256':sha(root/'compose-new.yaml')},
             'candidate':{'path':str(root),'compose_file':'compose-bad.yaml','sha256':sha(root/'compose-bad.yaml')}}},
     'docker_backup_plans':{'fixture-backup':{'containers':['shub-ci-database'],'destination':str(destination),
-        'key_file':'/etc/serverhub/docker-backup.key','include_images':True,'allow_isolated_restore':True,
+        'key_file':'/etc/serverhub/docker-backup.key','allow_system_disk':True,'include_images':True,'allow_isolated_restore':True,
         'allowed_bind_roots':[str(root)]}}
 }
 plans_path=root/'plans.yaml'

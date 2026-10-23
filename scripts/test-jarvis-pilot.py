@@ -28,7 +28,7 @@ def run(argv, **kw):
         raise
 
 os.umask(0o077)
-root=Path('/opt/serverhub-jarvis-pilot')
+root=Path('/var/lib/serverhub-jarvis-pilot')
 root.mkdir(mode=0o755)
 root.chmod(0o755)
 source=root/'source'

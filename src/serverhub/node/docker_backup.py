@@ -47,7 +47,7 @@ def protected(path, *, create=False):
     for part in (path, *path.parents):
         meta = part.lstat()
         if stat.S_ISLNK(meta.st_mode) or meta.st_uid != 0 or meta.st_mode & 0o022:
-            raise DockerBackupError('Unsafe protected path or ancestor')
+            raise DockerBackupError(f'Unsafe protected path: {part} (uid={meta.st_uid}, mode={oct(meta.st_mode & 0o777)})')
     return path
 
 
@@ -168,6 +168,17 @@ class DockerBackups:
         self.destination = Path(self.plan.get('destination', '/mnt/storage/ServerHub-Backups'))
         if not self.destination.is_absolute() or not self.destination.is_dir():
             raise DockerBackupError('Backup destination must exist and be mounted/configured explicitly')
+        required_mount = self.plan.get('required_mount')
+        if required_mount:
+            mount = Path(required_mount)
+            if not mount.is_absolute() or not self.destination.is_relative_to(mount) or not os.path.ismount(mount):
+                raise DockerBackupError('Required backup mount is unavailable; refusing OS-disk fallback')
+        elif self.plan.get('allow_system_disk') is not True:
+            mount = self.destination
+            while not os.path.ismount(mount) and mount != mount.parent:
+                mount = mount.parent
+            if mount == Path('/'):
+                raise DockerBackupError('Backup destination is on the OS filesystem; enroll an actual mount or explicitly allow_system_disk')
         # NTFS may use synthetic POSIX ownership. Encryption/HMAC isolate contents,
         # but deletion resistance still requires a protected mount/off-host copy.
         if self.plan.get('allow_ntfs') is not True:
@@ -221,8 +232,9 @@ class DockerBackups:
 
     def _source(self, value):
         path = Path(value)
-        forbidden = ('/etc', '/root', '/proc', '/sys', '/dev', '/run', '/opt/serverhub', '/var/lib/serverhub-broker', '/var/backups/serverhub')
-        if not path.is_absolute() or path.is_symlink() or any(path.is_relative_to(p) for p in forbidden):
+        forbidden = ('/etc', '/root', '/proc', '/sys', '/dev', '/run', '/opt/serverhub', '/var/lib/serverhub-broker', '/var/backups/serverhub', '/var/lib/serverhub-api', '/var/lib/serverhub-worker', '/var/lib/serverhub-node', '/var/lib/serverhub-recovery', '/var/lib/serverhub-release')
+        if not path.is_absolute() or any(part.is_symlink() for part in (path,*path.parents)) or any(path.is_relative_to(p) for p in forbidden):
+
             raise DockerBackupError('Sensitive or symlinked backup source rejected')
         roots = [Path(root) for root in self.plan.get('allowed_bind_roots', [])]
         if not any(path.is_relative_to(root) and root != Path('/') for root in roots):

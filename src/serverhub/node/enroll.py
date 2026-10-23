@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import re
 import subprocess
 
 import yaml
@@ -48,7 +49,16 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
     directory.mkdir(mode=0o755,exist_ok=True)
     # Scope writable namespaces needed by approved distro package scripts. Root
     # approved artifacts are a powerful capability, never treated as unprivileged.
-    (directory/'20-administration.conf').write_text('[Service]\nReadWritePaths=/usr /etc /var/lib/dpkg /var/lib/apt /var/cache/apt\n'
+    writable=['/usr','/etc','/var/lib/dpkg','/var/lib/apt','/var/cache/apt']
+    backups=current.get('docker_backup_plans',{})
+    writable.extend(str(plan.get('destination','/mnt/storage/ServerHub-Backups')) for plan in backups.values())
+    if any(plan.get('allow_isolated_restore') is True for plan in backups.values()):
+        docker_root=subprocess.run(['docker','info','--format','{{.DockerRootDir}}'],
+            check=True,capture_output=True,text=True,timeout=15).stdout.strip()
+        writable.append(str(Path(docker_root)/'volumes'))
+    if any(not re.fullmatch(r'/[A-Za-z0-9_./-]+',path) or '..' in Path(path).parts for path in writable):
+        raise ValueError('Enrolled writable directories must be absolute without whitespace, traversal or systemd specifiers')
+    (directory/'20-administration.conf').write_text('[Service]\nReadWritePaths='+' '.join(sorted(set(writable)))+'\n'
         'ReadOnlyPaths=/etc/serverhub /opt/serverhub /etc/ssh /etc/systemd/system /etc/sudoers /etc/sudoers.d /etc/pam.d\n')
     protected('/var/lib/serverhub-broker/operations',create=True)
     protected('/var/lib/serverhub-staging',create=True)
