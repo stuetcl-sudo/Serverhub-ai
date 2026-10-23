@@ -89,6 +89,7 @@ jobs:
         if: failure()
         run: |
           sudo cat /var/lib/serverhub-broker/diagnostics/latest.json || true
+          sudo journalctl -k --grep='apparmor="DENIED"' --no-pager -n 10 || true
           sudo systemctl show serverhub-broker -p CapabilityBoundingSet -p NoNewPrivileges -p User -p Group -p SystemCallFilter
           sudo systemctl status serverhub-api serverhub-worker serverhub-broker --no-pager || true
           sudo journalctl -u serverhub-api -u serverhub-worker -u serverhub-broker --no-pager -n 100 || true

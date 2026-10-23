@@ -53,8 +53,11 @@ def autonomous_development(ctx,spec):
     manager=WorkspaceManager(root/'workspaces')
     workspace=manager.prepare(project,ctx.job.id)
     runner=SandboxRunner(project)
-    if not runner.preflight(workspace)['available']:
-        raise DevelopmentError('Bubblewrap isolation unavailable; no project code was executed')
+    availability=runner.preflight(workspace)
+    if not availability['available']:
+        ctx.log('Development sandbox preflight failed',redact(availability))
+        ctx.save_checkpoint({**(ctx.job.checkpoint or {}),'sandbox':redact(availability)})
+        raise DevelopmentError('Bubblewrap isolation unavailable: '+str(redact(availability.get('detail','')))[:1000]+'; no project code was executed')
     state=dict((ctx.job.checkpoint or {}).get('developer') or {})
     if not state:
         state={'step':0,'completed_calls':{},'messages':[{'role':'system','content':
