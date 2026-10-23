@@ -398,6 +398,8 @@ def autonomous_job(ctx, spec: dict) -> dict:
             reservation = budget.last_preflight
             ctx.reserve_model_request(reservation["estimated_input_tokens"] + reservation["output_reserve_tokens"],
                                       reservation["cost_reserve"])
+        state["model"] = routes[route].model
+        _save(ctx,state)
         ctx.log("AI provider request", {"model": routes[route].model, "provider": routes[route].kind,
                                        "model_route": route, "host_id": ctx.job.host_id})
         mark_execution()

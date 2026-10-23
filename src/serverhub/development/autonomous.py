@@ -182,6 +182,8 @@ def autonomous_development(ctx,spec):
                 ctx.record_model_usage(budget.tokens_used,budget.cost_used)
                 ctx.check_cancelled()
                 activity[0] = True
+                state['model']=cfg.model
+                save()
                 reservation=budget.last_preflight
                 ctx.reserve_model_request(reservation['estimated_input_tokens']+reservation['output_reserve_tokens'],reservation['cost_reserve'])
             try:

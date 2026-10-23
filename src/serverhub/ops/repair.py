@@ -91,6 +91,12 @@ def repair(source):
         if path.is_file() and not path.is_symlink():
             info = path.stat()
             snapshots[path] = (path.read_bytes(), info.st_mode & 0o777, info.st_uid, info.st_gid)
+    from .sandbox_setup import PROFILE_PATH, PROFILE
+    profile_path=Path(PROFILE_PATH)
+    introduced_profile=not profile_path.exists()
+    if profile_path.exists():
+        info=profile_path.stat()
+        snapshots[profile_path]=(profile_path.read_bytes(),info.st_mode&0o777,info.st_uid,info.st_gid)
     stable_watchdog=Path("/opt/serverhub/recovery/operation_watchdog.py")
     if stable_watchdog.exists():
         info=stable_watchdog.stat()
@@ -138,6 +144,8 @@ def repair(source):
             if not path.is_symlink():
                 path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
         ensure_staging_account(installer)
+        from .sandbox_setup import configure
+        configure(installer)
         for unit in recovery_units:
             installer.write("/etc/systemd/system/"+unit,(source/"packaging/systemd"/unit).read_text())
         installer._run(["systemctl","daemon-reload"])
@@ -218,6 +226,9 @@ def repair(source):
         }
     except BaseException:
         installer._activate(previous)
+        if introduced_profile and profile_path.exists() and profile_path.read_text()==PROFILE:
+            subprocess.run(["/usr/sbin/apparmor_parser","--remove",str(profile_path)],check=False,capture_output=True,timeout=30)
+            profile_path.unlink()
         if introduced_units:
             subprocess.run(["systemctl","disable","--now","serverhub-operation-watchdog.timer"],check=False,capture_output=True,timeout=30)
             for path in introduced_units:

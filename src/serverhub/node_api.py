@@ -216,7 +216,12 @@ def commands(node: Host = Depends(current_node), db=Depends(get_db)):
             {
                 "id": command.id,
                 "audit_context": {"command_id": command.id, "job_id": command.job_id, "host_id": node.id,
-                                  "operator_id": db.get(Job, command.job_id).owner_id},
+                                  "operator_id": db.get(Job, command.job_id).owner_id,
+                                  "project": db.get(Job, command.job_id).project or "",
+                                  "tool": command.operation,
+                                  "model": str(((db.get(Job, command.job_id).checkpoint or {}).get("developer")
+                                                or (db.get(Job, command.job_id).checkpoint or {}).get("ai")
+                                                or {}).get("model","deterministic"))[:200]},
                 "operation": command.operation,
                 "arguments": command.arguments,
                 "idempotency_key": command.idempotency_key,

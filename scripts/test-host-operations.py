@@ -190,10 +190,13 @@ try:
     journal.write_text(json.dumps({'id':identity,'kind':'docker_start','containers':[container],
         'state':'armed','deadline':time.time()-1}))
     journal.chmod(0o600)
-    for _ in range(50):
+    assert run(['systemctl','is-active','serverhub-operation-watchdog.timer'])=='active'
+    for _ in range(80):
         if json.loads(journal.read_text())['state']=='reverted':
             break
         time.sleep(1)
+    if json.loads(journal.read_text())['state']!='reverted':
+        print('WATCHDOG_DIAGNOSTIC='+run(['journalctl','-u','serverhub-operation-watchdog.service','--no-pager','-n','12']),flush=True)
     assert json.loads(journal.read_text())['state']=='reverted'
     assert run(['docker','inspect','--format','{{.State.Running}}',container])=='true'
     output['independent_watchdog_abandoned_offline_operation']='passed'

@@ -26,7 +26,7 @@ def protected(path):
 def run(argv):
     subprocess.run(argv, check=True, timeout=180, stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                   env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','DEBIAN_FRONTEND':'noninteractive'})
+                   env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','DEBIAN_FRONTEND':'noninteractive','HOME':'/nonexistent'})
 
 
 def launch_stage(spec):
@@ -157,7 +157,7 @@ def tick(directory):
                 os.replace(temporary, path)
                 results.append({'id':path.stem,'state':'reverted'})
             except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
-                results.append({'id':path.stem,'state':'recovery_failed','error':type(error).__name__})
+                results.append({'id':path.stem,'state':'recovery_failed','error':type(error).__name__, 'reason':str(error)[:500]})
     return results
 
 

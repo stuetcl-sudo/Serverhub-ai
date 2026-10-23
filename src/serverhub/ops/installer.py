@@ -250,6 +250,9 @@ class Installer:
     def _configuration(
         self, api_password, worker_password, migrate_password, *, node_uid, node_gid=None, staged=False
     ):
+        if self.role == "controller":
+            from .sandbox_setup import configure
+            configure(self,staged=staged)
         for unit in self.units():
             self.write("/etc/systemd/system/" + unit, (self.source / "packaging/systemd" / unit).read_text())
         if self.ai_identity and self.role == "controller":
@@ -472,7 +475,7 @@ class Installer:
                     "Unsupported OS/architecture/Python. Controller requires Ubuntu 24.04 x86_64 and Python 3.12; run --check"
                 )
             if install_dependencies and "dependencies" not in state["completed"]:
-                packages = ["python3-venv", "ca-certificates", "iproute2", "procps", "util-linux", "bubblewrap", "git"]
+                packages = ["python3-venv", "ca-certificates", "iproute2", "procps", "util-linux", "bubblewrap", "git", "apparmor"]
                 if self.role == "controller":
                     packages += ["postgresql-16", "postgresql-client-16"]
                 phase(
