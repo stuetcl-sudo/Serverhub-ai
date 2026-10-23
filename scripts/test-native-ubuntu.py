@@ -333,6 +333,23 @@ with httpx.Client(base_url="https://127.0.0.1:9080", verify=ssl.create_default_c
 # Restart again to prove no terminal-held tunnel or inherited TLS process exists.
 subprocess.run(["systemctl", "restart", "serverhub-api"], check=True)
 installer._healthchecks(previous)
+# Exercise the independent systemd watchdog in a separate root process with
+# the activation process absent. Only this disposable runner's releases are used.
+subprocess.run(["systemctl", "stop", "serverhub-release-watchdog.timer"], check=True)
+pending_path = Path("/var/lib/serverhub-release/pending.json")
+abandoned = json.loads(pending_path.read_text())
+assert Path(abandoned["previous"]).resolve() == previous
+candidate = Path(abandoned["candidate"])
+assert candidate.is_relative_to(Path("/opt/serverhub/releases")) and candidate.is_dir()
+abandoned["state"], abandoned["deadline"] = "armed", time.time() - 1
+pending_path.write_text(json.dumps(abandoned))
+installer._activate(candidate)
+subprocess.run(["systemctl", "start", "serverhub-release-watchdog.service"], check=True)
+assert Path("/opt/serverhub/current").resolve() == previous
+assert json.loads(pending_path.read_text())["state"] == "reverted"
+installer._healthchecks(previous)
+assert verify_broker_audit("/var/lib/serverhub-broker/audit/events.jsonl")["valid"]
+subprocess.run(["systemctl", "start", "serverhub-release-watchdog.timer"], check=True)
 # No production systems are contacted. Emit only non-secret result evidence.
 print(
     json.dumps(
@@ -352,6 +369,7 @@ print(
             "unauthorized_restart": unauthorized.status_code,
             "upgrade": upgraded["state"],
             "failed_upgrade_rollback": "passed",
+            "independent_watchdog_rollback": "passed",
             "database_backup_id": upgraded["backup_id"],
         }
     )
