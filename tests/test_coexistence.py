@@ -249,3 +249,30 @@ def test_broker_migration_retargets_proven_ai_only_and_blocks_unreviewed_plan_re
     assert result['allowed_containers'] == ['unrelated']
     with pytest.raises(ConflictError, match='registered broker plan'):
         migrate_broker_services({**config, 'package_plans': {'name': {'verify': ['systemctl', 'is-active', 'serverhub-worker.service']}}}, units)
+
+
+@pytest.mark.parametrize('missing', ['wheel', 'frontend'])
+def test_migration_rejects_missing_build_artifact_before_systemd(tmp_path, monkeypatch, missing):
+    """Exercise migrate() itself; no real systemd, journal, or host mutation."""
+    import serverhub.ops.migrate_units as migration
+
+    source = tmp_path / 'checkout'
+    (source / 'dist').mkdir(parents=True)
+    (source / 'frontend/dist').mkdir(parents=True)
+    if missing != 'wheel':
+        (source / 'dist/serverhub_ai_os-1.0.0-py3-none-any.whl').write_bytes(b'test')
+    if missing != 'frontend':
+        (source / 'frontend/dist/index.html').write_text('<html></html>')
+
+    monkeypatch.setattr(migration.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(migration, 'JOURNAL', tmp_path / 'absent-migration-journal.json')
+    monkeypatch.setattr(migration, 'plan', lambda candidate: {
+        'units': [], 'unsafe_runtime_paths': [], 'previous': '/not-used',
+    })
+
+    systemd_calls = []
+    monkeypatch.setattr(migration, '_run', lambda args: systemd_calls.append(args))
+    with pytest.raises(ConflictError, match='prebuilt'):
+        migration.migrate(source)
+    assert systemd_calls == []
+    assert not migration.JOURNAL.exists()
