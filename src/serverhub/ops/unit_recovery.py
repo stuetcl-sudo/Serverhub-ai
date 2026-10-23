@@ -5,6 +5,7 @@ import os
 import time
 import tempfile
 import subprocess
+import shutil
 from pathlib import Path
 JOURNAL = Path('/var/lib/serverhub-install/unit-migration.json')
 CLAIM = '/var/lib/serverhub-install/ownership.json'
@@ -57,6 +58,8 @@ def recover(*, force=False):
         target.parent.mkdir(parents=True, exist_ok=True)
         _atomic_file(target, base64.b64decode(saved['content']), saved['mode'], saved['uid'], saved['gid'])
     for unit in data['units']:
+        if unit['old'] == unit['new']:
+            continue
         Path('/etc/systemd/system', unit['new']).unlink(missing_ok=True)
         directory = Path('/etc/systemd/system', unit['new'] + '.d')
         for saved_path in data['files']:
@@ -70,7 +73,22 @@ def recover(*, force=False):
     replacement.unlink(missing_ok=True)
     replacement.symlink_to(data['previous'])
     os.replace(replacement, current)
-    Path(CLAIM).unlink(missing_ok=True)
+    if not data.get('previous_claim'):
+        Path(CLAIM).unlink(missing_ok=True)
+    for item in reversed(data.get('identities', [])):
+        if item.get('copied'):
+            target = Path(item['destination'])
+            if target.is_symlink():
+                raise RuntimeError('Refusing symlinked migration rollback data')
+            if target.exists():
+                shutil.rmtree(target)
+        if item.get('created'):
+            if subprocess.run(['getent', 'passwd', item['new']], capture_output=True).returncode == 0:
+                _run(['userdel', item['new']])
+            # userdel may remove the dedicated group on Ubuntu.
+            result = subprocess.run(['getent', 'group', item['new']], capture_output=True)
+            if result.returncode == 0:
+                _run(['groupdel', item['new']])
     _run(['systemctl', 'daemon-reload'])
     for unit in data['units']:
         if unit['enabled']:

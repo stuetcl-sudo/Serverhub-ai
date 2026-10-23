@@ -55,8 +55,8 @@ def test_node_stage_does_not_install_controller_credentials(tmp_path):
 def test_worker_and_node_are_not_root_or_docker_group():
     worker = (SOURCE / "packaging/systemd/serverhub-ai-worker.service").read_text()
     node = (SOURCE / "packaging/systemd/serverhub-ai-node.service").read_text()
-    assert "User=serverhub-worker" in worker
-    assert "User=serverhub-node" in node
+    assert "User=serverhub-ai-worker" in worker
+    assert "User=serverhub-ai-node" in node
     assert "NoNewPrivileges=true" in worker
     assert "ProtectSystem=strict" in worker
     assert "CapabilityBoundingSet=\n" in worker

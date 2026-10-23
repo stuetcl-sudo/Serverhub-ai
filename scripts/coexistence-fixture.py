@@ -11,6 +11,7 @@ import subprocess
 import time
 
 BASELINE = Path('/var/lib/serverhub-control-ci/baseline.json')
+IDENTITIES = {'serverhub-broker': 'serverhub-mcp', 'serverhub-docker-ro': 'serverhub-telemetry', 'serverhub-worker': 'serverhub-telemetry'}
 NAMES = ['serverhub-broker.service', 'serverhub-docker-ro.service', 'serverhub-worker.service']
 
 
@@ -24,8 +25,8 @@ def guard():
 
 
 def snapshot():
-    result = {'files': {}, 'units': {}, 'identity': run('getent', 'passwd', 'serverhub-control-ci'),
-              'group': run('getent', 'group', 'serverhub-control-ci')}
+    result = {'files': {}, 'units': {}, 'identities': {name: run('getent', 'passwd', name) for name in IDENTITIES},
+              'groups': {name: run('getent', 'group', name) for name in {*IDENTITIES, *IDENTITIES.values()}}}
     for path in [*Path('/opt/serverhub-control').rglob('*'),
                  *[Path('/etc/systemd/system', name) for name in NAMES]]:
         if path.is_file():
@@ -56,13 +57,20 @@ def start():
     for name in NAMES:
         if run('systemctl', 'show', name, '--property=LoadState', '--value') != 'not-found':
             raise RuntimeError('Refusing existing Control service')
-    subprocess.run(['useradd', '--system', '--user-group', '--home-dir', '/nonexistent', '--shell', '/usr/sbin/nologin', 'serverhub-control-ci'], check=True)
+    # Match the production identities, including the worker's private passwd
+    # group and its separately selected systemd telemetry group. Never reuse an
+    # existing account: this fixture is allowed only on a blank disposable VM.
+    for group in {*IDENTITIES, *IDENTITIES.values()}:
+        subprocess.run(['groupadd', '--system', group], check=True)
+    for account in IDENTITIES:
+        subprocess.run(['useradd', '--system', '--gid', account, '--home-dir', '/nonexistent',
+                        '--shell', '/usr/sbin/nologin', account], check=True)
     tree = Path('/opt/serverhub-control')
     tree.mkdir(mode=0o755)
     (tree / 'sentinel').write_text('Control fixture untouched\n')
     for name, port in zip(NAMES, [18765, 18766, None]):
         command = f'/usr/bin/python3 -m http.server {port} --bind 127.0.0.1 --directory /opt/serverhub-control' if port else '/usr/bin/sleep infinity'
-        Path('/etc/systemd/system', name).write_text('[Unit]\nDescription=Disposable Control coexistence fixture\n[Service]\nUser=serverhub-control-ci\nExecStart=' + command + '\n[Install]\nWantedBy=multi-user.target\n')
+        Path('/etc/systemd/system', name).write_text('[Unit]\nDescription=Disposable Control coexistence fixture\n[Service]\nUser=' + name.removesuffix('.service') + '\nGroup=' + IDENTITIES[name.removesuffix('.service')] + '\nExecStart=' + command + '\n[Install]\nWantedBy=multi-user.target\n')
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
     subprocess.run(['systemctl', 'enable', '--now', *NAMES], check=True)
     time.sleep(1)
@@ -96,12 +104,12 @@ def conflicts(source):
     rejected('service')
     unit.unlink()
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
-    subprocess.run(['useradd', '--system', '--no-user-group', '--gid', 'nogroup', '--home-dir', '/nonexistent', '--shell', '/usr/sbin/nologin', 'serverhub-api'], check=True)
+    subprocess.run(['useradd', '--system', '--no-user-group', '--gid', 'nogroup', '--home-dir', '/nonexistent', '--shell', '/usr/sbin/nologin', 'serverhub-ai-api'], check=True)
     rejected('user')
-    subprocess.run(['userdel', 'serverhub-api'], check=True)
-    subprocess.run(['groupadd', '--system', 'serverhub-worker'], check=True)
+    subprocess.run(['userdel', 'serverhub-ai-api'], check=True)
+    subprocess.run(['groupadd', '--system', 'serverhub-ai-worker'], check=True)
     rejected('group')
-    subprocess.run(['groupdel', 'serverhub-worker'], check=True)
+    subprocess.run(['groupdel', 'serverhub-ai-worker'], check=True)
     import socket
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 9080))

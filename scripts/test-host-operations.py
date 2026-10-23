@@ -144,7 +144,7 @@ def job(operation,arguments,expected='succeeded'):
     response.raise_for_status()
     identity=response.json()['id']
     for _ in range(60):
-        run(['runuser','-u','serverhub-node','--',python,'-c',
+        run(['runuser','-u','serverhub-ai-node','--',python,'-c',
              'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],cwd='/')
         result=client.get('/api/jobs/'+identity,headers=headers).json()
         if result['state'] in {'succeeded','partial','failed','waiting_approval'}:
@@ -175,7 +175,7 @@ try:
     finally:
         client.post('/api/emergency-stop',headers=headers,json={'enabled':False,'reason':'Disposable native acceptance finished'}).raise_for_status()
     for _ in range(30):
-        run(['runuser','-u','serverhub-node','--',python,'-c',
+        run(['runuser','-u','serverhub-ai-node','--',python,'-c',
              'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],cwd='/')
         resumed=client.get('/api/jobs/'+scheduled.json()['id'],headers=headers).json()
         if resumed['state'] in {'succeeded','failed','partial'}:

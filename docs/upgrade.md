@@ -116,3 +116,16 @@ not itself independent approval. The tool packages deterministic web/migration
 archives and signs the manifest. No key is generated or stored in the repository.
 
 See [Control coexistence and legacy unit migration](control-coexistence.md) before installing alongside ServerHub Control or upgrading generic `serverhub-*.service` AI OS units. New AI OS services use `serverhub-ai-*`; never stop or replace Control units.
+
+
+### Issue #7 identity namespace boundary
+
+Releases through `7da8bea` used `serverhub-worker` and related Linux identities,
+even with AI-prefixed systemd units. Do **not** rerun apply/repair to adopt those
+identities. Follow [the explicit migration and rollback procedure](control-coexistence.md).
+The new ownership claim is namespace 3; old namespace-2 claims are rejected by
+ordinary upgrade. Database names, PostgreSQL roles and passwords are preserved.
+The standalone migration timer restores the old claim, config, units and original
+homes after an interrupted/unverified conversion. After verified migration,
+select only identity-compatible releases for ordinary code rollback; do not
+restore generic Control-conflicting services or legacy identity defaults.

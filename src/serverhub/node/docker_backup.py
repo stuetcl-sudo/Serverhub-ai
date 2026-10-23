@@ -232,7 +232,7 @@ class DockerBackups:
 
     def _source(self, value):
         path = Path(value)
-        forbidden = ('/etc', '/root', '/proc', '/sys', '/dev', '/run', '/opt/serverhub', '/var/lib/serverhub-broker', '/var/backups/serverhub', '/var/lib/serverhub-api', '/var/lib/serverhub-worker', '/var/lib/serverhub-node', '/var/lib/serverhub-recovery', '/var/lib/serverhub-release')
+        forbidden = ('/etc', '/root', '/proc', '/sys', '/dev', '/run', '/opt/serverhub', '/var/lib/serverhub-broker', '/var/backups/serverhub', '/var/lib/serverhub-ai-api', '/var/lib/serverhub-ai-worker', '/var/lib/serverhub-ai-node', '/var/lib/serverhub-recovery', '/var/lib/serverhub-release')
         if not path.is_absolute() or any(part.is_symlink() for part in (path,*path.parents)) or any(path.is_relative_to(p) for p in forbidden):
 
             raise DockerBackupError('Sensitive or symlinked backup source rejected')

@@ -8,7 +8,7 @@ import pytest
 
 from serverhub.ops.coexistence import ConflictError, inspect, require_safe, write_claim
 from serverhub.ops.installer import Installer
-from serverhub.ops.migrate_units import old_name, plan
+from serverhub.ops.migrate_units import old_name, plan, legacy_resources
 
 SOURCE = Path(__file__).resolve().parents[1]
 
@@ -32,7 +32,7 @@ def test_control_units_and_tree_are_not_installer_resources(tmp_path):
     assert 'RuntimeDirectory=serverhub-ai-broker' in (units / 'serverhub-ai-broker.service').read_text()
 
 
-@pytest.mark.parametrize('path', ['/etc/serverhub', '/opt/serverhub', '/var/lib/serverhub-worker',
+@pytest.mark.parametrize('path', ['/etc/serverhub', '/opt/serverhub', '/var/lib/serverhub-ai-worker',
                                   '/var/lib/serverhub-broker', '/run/serverhub-ai-broker'])
 def test_foreign_paths_rejected_without_mutation(tmp_path, path):
     target = tmp_path / path.lstrip('/')
@@ -71,6 +71,7 @@ def legacy(tmp_path):
     installer = Installer(SOURCE)
     for name in installer.units():
         content = (SOURCE / 'packaging/systemd' / name).read_text()
+        content = legacy_resources(content)
         for new in installer.units():
             content = content.replace(new, old_name(new))
         content = content.replace('/run/serverhub-ai-broker', '/run/serverhub-broker').replace(
@@ -319,3 +320,89 @@ def test_migration_journal_rejects_symlink_directory(tmp_path, monkeypatch):
     with pytest.raises(ConflictError, match='Unsafe migration journal directory'):
         migration._save({'state': 'armed'})
     assert not (actual / 'unit-migration.json').exists()
+
+
+def test_actual_production_control_identities_are_not_ai_resources(tmp_path, monkeypatch):
+    """Issue #7: real passwd properties and all three active Control units."""
+    import serverhub.ops.coexistence as module
+    import socket
+    accounts = {
+        'serverhub-worker': SimpleNamespace(pw_name='serverhub-worker', pw_uid=994,
+            pw_gid=982, pw_dir='/nonexistent', pw_shell='/usr/sbin/nologin'),
+        'serverhub-broker': SimpleNamespace(pw_uid=993, pw_gid=981, pw_dir='/nonexistent'),
+        'serverhub-docker-ro': SimpleNamespace(pw_uid=992, pw_gid=980, pw_dir='/nonexistent'),
+    }
+    groups = {'serverhub-worker': SimpleNamespace(gr_gid=982, gr_mem=[]),
+              'serverhub-mcp': SimpleNamespace(gr_gid=981, gr_mem=[]),
+              'serverhub-telemetry': SimpleNamespace(gr_gid=980, gr_mem=[])}
+    looked_up, calls = [], []
+    def lookup(entries, name):
+        looked_up.append(name)
+        if name not in entries:
+            raise KeyError(name)
+        return entries[name]
+    monkeypatch.setattr(module.pwd, 'getpwnam', lambda name: lookup(accounts, name))
+    monkeypatch.setattr(module.grp, 'getgrnam', lambda name: lookup(groups, name))
+    monkeypatch.setattr(module, 'protected', lambda *args, **kwargs: None)
+    class Probe:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def bind(self, address): pass
+    monkeypatch.setattr(socket, 'socket', lambda *args: Probe())
+    def runner(argv, **kwargs):
+        calls.append(argv)
+        assert argv[:2] == ['systemctl', 'show'] or argv[0] == 'runuser'
+        if argv[0] == 'runuser':
+            assert argv[-1].startswith('SELECT ')
+            return SimpleNamespace(returncode=0, stdout='')
+        # Control services really exist and are active, but AI never queries or
+        # changes them: only its own reserved namespace enters unit checks.
+        assert argv[2].startswith('serverhub-ai-')
+        return SimpleNamespace(returncode=0, stdout='LoadState=not-found\nFragmentPath=\nDropInPaths=\n')
+    control = tmp_path / 'opt/serverhub-control'
+    control.mkdir(parents=True)
+    (control / 'sentinel').write_bytes(b'control untouched')
+    units = tmp_path / 'etc/systemd/system'
+    units.mkdir(parents=True)
+    for name in ('broker', 'docker-ro', 'worker'):
+        (units / ('serverhub-' + name + '.service')).write_text(
+            '[Service]\nUser=serverhub-' + name + '\nExecStart=/opt/serverhub-control/venv/bin/python -m hub.worker\n')
+    before = {str(p): (p.read_bytes(), p.stat().st_mode, p.stat().st_uid, p.stat().st_gid)
+              for p in tmp_path.rglob('*') if p.is_file()}
+    assert module.require_safe(root=tmp_path, units=Installer(SOURCE).units(), runner=runner)['safe']
+    assert not set(looked_up) & set(accounts)
+    assert before == {str(p): (p.read_bytes(), p.stat().st_mode, p.stat().st_uid, p.stat().st_gid)
+                      for p in tmp_path.rglob('*') if p.is_file()}
+    assert calls
+
+
+def test_all_new_runtime_identity_and_path_references_are_isolated():
+    from serverhub.ops.installer import ACCOUNTS
+    from serverhub.ops.coexistence import ACCOUNTS as RESERVED
+    assert set(ACCOUNTS) <= set(RESERVED)
+    assert all(name.startswith('serverhub-ai-') for name in ACCOUNTS)
+    assert all(home.startswith('/var/lib/serverhub-ai-') for home in ACCOUNTS.values())
+    for unit in (SOURCE / 'packaging/systemd').glob('*.service'):
+        for line in unit.read_text().splitlines():
+            if line.startswith(('User=', 'Group=')):
+                assert line.split('=', 1)[1] == 'root' or line.split('=', 1)[1].startswith('serverhub-ai-')
+
+
+def test_namespace_two_claim_requires_explicit_migration(tmp_path, monkeypatch):
+    import serverhub.ops.coexistence as module
+    from serverhub.ops.migrate_units import previous_claim
+    monkeypatch.setattr(module, 'protected', lambda *args, **kwargs: None)
+    import serverhub.ops.migrate_units as migration
+    monkeypatch.setattr(migration, 'protected', lambda *args, **kwargs: None)
+    write_claim(tmp_path)
+    target = tmp_path / module.CLAIM.lstrip('/')
+    value = json.loads(target.read_text())
+    value['namespace'] = 2
+    value['accounts'] = [legacy_resources(x) for x in value['accounts']]
+    value['paths'] = [legacy_resources(x) for x in value['paths']]
+    target.write_text(json.dumps(value))
+    before = target.read_bytes()
+    with pytest.raises(ConflictError, match='ownership claim'):
+        module.claim(tmp_path)
+    assert previous_claim(tmp_path) == value
+    assert target.read_bytes() == before

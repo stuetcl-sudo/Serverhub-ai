@@ -101,6 +101,10 @@ jobs:
           sudo systemctl status serverhub-ai-api serverhub-ai-worker serverhub-ai-broker serverhub-ai-operation-watchdog.timer serverhub-ai-operation-watchdog.service --no-pager || true
           sudo journalctl -u serverhub-ai-api -u serverhub-ai-worker -u serverhub-ai-broker -u serverhub-ai-operation-watchdog.service --no-pager -n 100 || true
   legacy-unit-migration:
+    strategy:
+      fail-fast: false
+      matrix:
+        legacy: ['1905abcc244767cc58a2dbbf950e033be940c6ed', '7da8bead09c01f9f174c70b937af7cb18ce7cbd8']
     runs-on: ubuntu-24.04
     needs: frontend
     timeout-minutes: 35
@@ -114,7 +118,7 @@ jobs:
         run: ./scripts/install-ubuntu.sh --build-only
       - name: Prepare exact previous release artifacts
         run: |
-          git worktree add --detach "$RUNNER_TEMP/serverhub-legacy" 1905abcc244767cc58a2dbbf950e033be940c6ed
+          git worktree add --detach "$RUNNER_TEMP/serverhub-legacy" ${{ matrix.legacy }}
           cp -a frontend/dist "$RUNNER_TEMP/serverhub-legacy/frontend/dist"
           .build-venv/bin/python -m build "$RUNNER_TEMP/serverhub-legacy"
       - name: Actual old installation, failed migration recovery and successful retry

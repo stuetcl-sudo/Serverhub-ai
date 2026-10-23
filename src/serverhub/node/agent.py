@@ -110,7 +110,7 @@ class NodeAgent:
     def __init__(self, config: dict, *, transport: httpx.BaseTransport | None = None):
         self.config = config
         self.controller = validate_controller_url(config.get("controller_url", ""), allow_loopback_http=config.get("allow_loopback_http", False))
-        self.state = Path(config.get("state_dir", "/var/lib/serverhub-node"))
+        self.state = Path(config.get("state_dir", "/var/lib/serverhub-ai-node"))
         if not self.state.is_absolute() or self.state.is_symlink():
             raise AgentError("state directory must be absolute and not a symlink")
         self.state.mkdir(mode=0o700, parents=True, exist_ok=True)

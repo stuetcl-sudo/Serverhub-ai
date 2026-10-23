@@ -141,7 +141,7 @@ enroll = client.post("/api/nodes/enrollment", json={"name": "native-ci-node"}, h
 enroll.raise_for_status()
 nodeconfig = {
     "name": "native-ci-node",
-    "state_dir": "/var/lib/serverhub-node",
+    "state_dir": "/var/lib/serverhub-ai-node",
     "controller_url": "http://127.0.0.1:9080",
     "allow_loopback_http": True,
     "broker_socket": "/run/serverhub-ai-broker/control.sock",
@@ -150,14 +150,14 @@ nodeconfig = {
 config = Path("/etc/serverhub/native-ci-node.json")
 config.write_text(json.dumps(nodeconfig))
 config.chmod(0o640)
-node = pwd.getpwnam("serverhub-node")
+node = pwd.getpwnam("serverhub-ai-node")
 os.chown(config, 0, node.pw_gid)
 python = "/opt/serverhub/current/venv/bin/python"
 subprocess.run(
     [
         "runuser",
         "-u",
-        "serverhub-node",
+        "serverhub-ai-node",
         "--",
         python,
         "-c",
@@ -207,7 +207,7 @@ status_job = client.post("/api/jobs", headers=adult_headers, json={"kind": "oper
     "spec": {"operation": "systemd.status", "arguments": {"service": "serverhub-ai-api.service"}}})
 status_job.raise_for_status()
 for _ in range(30):
-    subprocess.run(["runuser", "-u", "serverhub-node", "--", python, "-c",
+    subprocess.run(["runuser", "-u", "serverhub-ai-node", "--", python, "-c",
         'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],
         cwd="/", check=True)
     broker_result = client.get("/api/jobs/" + status_job.json()["id"], headers=adult_headers).json()
@@ -264,7 +264,7 @@ audit_job = client.post("/api/jobs", headers=adult_headers, json={"kind": "opera
     "spec": {"operation": "host.audit", "arguments": {}}, "token_budget": 0, "cost_budget": 0, "time_limit": 180})
 audit_job.raise_for_status()
 for _ in range(30):
-    subprocess.run(["runuser", "-u", "serverhub-node", "--", python, "-c",
+    subprocess.run(["runuser", "-u", "serverhub-ai-node", "--", python, "-c",
         'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],
         cwd="/", check=True)
     audit_result = client.get("/api/jobs/" + audit_job.json()["id"], headers=adult_headers).json()
@@ -287,13 +287,13 @@ subprocess.run(["systemctl","disable","--now","serverhub-ai-operation-watchdog.t
 for unit in ("serverhub-ai-operation-watchdog.service","serverhub-ai-operation-watchdog.timer"):
     Path("/etc/systemd/system",unit).unlink()
 subprocess.run(["systemctl","daemon-reload"],check=True)
-subprocess.run(["userdel","serverhub-staging"],check=True)
+subprocess.run(["userdel","serverhub-ai-staging"],check=True)
 legacy_models = Path("/etc/serverhub/models.yaml")
 legacy_models.write_text("routes:\n  default: obsolete-provider-reference\n")
 legacy_models.chmod(0o600)
 upgraded = repair(source)
 assert upgraded["state"] == "upgraded"
-assert subprocess.run(["id","serverhub-staging"],capture_output=True).returncode==0
+assert subprocess.run(["id","serverhub-ai-staging"],capture_output=True).returncode==0
 assert subprocess.check_output(["systemctl","is-active","serverhub-ai-operation-watchdog.timer"],text=True).strip()=="active"
 assert upgraded["models_configuration"] == "needs_setup"
 assert legacy_models.stat().st_mode & 0o777 == 0o600
@@ -324,7 +324,7 @@ installer._healthchecks(previous)
 # certificates and access configuration belong only to this disposable runner.
 cert_dir = Path("/etc/serverhub/tls")
 cert_dir.mkdir(mode=0o750)
-api_gid = grp.getgrnam("serverhub-api").gr_gid
+api_gid = grp.getgrnam("serverhub-ai-api").gr_gid
 os.chown(cert_dir, 0, api_gid)
 cert, key = cert_dir / "cert.pem", cert_dir / "key.pem"
 subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
@@ -357,7 +357,7 @@ config.write_text(json.dumps(nodeconfig))
 
 
 def poll_acceptance_node():
-    subprocess.run(['runuser', '-u', 'serverhub-node', '--', python, '-c',
+    subprocess.run(['runuser', '-u', 'serverhub-ai-node', '--', python, '-c',
         'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],
         cwd='/', check=True)
 

@@ -86,7 +86,7 @@ def _deploy(arguments, config, state, identity, artifact):
     plan=config.get('staging_projects',{}).get(target)
     if not isinstance(plan,dict):
         raise DockerBackupError('Staging project not enrolled by root')
-    source=Path(plan.get('candidate_root','/var/lib/serverhub-worker/development/candidates'))
+    source=Path(plan.get('candidate_root','/var/lib/serverhub-ai-worker/development/candidates'))
     data=snapshot_candidate(source,artifact_id,artifact)
     if data.get('project')!=target or not data.get('tests_passed') or not data.get('independent_checks_passed'):
         artifact.unlink(missing_ok=True)
@@ -94,13 +94,13 @@ def _deploy(arguments, config, state, identity, artifact):
     health={'port':int(plan['port']),'path':plan.get('health_path','/'),'contains':plan.get('health_contains','')}
     if not 1024<=health['port']<=65535 or not isinstance(health['path'],str) or not health['path'].startswith('/') or len(health['path'])>200 or not isinstance(health['contains'],str) or len(health['contains'])>1000:
         raise DockerBackupError('Invalid enrolled health endpoint')
-    group='serverhub-project-'+hashlib.sha256(target.encode()).hexdigest()[:12]
+    group='serverhub-ai-project-'+hashlib.sha256(target.encode()).hexdigest()[:12]
     if plan.get('project_group')!=group:
         raise DockerBackupError('Re-enroll the staging project to establish its isolated source group')
     project_gid=grp.getgrnam(group).gr_gid
     from .administration import approved_file
     acceptance=approved_file(plan['acceptance_script'])
-    base=protected('/var/lib/serverhub-staging',create=True)
+    base=protected('/var/lib/serverhub-ai-staging',create=True)
     os.chown(base,0,project_gid)
     base.chmod(0o755)
     releases=base/'releases'
@@ -123,19 +123,19 @@ def _deploy(arguments, config, state, identity, artifact):
     secure_release_permissions(release,project_gid)
     # Root chooses this immutable acceptance executable; it runs as a separate
     # nonprivileged identity, outside the AI worker's writable receipt state.
-    command('systemd-run','--quiet','--wait','--pipe','--collect','--unit','serverhub-check-'+identity,
-            '--property','User=serverhub-staging','--property','Group='+group,
+    command('systemd-run','--quiet','--wait','--pipe','--collect','--unit','serverhub-ai-check-'+identity,
+            '--property','User=serverhub-ai-staging','--property','Group='+group,
             '--property','NoNewPrivileges=yes','--property','CapabilityBoundingSet=',
             '--property','ProtectSystem=strict','--property','ProtectHome=yes','--property','PrivateNetwork=yes',
             '--property','PrivateTmp=yes','--property','MemoryMax=256M','--property','TasksMax=32',
             '--property','RuntimeMaxSec=90',
-            '--property','InaccessiblePaths=-/etc/serverhub -/var/lib/serverhub-worker -/var/lib/serverhub-broker -/var/run/docker.sock',
+            '--property','InaccessiblePaths=-/etc/serverhub -/var/lib/serverhub-ai-worker -/var/lib/serverhub-broker -/var/run/docker.sock',
             '--','/usr/bin/python3','-I',str(acceptance),str(release),timeout=100)
-    data_dir=Path('/var/lib/serverhub-stage-data')/identity
+    data_dir=Path('/var/lib/serverhub-ai-stage-data')/identity
     state=protected(config.get('operations_state','/var/lib/serverhub-broker/operations'),create=True)
     current=state/('stage-'+target+'.state')
     previous=json.loads(current.read_text()) if current.exists() else None
-    launch={'unit':f'serverhub-stage-{target}-{identity[:12]}','directory':str(release),
+    launch={'unit':f'serverhub-ai-stage-{target}-{identity[:12]}','directory':str(release),
             'data_directory':str(data_dir),'argv':plan['argv'],
             'environment':{**plan.get('environment',{}),'PYTHONPATH':str(release/'runtime'),'DB_PATH':str(data_dir/'application.db')},
             'project_group':group,'memory_mb':min(int(plan.get('memory_mb',1024)),4096),'health':health}

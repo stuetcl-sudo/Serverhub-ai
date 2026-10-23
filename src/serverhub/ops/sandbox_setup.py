@@ -1,8 +1,8 @@
 """Root-installed AppArmor label for the already isolated development runner."""
 from pathlib import Path
 
-PROFILE_PATH='/etc/apparmor.d/serverhub-build'
-PROFILE='abi <abi/4.0>,\nprofile serverhub-build flags=(unconfined) {\n  userns,\n}\n'
+PROFILE_PATH='/etc/apparmor.d/serverhub-ai-build'
+PROFILE='abi <abi/4.0>,\nprofile serverhub-ai-build flags=(unconfined) {\n  userns,\n}\n'
 
 
 def configure(installer, *, staged=False):
@@ -18,7 +18,7 @@ def configure(installer, *, staged=False):
     destination=Path(PROFILE_PATH)
     if destination.exists() and destination.read_text()!=PROFILE:
         from .installer import InstallError
-        raise InstallError('Existing serverhub-build AppArmor profile differs; review it explicitly before upgrade')
+        raise InstallError('Existing serverhub-ai-build AppArmor profile differs; review it explicitly before upgrade')
     installer.write(PROFILE_PATH,PROFILE,0o644)
     installer._run(['/usr/sbin/apparmor_parser','--replace',PROFILE_PATH])
-    return {'status':'loaded','profile':'serverhub-build'}
+    return {'status':'loaded','profile':'serverhub-ai-build'}

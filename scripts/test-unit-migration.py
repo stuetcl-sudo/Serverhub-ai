@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from serverhub.ops.migrate_units import plan, migrate
+from serverhub.ops.migrate_units import plan, migrate, legacy_resources
 from serverhub.ops.installer import Installer
 from unittest.mock import patch
 
@@ -27,6 +27,10 @@ subprocess.run([sys.executable, '-m', 'serverhub.ops.installer', '--source', str
                input='isolated-migration-test-password-42\n', text=True, check=True)
 
 
+namespaced = Path('/var/lib/serverhub-install/ownership.json').exists()
+old_units = ['serverhub-ai-api.service', 'serverhub-ai-worker.service', 'serverhub-ai-broker.service'] if namespaced else ['serverhub-api.service', 'serverhub-worker.service', 'serverhub-broker.service']
+old_claim = Path('/var/lib/serverhub-install/ownership.json').read_bytes() if namespaced else None
+old_identities = {name: subprocess.check_output(['getent', 'passwd', name]) for name in ['serverhub-api', 'serverhub-worker', 'serverhub-node', 'serverhub-migrate', 'serverhub-staging']}
 before = {name: Path('/etc/serverhub', name).read_bytes() for name in ('api.env', 'worker.env', 'recovery.env', 'node.yaml', 'broker.yaml')}
 previous = Path('/opt/serverhub/current').resolve()
 metadata = (previous / 'installed.json').stat()
@@ -52,10 +56,12 @@ assert json.loads(migration_journal.read_text())['state'] == 'reverted', 'Indepe
 while time.monotonic() < limit and subprocess.run(['systemctl', 'is-active', '--quiet', 'serverhub-ai-namespace-recovery.service'], capture_output=True).returncode == 0:
     time.sleep(0.2)
 assert Path('/opt/serverhub/current').resolve() == previous
-assert not Path('/var/lib/serverhub-install/ownership.json').exists()
+assert (Path('/var/lib/serverhub-install/ownership.json').read_bytes() if namespaced else None) == old_claim
+if not namespaced:
+    assert not Path('/var/lib/serverhub-install/ownership.json').exists()
 for name, content in before.items():
     assert Path('/etc/serverhub', name).read_bytes() == content
-for unit in ['serverhub-api.service', 'serverhub-worker.service', 'serverhub-broker.service']:
+for unit in old_units:
     subprocess.run(['systemctl', 'is-active', '--quiet', unit], check=True)
 print('NAMESPACE_WATCHDOG_EVIDENCE=' + json.dumps({'state': 'passed', 'process_killed': True,
     'independent_systemd_timer_recovered': True, 'deadline_shortened_for_disposable_test': True}), flush=True)
@@ -69,24 +75,31 @@ with patch.object(Installer, '_healthchecks', side_effect=RuntimeError('Intentio
     else:
         raise AssertionError('Expected migration rollback')
 assert Path('/opt/serverhub/current').resolve() == previous
-assert not Path('/var/lib/serverhub-install/ownership.json').exists()
+assert (Path('/var/lib/serverhub-install/ownership.json').read_bytes() if namespaced else None) == old_claim
+if not namespaced:
+    assert not Path('/var/lib/serverhub-install/ownership.json').exists()
 assert json.loads(Path('/var/lib/serverhub-install/unit-migration.json').read_text())['state'] == 'reverted'
 for name, content in before.items():
     assert Path('/etc/serverhub', name).read_bytes() == content
-for unit in ['serverhub-api.service', 'serverhub-worker.service', 'serverhub-broker.service']:
+for unit in old_units:
     subprocess.run(['systemctl', 'is-active', '--quiet', unit], check=True)
 
 assert migrate(source, repair_legacy_permissions=True)['state'] == 'migrated'
 for name in ('api.env', 'worker.env', 'recovery.env'):
-    assert Path('/etc/serverhub', name).read_bytes() == before[name]
+    actual = Path('/etc/serverhub', name).read_text()
+    assert legacy_resources(actual).encode() == before[name]
+for name, content in old_identities.items():
+    assert subprocess.check_output(['getent', 'passwd', name]) == content
 for unit in ['serverhub-ai-api.service', 'serverhub-ai-worker.service', 'serverhub-ai-broker.service']:
     subprocess.run(['systemctl', 'is-active', '--quiet', unit], check=True)
-for unit in ['serverhub-api.service', 'serverhub-worker.service', 'serverhub-broker.service']:
-    assert not Path('/etc/systemd/system', unit).exists()
+if not namespaced:
+    for unit in old_units:
+        assert not Path('/etc/systemd/system', unit).exists()
 assert '/run/serverhub-ai-broker/control.sock' in Path('/etc/serverhub/broker.yaml').read_text()
-assert Path('/opt/serverhub/recovery/venv/bin/python').exists(), 'Legacy independent recovery retained'
+if not namespaced:
+    assert Path('/opt/serverhub/recovery/venv/bin/python').exists(), 'Legacy independent recovery retained'
 assert Path('/opt/serverhub/recovery-ai/venv/bin/python').exists()
 print('LEGACY_UNIT_MIGRATION_EVIDENCE=' + json.dumps({'state': 'passed',
-    'legacy_commit': '1905abcc244767cc58a2dbbf950e033be940c6ed',
+    'legacy_commit': subprocess.check_output(['git', '-C', str(legacy), 'rev-parse', 'HEAD'], text=True).strip(),
     'intentional_failed_health_rollback': True, 'killed_migration_independent_timer_recovery': True, 'credentials_retained': True,
     'retry_succeeded': True, 'new_units_active': True, 'production_modified': False}), flush=True)

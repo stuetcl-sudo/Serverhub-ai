@@ -4,13 +4,13 @@
 
 | Component | Identity | Writable data | Protected capabilities |
 |---|---|---|---|
-| Controller API | serverhub-api | /var/lib/serverhub-api, explicitly granted DB tables | Authenticated owner policy/user management |
-| Job worker | serverhub-worker | /var/lib/serverhub-worker, job/observational DB tables | No root/sudo/Docker socket; policy SELECT only |
-| Node agent | serverhub-node | /var/lib/serverhub-node | Individual HTTPS identity; peer-authenticated broker access |
+| Controller API | serverhub-ai-api | /var/lib/serverhub-ai-api, explicitly granted DB tables | Authenticated owner policy/user management |
+| Job worker | serverhub-ai-worker | /var/lib/serverhub-ai-worker, job/observational DB tables | No root/sudo/Docker socket; policy SELECT only |
+| Node agent | serverhub-ai-node | /var/lib/serverhub-ai-node | Individual HTTPS identity; peer-authenticated broker access |
 | Local broker | root, node socket group | /run/serverhub-ai-broker, protected broker audit | Compiled operation allowlist intersected with root-owned exact targets |
 | Backup service | root | /var/backups/serverhub, curated status file | Database/config checkpoints; AI cannot delete archives |
 | Recovery timers | root | protected journals and root-approved targets | Independent configuration/release rollback |
-| Migration/bootstrap | serverhub-migrate, offline use | DB schema owned by this identity | Never supplied to normal worker/API |
+| Migration/bootstrap | serverhub-ai-migrate, offline use | DB schema owned by this identity | Never supplied to normal worker/API |
 
 ## Read operational state
 

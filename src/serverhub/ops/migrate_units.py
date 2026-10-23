@@ -14,11 +14,133 @@ from pathlib import Path
 import subprocess
 import time
 import tempfile
+import shutil
+import pwd
+import grp
+import re
 
-from .coexistence import CLAIM, ConflictError, claim, protected, write_claim, valid_dropin
-from .installer import Installer
+from .coexistence import CLAIM, ConflictError, protected, write_claim, valid_dropin
+from .installer import Installer, ACCOUNTS as INSTALL_ACCOUNTS
 
 JOURNAL = Path('/var/lib/serverhub-install/unit-migration.json')
+
+
+def legacy_resources(text):
+    """Reverse only identity/path tokens; unit names have a separate migration."""
+    for role in ('api', 'worker', 'node', 'migrate', 'staging'):
+        text = re.sub(r'serverhub-ai-' + role + r'(?![\w-]|\.service|\.timer)',
+                      'serverhub-' + role, text)
+    return text.replace('serverhub-ai-stage-runtime', 'serverhub-stage-runtime').replace(
+        'serverhub-ai-stage-data', 'serverhub-stage-data').replace('serverhub-ai-build', 'serverhub-build')
+
+
+def valid_legacy_dropin(unit, name, text):
+    normalized = text
+    for role in ('api', 'worker', 'node', 'migrate', 'staging'):
+        normalized = re.sub(r'serverhub-' + role + r'(?![\w-]|\.service|\.timer)',
+                            'serverhub-ai-' + role, normalized)
+    normalized = normalized.replace('/run/serverhub-broker', '/run/serverhub-ai-broker')
+    return valid_dropin(unit, name, normalized)
+
+
+def previous_claim(root):
+    from .coexistence import PATHS, ACCOUNTS
+    path = root / CLAIM.lstrip('/')
+    if not path.exists():
+        return None
+    protected(path)
+    value = json.loads(path.read_text())
+    expected = {'product': 'serverhub-ai-os', 'namespace': 2,
+                'paths': [legacy_resources(x) for x in PATHS],
+                'accounts': [legacy_resources(x) for x in ACCOUNTS]}
+    if value != expected:
+        raise ConflictError('Only exact namespace-2 ownership can be explicitly migrated; do not delete the claim')
+    return value
+
+
+def identity_plan(root):
+    """Never usermod an old account; verify provenance and create new identities."""
+    if root != Path('/'):
+        return []
+    result = []
+    try:
+        optional = pwd.getpwnam('serverhub-ai')
+        if (optional.pw_dir != '/var/lib/serverhub-ai' or optional.pw_uid == 0
+                or optional.pw_shell not in ('/usr/sbin/nologin', '/sbin/nologin')
+                or grp.getgrnam('serverhub-ai').gr_gid != optional.pw_gid
+                or set(os.getgrouplist('serverhub-ai', optional.pw_gid)) != {optional.pw_gid}):
+            raise ConflictError('Foreign optional serverhub-ai identity; no adoption')
+        optional_uids = (optional.pw_uid,)
+    except KeyError:
+        optional_uids = ()
+    for new, home in INSTALL_ACCOUNTS.items():
+        old, old_home = legacy_resources(new), legacy_resources(home)
+        entry = pwd.getpwnam(old)
+        group = grp.getgrnam(old)
+        if (entry.pw_uid == 0 or entry.pw_dir != old_home
+                or entry.pw_shell not in ('/usr/sbin/nologin', '/sbin/nologin')
+                or entry.pw_gid != group.gr_gid or group.gr_mem
+                or set(os.getgrouplist(old, entry.pw_gid)) != {entry.pw_gid}):
+            raise ConflictError('Legacy identity is foreign/shared; never modify or adopt: ' + old)
+        for kind, lookup in [('user', pwd.getpwnam), ('group', grp.getgrnam)]:
+            try:
+                lookup(new)
+            except KeyError:
+                continue
+            raise ConflictError('New identity namespace occupied: ' + kind + ' ' + new)
+        if Path(home).exists() or Path(home).is_symlink():
+            raise ConflictError('New identity data path occupied: ' + home)
+        source = Path(old_home)
+        if source.is_symlink() or not source.is_dir():
+            raise ConflictError('Legacy identity data path missing or symlinked: ' + old_home)
+        protected(source, leaf_uids=(entry.pw_uid, *optional_uids))
+        result.append({'old': old, 'new': new, 'source': old_home, 'destination': home,
+                       'old_uid': entry.pw_uid, 'old_gid': entry.pw_gid})
+    required = sum(p.lstat().st_size for item in result for p in Path(item['source']).rglob('*') if p.is_file() and not p.is_symlink())
+    if shutil.disk_usage('/var/lib').free < int(required * 1.2) + 64 * 1024**2:
+        raise ConflictError('Insufficient capacity for separate identity data copies; original data will not be moved')
+    return result
+
+
+def copy_identities(data):
+    # The journal records each newly created account before its home is copied.
+    # Rollback removes only these new resources; old accounts/data are untouched.
+    for item in data['identities']:
+        item['created'] = True
+        _save(data)
+        _run(['useradd', '--system', '--user-group', '--home-dir', item['destination'],
+              '--shell', '/usr/sbin/nologin', item['new']])
+        item['created'] = True
+        _save(data)
+    uids = {x['old_uid']: pwd.getpwnam(x['new']).pw_uid for x in data['identities']}
+    gids = {x['old_gid']: grp.getgrnam(x['new']).gr_gid for x in data['identities']}
+    for item in data['identities']:
+        source, target = Path(item['source']), Path(item['destination'])
+        # useradd does not create the home. Mark it before copying for crash recovery.
+        item['copied'] = True
+        _save(data)
+        shutil.copytree(source, target, symlinks=True)
+        for path in (target, *target.rglob('*')):
+            info = path.lstat()
+            os.chown(path, uids.get(info.st_uid, info.st_uid), gids.get(info.st_gid, info.st_gid),
+                     follow_symlinks=False)
+    node = pwd.getpwnam('serverhub-ai-node')
+    import yaml
+    for path in Path('/etc/serverhub').glob('*'):
+        if path.suffix not in ('.env', '.yaml') or not path.is_file():
+            continue
+        text = path.read_text()
+        for item in data['identities']:
+            text = text.replace(item['source'], item['destination'])
+        if path.name == 'broker.yaml':
+            config = yaml.safe_load(text)
+            config['allowed_uids'] = [node.pw_uid if uid == next(x['old_uid'] for x in data['identities'] if x['new'] == 'serverhub-ai-node') else uid
+                                      for uid in config.get('allowed_uids', [])]
+            config['socket_gid'] = node.pw_gid
+            text = yaml.safe_dump(config)
+        info = path.stat()
+        _atomic_file(path, text.encode(), info.st_mode & 0o777, info.st_uid,
+                     gids.get(info.st_gid, info.st_gid))
 
 
 def old_name(name):
@@ -48,8 +170,8 @@ def migrate_broker_services(config, units):
 
 def plan(source, *, root=Path('/')):
     installer = Installer(source, root=root)
-    if claim(root):
-        raise ConflictError('Namespaced installation already claimed; use normal repair-install.sh')
+    old_claim = previous_claim(root)
+    identities = identity_plan(root)
     journal = root / 'var/lib/serverhub-install/state.json'
     current = root / 'opt/serverhub/current'
     # Older releases can lack the install journal. Only the live host can
@@ -120,10 +242,10 @@ def plan(source, *, root=Path('/')):
         raise ConflictError('Legacy release and installer trust records disagree')
     units = []
     for new in installer.units():
-        old = old_name(new)
+        old = new if old_claim else old_name(new)
         target = root / 'etc/systemd/system' / old
         replacement = target.with_name(new)
-        if replacement.exists() or replacement.is_symlink() or replacement.with_name(new + '.d').exists():
+        if old != new and (replacement.exists() or replacement.is_symlink() or replacement.with_name(new + '.d').exists()):
             raise ConflictError(f'New unit namespace already occupied: {new}')
         if not target.exists():
             if old in ('serverhub-api.service', 'serverhub-worker.service', 'serverhub-broker.service', 'serverhub-node.service'):
@@ -134,9 +256,12 @@ def plan(source, *, root=Path('/')):
         if root == Path('/'):
             protected(target)
         expected = (Path(source) / 'packaging/systemd' / new).read_text()
-        for name in installer.units():
-            expected = expected.replace(name, old_name(name))
-        expected = expected.replace('/run/serverhub-ai-broker', '/run/serverhub-broker').replace(
+        expected = legacy_resources(expected)
+        if not old_claim:
+            for name in installer.units():
+                expected = expected.replace(name, old_name(name))
+        if not old_claim:
+            expected = expected.replace('/run/serverhub-ai-broker', '/run/serverhub-broker').replace(
             'RuntimeDirectory=serverhub-ai-broker', 'RuntimeDirectory=serverhub-broker').replace('/opt/serverhub/recovery-ai', '/opt/serverhub/recovery')
         if target.read_text() != expected:
             raise ConflictError(f'Legacy unit {old} is foreign or customized; explicit manual review required; no service changed')
@@ -144,7 +269,7 @@ def plan(source, *, root=Path('/')):
         if drop.exists():
             for item in drop.iterdir():
                 if (item.is_symlink() or not item.is_file()
-                        or not valid_dropin(new, item.name, item.read_text())):
+                        or not valid_legacy_dropin(new, item.name, item.read_text())):
                     raise ConflictError(f'Unrecognized legacy drop-in: {old}')
                 if root == Path('/'):
                     protected(item)
@@ -165,11 +290,14 @@ def plan(source, *, root=Path('/')):
         import yaml
         if root == Path('/'):
             protected(broker)
-        migrate_broker_services(yaml.safe_load(broker.read_text()), units)
-    return {'units': units, 'previous': str(current.resolve()), 'state': 'reviewed',
+        config = yaml.safe_load(broker.read_text())
+        if config.get('staging_projects'):
+            raise ConflictError('Stop/archive staging projects and remove their enrollment before identity migration; re-enroll after migration')
+        migrate_broker_services(config, units)
+    return {'identities': identities, 'previous_claim': old_claim, 'units': units, 'previous': str(current.resolve()), 'state': 'reviewed',
             'legacy_metadata_mode': oct(metadata_mode), 'metadata_normalization': metadata_mode != 0o644,
             'unsafe_runtime_paths': sorted(set(unsafe_runtime)),
-            'preserved': '/opt/serverhub-control and all foreign services; accounts, data and database remain in place'}
+            'preserved': '/opt/serverhub-control and all foreign services; old identities/data retained; PostgreSQL roles/passwords unchanged'}
 
 
 def _atomic_file(path, content, mode=0o644, uid=0, gid=0):
@@ -223,6 +351,8 @@ def recover(*, force=False):
         target.parent.mkdir(parents=True, exist_ok=True)
         _atomic_file(target, base64.b64decode(saved['content']), saved['mode'], saved['uid'], saved['gid'])
     for unit in data['units']:
+        if unit['old'] == unit['new']:
+            continue
         Path('/etc/systemd/system', unit['new']).unlink(missing_ok=True)
         directory = Path('/etc/systemd/system', unit['new'] + '.d')
         for saved_path in data['files']:
@@ -236,7 +366,22 @@ def recover(*, force=False):
     replacement.unlink(missing_ok=True)
     replacement.symlink_to(data['previous'])
     os.replace(replacement, current)
-    Path(CLAIM).unlink(missing_ok=True)
+    if not data.get('previous_claim'):
+        Path(CLAIM).unlink(missing_ok=True)
+    for item in reversed(data.get('identities', [])):
+        if item.get('copied'):
+            target = Path(item['destination'])
+            if target.is_symlink():
+                raise RuntimeError('Refusing symlinked migration rollback data')
+            if target.exists():
+                shutil.rmtree(target)
+        if item.get('created'):
+            if subprocess.run(['getent', 'passwd', item['new']], capture_output=True).returncode == 0:
+                _run(['userdel', item['new']])
+            # userdel may remove the dedicated group on Ubuntu.
+            result = subprocess.run(['getent', 'group', item['new']], capture_output=True)
+            if result.returncode == 0:
+                _run(['groupdel', item['new']])
     _run(['systemctl', 'daemon-reload'])
     for unit in data['units']:
         if unit['enabled']:
@@ -281,12 +426,12 @@ def migrate(source, *, repair_legacy_permissions=False):
             raise ConflictError('Migration recovery namespace occupied: ' + name)
     if Path('/opt/serverhub/recovery-ai').exists():
         protected(Path('/opt/serverhub/recovery-ai'))
-        if not JOURNAL.exists() or json.loads(JOURNAL.read_text()).get('state') != 'reverted':
+        if not data.get('previous_claim') and (not JOURNAL.exists() or json.loads(JOURNAL.read_text()).get('state') != 'reverted'):
             raise ConflictError('New recovery path already exists; review before migration')
     # Detect loaded vendor/transient new units too, even if no files exist.
     for item in data['units']:
         state = _run(['systemctl', 'show', item['new'], '--property=LoadState', '--value']).stdout.strip()
-        if state != 'not-found':
+        if item['old'] != item['new'] and state != 'not-found':
             raise ConflictError('Loaded new unit namespace is occupied: ' + item['new'])
         item['active'] = subprocess.run(['systemctl', 'is-active', '--quiet', item['old']]).returncode == 0
         item['enabled'] = subprocess.run(['systemctl', 'is-enabled', '--quiet', item['old']]).returncode == 0
@@ -299,6 +444,8 @@ def migrate(source, *, repair_legacy_permissions=False):
     files = [Path('/etc/systemd/system', x['old']) for x in data['units']]
     files += [p for unit in data['units'] for p in Path('/etc/systemd/system', unit['old'] + '.d').glob('*')]
     files += [p for p in Path('/etc/serverhub').rglob('*') if p.is_file()]
+    if Path(CLAIM).exists():
+        files.append(Path(CLAIM))
 
     data['files'] = {}
     for path in files:
@@ -334,23 +481,28 @@ def migrate(source, *, repair_legacy_permissions=False):
             legacy_recovery = Path('/opt/serverhub/recovery')
             if legacy_recovery.exists():
                 seal_runtime(legacy_recovery)
+        copy_identities(data)
         for item in data['units']:
             old = Path('/etc/systemd/system', item['old'])
             new = old.with_name(item['new'])
-            text = old.read_text()
+            text = (source / 'packaging/systemd' / item['new']).read_text()
             for unit in data['units']:
                 text = text.replace(unit['old'], unit['new'])
             text = text.replace('/run/serverhub-broker', '/run/serverhub-ai-broker').replace(
                 'RuntimeDirectory=serverhub-broker', 'RuntimeDirectory=serverhub-ai-broker').replace('/opt/serverhub/recovery/', '/opt/serverhub/recovery-ai/')
             _atomic_file(new, text.encode())
-            old.unlink()
+            if old != new:
+                old.unlink()
             dropdir = Path(str(old) + '.d')
-            if dropdir.exists():
+            if dropdir.exists() and old != new:
                 replacement = Path(str(new) + '.d')
                 replacement.mkdir()
                 for drop in dropdir.iterdir():
                     info = drop.stat()
-                    _atomic_file(replacement / drop.name, drop.read_bytes(), info.st_mode & 0o777, info.st_uid, info.st_gid)
+                    content = drop.read_text().replace('Group=serverhub-worker', 'Group=serverhub-ai-worker')
+                    if drop.name == '10-vm-paths.conf':
+                        content = '[Service]\nInaccessiblePaths=\n' + next(line for line in (source / 'packaging/systemd/serverhub-ai-worker.service').read_text().splitlines() if line.startswith('InaccessiblePaths=')) + '\n'
+                    _atomic_file(replacement / drop.name, content.encode(), info.st_mode & 0o777, info.st_uid, info.st_gid)
                     drop.unlink()
                 dropdir.rmdir()
         for path in [Path('/etc/serverhub/broker.yaml'), Path('/etc/serverhub/node.yaml')]:
@@ -360,6 +512,13 @@ def migrate(source, *, repair_legacy_permissions=False):
                 text = yaml.safe_dump(migrate_broker_services(yaml.safe_load(text), data['units']))
             info = path.stat()
             _atomic_file(path, text.encode(), info.st_mode & 0o777, info.st_uid, info.st_gid)
+        vm_drop = Path('/etc/systemd/system/serverhub-ai-worker.service.d/10-vm-paths.conf')
+        if vm_drop.exists():
+            _atomic_file(vm_drop, ('[Service]\nInaccessiblePaths=\n' + next(line for line in (source / 'packaging/systemd/serverhub-ai-worker.service').read_text().splitlines() if line.startswith('InaccessiblePaths=')) + '\n').encode())
+        drop = Path('/etc/systemd/system/serverhub-ai-worker.service.d/10-ai-identity.conf')
+        if drop.exists():
+            _atomic_file(drop, drop.read_bytes().replace(b'Group=serverhub-worker', b'Group=serverhub-ai-worker'))
+        Path(CLAIM).unlink(missing_ok=True)
         write_claim()
         _run(['systemctl', 'daemon-reload'])
         # The reviewed repair upgrades code, trust anchors and independent runtime.

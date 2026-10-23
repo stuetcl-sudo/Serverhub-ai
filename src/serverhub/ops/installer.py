@@ -25,11 +25,11 @@ class InstallError(RuntimeError):
 
 
 ACCOUNTS = {
-    "serverhub-api": "/var/lib/serverhub-api",
-    "serverhub-worker": "/var/lib/serverhub-worker",
-    "serverhub-node": "/var/lib/serverhub-node",
-    "serverhub-staging": "/var/lib/serverhub-stage-runtime",
-    "serverhub-migrate": "/var/lib/serverhub-migrate",
+    "serverhub-ai-api": "/var/lib/serverhub-ai-api",
+    "serverhub-ai-worker": "/var/lib/serverhub-ai-worker",
+    "serverhub-ai-node": "/var/lib/serverhub-ai-node",
+    "serverhub-ai-staging": "/var/lib/serverhub-ai-stage-runtime",
+    "serverhub-ai-migrate": "/var/lib/serverhub-ai-migrate",
 }
 TRUST_FILES = [
     "packaging/postgresql-grants.sql",
@@ -261,7 +261,7 @@ class Installer:
             self.write("/etc/systemd/system/" + unit, (self.source / "packaging/systemd" / unit).read_text())
         if self.ai_identity and self.role == "controller":
             self.write("/etc/systemd/system/serverhub-ai-worker.service.d/10-ai-identity.conf",
-                       "[Service]\nUser=serverhub-ai\nGroup=serverhub-worker\n")
+                       "[Service]\nUser=serverhub-ai\nGroup=serverhub-ai-worker\n")
         self.write("/opt/serverhub/recovery-ai/operation_watchdog.py",
                    (self.source / "src/serverhub/ops/operation_watchdog.py").read_text(), 0o600)
         self.write("/etc/serverhub/trust-boundaries.sha256", self.trust_digest() + "\n")
@@ -291,7 +291,7 @@ class Installer:
             for name, password in (("api", api_password), ("worker", worker_password)):
                 content = (
                     common
-                    + f"SERVERHUB_DATABASE_URL=postgresql+psycopg://serverhub_{name}:{password}@127.0.0.1/serverhub\nSERVERHUB_STATE_DIR=/var/lib/serverhub-{name}\n"
+                    + f"SERVERHUB_DATABASE_URL=postgresql+psycopg://serverhub_{name}:{password}@127.0.0.1/serverhub\nSERVERHUB_STATE_DIR=/var/lib/serverhub-ai-{name}\n"
                 )
                 if name == "api":
                     content += (
@@ -323,7 +323,7 @@ class Installer:
             )
         self.write(
             "/etc/serverhub/node.yaml",
-            f"controller_url: {self.public_url}\nname: {platform.node() or 'serverhub'}\nstate_dir: /var/lib/serverhub-node\ninterval: 60\nbroker_socket: /run/serverhub-ai-broker/control.sock\n# Add a one-time enrollment_token from the owner UI before enabling this node.\n",
+            f"controller_url: {self.public_url}\nname: {platform.node() or 'serverhub'}\nstate_dir: /var/lib/serverhub-ai-node\ninterval: 60\nbroker_socket: /run/serverhub-ai-broker/control.sock\n# Add a one-time enrollment_token from the owner UI before enabling this node.\n",
             0o640,
         )
         self.write(
@@ -506,7 +506,7 @@ class Installer:
 
             def accounts():
                 selected = (
-                    ACCOUNTS if self.role == "controller" else {"serverhub-node": ACCOUNTS["serverhub-node"]}
+                    ACCOUNTS if self.role == "controller" else {"serverhub-ai-node": ACCOUNTS["serverhub-ai-node"]}
                 )
                 selected = dict(selected)
                 if self.ai_identity and self.role == "controller":
@@ -545,8 +545,8 @@ class Installer:
                     os.chown(target, entry.pw_uid, entry.pw_gid)
                     target.chmod(0o700)
                 if self.ai_identity and self.role == "controller":
-                    os.chown(self.path("/var/lib/serverhub-worker"), pwd.getpwnam("serverhub-ai").pw_uid,
-                             grp.getgrnam("serverhub-worker").gr_gid)
+                    os.chown(self.path("/var/lib/serverhub-ai-worker"), pwd.getpwnam("serverhub-ai").pw_uid,
+                             grp.getgrnam("serverhub-ai-worker").gr_gid)
                 for directory, mode in (
                     ("/opt/serverhub", 0o755),
                     ("/var/backups/serverhub", 0o700),
@@ -612,7 +612,7 @@ class Installer:
             credentials = state["credentials"]
 
             def configure():
-                node = pwd.getpwnam("serverhub-node")
+                node = pwd.getpwnam("serverhub-ai-node")
                 self._configuration(
                     credentials["api"],
                     credentials["worker"],
@@ -625,7 +625,7 @@ class Installer:
                         f"/etc/serverhub/{name}.env" if name != "node" else "/etc/serverhub/node.yaml"
                     )
                     if target.exists():
-                        os.chown(target, 0, grp.getgrnam("serverhub-" + name).gr_gid)
+                        os.chown(target, 0, grp.getgrnam("serverhub-ai-" + name).gr_gid)
                         target.chmod(0o640)
                 # These contain environment references, never secret values. Every
                 # service can read, but none can replace or write, operator config.
@@ -641,7 +641,7 @@ class Installer:
                 SERVERHUB_DATABASE_URL=f"postgresql+psycopg://serverhub_migrate:{credentials['migrate']}@127.0.0.1/serverhub",
                 SERVERHUB_PUBLIC_URL=self.public_url,
                 SERVERHUB_ALLOWED_ORIGINS=json.dumps([self.public_url]),
-                SERVERHUB_STATE_DIR="/var/lib/serverhub-migrate",
+                SERVERHUB_STATE_DIR="/var/lib/serverhub-ai-migrate",
                 SERVERHUB_RELEASE_DIR=str(release),
             )
             environment.pop("PYTHONPATH", None)
@@ -703,7 +703,7 @@ class Installer:
                         [
                             "runuser",
                             "-u",
-                            "serverhub-migrate",
+                            "serverhub-ai-migrate",
                             "--",
                             str(release / "venv/bin/serverhub"),
                             "migrate",
@@ -735,7 +735,7 @@ class Installer:
                         [
                             "runuser",
                             "-u",
-                            "serverhub-migrate",
+                            "serverhub-ai-migrate",
                             "--",
                             str(release / "venv/bin/serverhub"),
                             "create-user",

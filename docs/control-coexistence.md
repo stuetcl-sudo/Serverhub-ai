@@ -19,15 +19,26 @@ has not been accessed or changed during development.
 | Independent recovery | `/opt/serverhub/recovery-ai` | Legacy AI `/opt/serverhub/recovery` retained during migration |
 | Configuration | `/etc/serverhub` | Existing Control configuration untouched |
 | Database | Existing AI OS `serverhub` and `serverhub_*` PostgreSQL roles | Existing database/roles never adopted |
-| Accounts | Existing AI OS `serverhub-api`, `serverhub-worker`, `serverhub-node`, `serverhub-migrate`, `serverhub-staging`; optional `serverhub-ai` worker | Never adopt a pre-existing unclaimed identity |
+| Accounts | Dedicated `serverhub-ai-api`, `serverhub-ai-worker`, `serverhub-ai-node`, `serverhub-ai-migrate`, `serverhub-ai-staging`; optional `serverhub-ai` worker | Never adopt a pre-existing unclaimed identity |
 | Access | Loopback TCP 9080, authenticated API; documented TLS access | MCP / OAuth / Docker Gateway ports unchanged |
 
-State, audit records, configuration, database and service identities retain their
-existing AI OS names to preserve credentials, authorization and recovery history.
-The installation **refuses** shared identities or occupied reserved paths rather
-than reassigning ownership. Thus an independently installed Control using any of
-those same identities/paths is an explicit blocker requiring a reviewed resource
-migration; changing service names alone cannot safely resolve such a collision.
+Issue #7 also separates Linux identities: Control's existing
+`serverhub-worker:x:994:982::/nonexistent:/usr/sbin/nologin` is **foreign**.
+Neither that user/group nor `serverhub-broker`, `serverhub-docker-ro`,
+`serverhub-mcp`, or `serverhub-telemetry` is created, modified or adopted by AI OS.
+The optional `--ai-identity` runs the worker as `serverhub-ai` with the
+**`serverhub-ai-worker`** group, never the Control group.
+
+The five new service identities have private `/var/lib/serverhub-ai-*` homes;
+staging's home is `/var/lib/serverhub-ai-stage-runtime`, deployments live in
+`/var/lib/serverhub-ai-staging`, and dynamic state in `/var/lib/serverhub-ai-stage-data`.
+Project groups, transient units, and the `serverhub-ai-build` AppArmor profile are
+also AI-specific. Configuration `/etc/serverhub`, application `/opt/serverhub`,
+root broker/audit/recovery paths, database `serverhub`, and PostgreSQL
+`serverhub_api`, `serverhub_worker`, `serverhub_migrate` roles deliberately retain
+their established names. Fresh preflight refuses any **unclaimed** collision in
+these resources. SQL credentials, grants, OAuth and enrolled node tokens are not
+rotated by identity migration.
 
 ## Fresh Ubuntu 24.04 installation next to Control
 
@@ -35,7 +46,7 @@ Run only after reviewing this PR and obtaining a checkout at its tested commit:
 
 ```bash
 git checkout release/production-readiness
-sudo env PYTHONPATH="$PWD/src" python3.12 -m serverhub.ops.installer --source "$PWD" --preflight
+sudo env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" python3.12 -B -m serverhub.ops.installer --source "$PWD" --preflight
 ./scripts/install-ubuntu.sh --public-url https://YOUR-CONTROLLER --ai-identity
 ```
 
@@ -105,8 +116,13 @@ release preparation now seal new runtimes before exposing them to service users.
 Before stopping proven AI OS units, migration writes a root-only file/config/unit
 checkpoint and arms a standalone systemd rollback timer that also runs after boot.
 It changes only those proven units and AI node/broker socket configuration, then
-runs the reviewed backup/migration/upgrade/health workflow. Credentials, database,
-accounts, audit and workload data stay in place. Proven AI service names in the
+runs the reviewed backup/migration/upgrade/health workflow. Database credentials, audit and original identity data stay in place.
+The migration **creates separate new accounts** and copies identity homes while
+services are stopped. Only the copies receive new ownership; old homes and
+accounts remain untouched. API/worker environment state paths, configuration file
+groups and the broker's exact node UID/GID are updated. The journal records new
+resources for independent rollback. No `usermod`, shared-group membership or
+recursive chown of an old home is performed. Proven AI service names in the
 broker allowlist are retargeted to their new names. A registered broker plan
 referring to old unit names elsewhere blocks migration for explicit plan review.
 Existing controller policy grants are retained without widening their arguments;
@@ -125,7 +141,15 @@ sudo env PYTHONPATH="$PWD/src" .build-venv/bin/python -m serverhub.ops.migrate_u
 
 This rollback applies to an **armed, unverified namespace migration**, not a
 completed migration. The protected `unit-migration.json` contains configuration
-secrets; never paste it into issues. A successful conversion is retained across
+secrets; never paste it into issues. The same command handles both generic legacy units and the exact namespace-2
+claim from `7da8bea`. Normal installation/repair refuses that old claim and tells
+the operator to use explicit migration; it is never silently adopted. Occupied
+new accounts or homes abort. Active enrolled staging projects must be stopped,
+archived and unenrolled before migration, then reviewed/re-enrolled afterward;
+old project groups, deployments and AppArmor profile are retained. Unrecognized
+custom unit files/drop-ins or identity homes require manual review. A failed
+migration removes only journaled newly created accounts/copies and restores the
+previous claim and exact configuration. A successful conversion is retained across
 subsequent code rollbacks: do not reinstall old generic unit files. Normal reviewed
 upgrades use `sudo ./scripts/repair-install.sh`; schema-compatible release rollback
 uses `sudo ./scripts/upgrade.sh rollback`. Very old code with hardcoded old socket
@@ -135,12 +159,12 @@ paths must be reviewed before selecting it as a rollback target.
 
 CI has separate disposable Ubuntu 24.04 drills for:
 
-* Active harmless Control-name services, real loopback gateways, identity/file
+* Active harmless Control-name services, real loopback gateways, production-matching worker/broker/gateway accounts and groups, identity/file
   hashes, unchanged MainPID and start timestamps across install, resume, upgrade,
   failed-health rollback, host operations and staging tests.
 * Rejection of real service/path/user/group/listening-port conflicts before any
   installer account/path/unit creation.
-* Installation of exact legacy commit `1905abc`, an actual killed migration
+* Installation of exact legacy commits `1905abc` and `7da8bea`, an actual killed migration
   recovered by the independent systemd timer (test-shortened deadline), deliberate
   namespace health failure and rollback, credential preservation and successful retry.
 
@@ -148,3 +172,21 @@ These fixtures are not the owner's actual Control application. Observed CI resul
 are recorded in the PR; physical-host compatibility still requires its read-only
 preflight and operator acceptance. No physical server installation or auto-merge
 is part of this change.
+
+
+## Read-only production check after reviewing the fixed commit
+
+From the existing production checkout, after an operator fetches/checks out the
+reviewed commit, run exactly:
+
+```bash
+cd ~/serverhub-ai-production/Serverhub-ai
+sudo env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$PWD/src" python3.12 -B -m serverhub.ops.installer --source "$PWD" --preflight
+```
+
+This command performs inspection only: no account/group changes, package installs,
+claim files, migrations, unit reloads/stops, permission repairs or Python bytecode
+writes. `safe: true` is required before installation. It temporarily binds and
+closes loopback sockets to check availability; it does not listen for traffic.
+No production check was run by development tooling. The physical host remains
+operator-controlled; do not install automatically from this PR.

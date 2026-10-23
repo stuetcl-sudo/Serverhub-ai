@@ -55,7 +55,7 @@ def protect_model_fallback(path):
 
 
 def ensure_staging_account(installer):
-    name, home = "serverhub-staging", "/var/lib/serverhub-stage-runtime"
+    name, home = "serverhub-ai-staging", "/var/lib/serverhub-ai-stage-runtime"
     try:
         entry = pwd.getpwnam(name)
     except KeyError:
@@ -175,13 +175,13 @@ def repair(source):
             os.environ,
             **env,
             SERVERHUB_RELEASE_DIR=str(release),
-            SERVERHUB_STATE_DIR="/var/lib/serverhub-migrate",
+            SERVERHUB_STATE_DIR="/var/lib/serverhub-ai-migrate",
         )
         environment.pop("PYTHONPATH", None)
         environment.pop("PYTHONHOME", None)
         environment.pop("LD_PRELOAD", None)
         installer._run(
-            ["runuser", "-u", "serverhub-migrate", "--", str(release / "venv/bin/serverhub"), "migrate"],
+            ["runuser", "-u", "serverhub-ai-migrate", "--", str(release / "venv/bin/serverhub"), "migrate"],
             env=environment,
             cwd=str(release),
         )

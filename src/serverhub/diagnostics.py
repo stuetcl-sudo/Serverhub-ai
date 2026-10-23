@@ -98,7 +98,7 @@ def collect_diagnostics(db):
             "database",
             "error",
             "Database connectivity or migration lookup failed",
-            "Check API database credentials and run serverhub migrate from the installed release as serverhub-migrate",
+            "Check API database credentials and run serverhub migrate from the installed release as serverhub-ai-migrate",
         )
     try:
         workers = db.scalars(

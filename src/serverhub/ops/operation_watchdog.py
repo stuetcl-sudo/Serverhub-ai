@@ -31,24 +31,24 @@ def run(argv):
 
 
 def launch_stage(spec):
-    if not re.fullmatch('[a-zA-Z0-9_-]{1,100}',spec['unit']) or not spec['unit'].startswith('serverhub-stage-'):
+    if not re.fullmatch('[a-zA-Z0-9_-]{1,100}',spec['unit']) or not spec['unit'].startswith('serverhub-ai-stage-'):
         raise ValueError('Invalid staging unit')
     directory=protected(spec['directory'])
     data=Path(spec['data_directory'])
-    if not directory.is_relative_to('/var/lib/serverhub-staging/releases') or not data.is_relative_to('/var/lib/serverhub-stage-data'):
+    if not directory.is_relative_to('/var/lib/serverhub-ai-staging/releases') or not data.is_relative_to('/var/lib/serverhub-ai-stage-data'):
         raise ValueError('Staging path outside its namespace')
     argv=spec['argv']
     if not isinstance(argv,list) or not argv or not argv[0].startswith('/usr/bin/') or any(not isinstance(arg,str) or '\0' in arg for arg in argv):
         raise ValueError('Invalid enrolled staging executable')
     project_group=spec.get('project_group','')
-    if not re.fullmatch(r'serverhub-project-[a-f0-9]{12}',project_group):
+    if not re.fullmatch(r'serverhub-ai-project-[a-f0-9]{12}',project_group):
         raise ValueError('Staging project group missing or invalid')
-    dynamic_user='serverhub-stage-'+data.name[:12]
+    dynamic_user='serverhub-ai-stage-'+data.name[:12]
     properties=['DynamicUser=yes', 'User='+dynamic_user, 'SupplementaryGroups='+project_group,
-        'StateDirectory=serverhub-stage-data/'+data.name, 'StateDirectoryMode=0700', 'ProtectProc=invisible', 'NoNewPrivileges=yes','PrivateNetwork=yes','PrivateTmp=yes','ProtectSystem=strict','ProtectHome=yes',
+        'StateDirectory=serverhub-ai-stage-data/'+data.name, 'StateDirectoryMode=0700', 'ProtectProc=invisible', 'NoNewPrivileges=yes','PrivateNetwork=yes','PrivateTmp=yes','ProtectSystem=strict','ProtectHome=yes',
         'CapabilityBoundingSet=','RestrictSUIDSGID=yes','ProtectKernelTunables=yes','ProtectKernelModules=yes',
         'ProtectControlGroups=yes','TasksMax=128',f'MemoryMax={spec["memory_mb"]}M',f'ReadWritePaths={data}',
-        'InaccessiblePaths=-/etc/serverhub -/opt/serverhub -/var/backups/serverhub -/run/serverhub-ai-broker -/var/run/docker.sock -/var/lib/serverhub-worker']
+        'InaccessiblePaths=-/etc/serverhub -/opt/serverhub -/var/backups/serverhub -/run/serverhub-ai-broker -/var/run/docker.sock -/var/lib/serverhub-ai-worker']
     command=['/usr/bin/systemd-run','--quiet','--unit',spec['unit'],
              '--working-directory',str(directory)]
     for prop in properties:
@@ -78,13 +78,13 @@ def stage_health(spec, *, timeout=90):
         pid=subprocess.run(['/usr/bin/systemctl','show',spec['unit'],'--property=MainPID','--value'],text=True,capture_output=True,check=False).stdout.strip()
         if pid.isdigit() and int(pid)>0:
             response=subprocess.run(['/usr/bin/systemd-run','--quiet','--wait','--pipe','--collect',
-                '--unit','serverhub-health-'+uuid.uuid4().hex[:12],
-                '--property','User=serverhub-staging','--property','Group=serverhub-staging',
+                '--unit','serverhub-ai-health-'+uuid.uuid4().hex[:12],
+                '--property','User=serverhub-ai-staging','--property','Group=serverhub-ai-staging',
                 '--property','NetworkNamespacePath=/proc/'+pid+'/ns/net',
                 '--property','NoNewPrivileges=yes','--property','CapabilityBoundingSet=',
                 '--property','ProtectSystem=strict','--property','ProtectHome=yes','--property','PrivateTmp=yes',
                 '--property','MemoryMax=128M','--property','TasksMax=16','--property','RuntimeMaxSec=5',
-                '--property','InaccessiblePaths=-/etc/serverhub -/var/lib/serverhub-worker -/var/lib/serverhub-broker -/var/run/docker.sock',
+                '--property','InaccessiblePaths=-/etc/serverhub -/var/lib/serverhub-ai-worker -/var/lib/serverhub-broker -/var/run/docker.sock',
                 '--','/usr/bin/python3','-I','-c',script],
                 text=True,capture_output=True,check=False,timeout=10,env={'PATH':'/usr/bin:/bin','HOME':'/nonexistent'})
             if response.returncode==0 and expected in response.stdout:
@@ -97,7 +97,7 @@ def stage_health(spec, *, timeout=90):
 def restore(record):
     if record['kind'] == 'staging':
         unit=record['new_launch']['unit']
-        if not re.fullmatch('serverhub-stage-[A-Za-z0-9_-]{1,90}',unit):
+        if not re.fullmatch('serverhub-ai-stage-[A-Za-z0-9_-]{1,90}',unit):
             raise ValueError('Invalid staging rollback unit')
         run(['/usr/bin/systemctl','stop',unit])
         if record.get('previous_launch'):

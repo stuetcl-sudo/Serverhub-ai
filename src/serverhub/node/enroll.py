@@ -34,7 +34,7 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
     for target,plan in current.get('staging_projects',{}).items():
         if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',target):
             raise ValueError('Invalid staging project identity')
-        group='serverhub-project-'+hashlib.sha256(target.encode()).hexdigest()[:12]
+        group='serverhub-ai-project-'+hashlib.sha256(target.encode()).hexdigest()[:12]
         try:
             grp.getgrnam(group)
         except KeyError:
@@ -72,7 +72,7 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
     (directory/'20-administration.conf').write_text('[Service]\nReadWritePaths='+' '.join(sorted(set(writable)))+' -/var/log/apt -/var/log/dpkg.log'+'\n'
         'ReadOnlyPaths=/etc/serverhub /opt/serverhub /etc/ssh /etc/systemd/system /etc/sudoers /etc/sudoers.d /etc/pam.d\n')
     protected('/var/lib/serverhub-broker/operations',create=True)
-    protected('/var/lib/serverhub-staging',create=True)
+    protected('/var/lib/serverhub-ai-staging',create=True)
     subprocess.run(['systemctl','daemon-reload'],check=True)
     subprocess.run(['systemctl','restart','serverhub-ai-broker'],check=True)
     return {'state':'enrolled','families':{key:list(value) for key,value in plans.items()}}

@@ -102,7 +102,7 @@ def test_dedicated_ai_identity_is_opt_in_and_keeps_broker_separate(tmp_path):
     dedicated.stage()
     dropin = (dedicated.root / "etc/systemd/system/serverhub-ai-worker.service.d/10-ai-identity.conf").read_text()
     assert "User=serverhub-ai" in dropin
-    assert "Group=serverhub-worker" in dropin
+    assert "Group=serverhub-ai-worker" in dropin
     assert "User=root" in (dedicated.root / "etc/systemd/system/serverhub-ai-broker.service").read_text()
     assert "allowed_services: []" in (dedicated.root / "etc/serverhub/broker.yaml").read_text()
     assert not (dedicated.root / "etc/sudoers.d").exists()

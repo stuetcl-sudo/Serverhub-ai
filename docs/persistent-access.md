@@ -8,9 +8,9 @@ SSH configuration is never changed by installation.
 A controller may instead serve HTTPS directly. Provision a certificate from your
 trusted public or private PKI with the exact DNS/IP Subject Alternative Name.
 Install the certificate chain and private key in a root-owned directory searchable
-by `serverhub-api`, with the key root:serverhub-api 0640 and directory 0750.
+by `serverhub-ai-api`, with the key root:serverhub-ai-api 0640 and directory 0750.
 Copy and adapt `packaging/config/access.env.example` to
-`/etc/serverhub/access.env`, also root:serverhub-api 0640. Use the **test VM's own
+`/etc/serverhub/access.env`, also root:serverhub-ai-api 0640. Use the **test VM's own
 address**, not the production host address. The file selects bind/port, canonical
 public origin, TLS files and an independently certificate-verified health URL.
 For a private PKI, supply its CA certificate through `SERVERHUB_HEALTH_CA`; never

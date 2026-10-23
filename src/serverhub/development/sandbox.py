@@ -42,13 +42,13 @@ class SandboxRunner:
         if workspace.is_symlink() or not workspace.is_dir():
             raise DevelopmentError("workspace is missing or is a symlink")
         prefix=[]
-        profile=Path("/etc/apparmor.d/serverhub-build")
+        profile=Path("/etc/apparmor.d/serverhub-ai-build")
         restriction=Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
         if profile.exists() and restriction.exists() and restriction.read_text().strip()=="1":
             aa_exec=shutil.which("aa-exec",path="/usr/bin:/bin")
             if not aa_exec:
                 raise DevelopmentError("AppArmor development label requires aa-exec; reinstall the native prerequisites")
-            prefix=[aa_exec,"-p","serverhub-build","--"]
+            prefix=[aa_exec,"-p","serverhub-ai-build","--"]
         args = [*prefix,self.binary, "--unshare-all", "--die-with-parent", "--new-session",
                 "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr",
                 "--symlink", "usr/bin", "/bin", "--symlink", "usr/sbin", "/sbin",

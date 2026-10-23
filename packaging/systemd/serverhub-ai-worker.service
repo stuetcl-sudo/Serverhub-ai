@@ -4,8 +4,8 @@ After=network-online.target postgresql.service serverhub-ai-api.service
 Wants=network-online.target
 [Service]
 Type=simple
-User=serverhub-worker
-Group=serverhub-worker
+User=serverhub-ai-worker
+Group=serverhub-ai-worker
 WorkingDirectory=/opt/serverhub/current
 EnvironmentFile=/etc/serverhub/worker.env
 ExecStart=/opt/serverhub/current/venv/bin/serverhub worker
@@ -28,8 +28,8 @@ RestrictRealtime=true
 LockPersonality=true
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-ReadWritePaths=/var/lib/serverhub-worker
-InaccessiblePaths=-/etc/serverhub/api.env -/etc/serverhub/recovery.env -/etc/serverhub/broker.yaml -/var/backups/serverhub -/var/lib/serverhub-recovery -/var/lib/serverhub-release -/var/run/docker.sock -/run/serverhub-ai-broker -/var/lib/serverhub-node
+ReadWritePaths=/var/lib/serverhub-ai-worker
+InaccessiblePaths=-/etc/serverhub/api.env -/etc/serverhub/recovery.env -/etc/serverhub/broker.yaml -/var/backups/serverhub -/var/lib/serverhub-recovery -/var/lib/serverhub-release -/var/run/docker.sock -/run/serverhub-ai-broker -/var/lib/serverhub-ai-node
 MemoryMax=4G
 TasksMax=256
 [Install]

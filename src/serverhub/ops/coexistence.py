@@ -17,16 +17,16 @@ from pathlib import Path
 CLAIM = '/var/lib/serverhub-install/ownership.json'
 PATHS = (
     '/opt/serverhub', '/etc/serverhub', '/var/backups/serverhub',
-    '/var/lib/serverhub-api', '/var/lib/serverhub-worker', '/var/lib/serverhub-node',
-    '/var/lib/serverhub-ai', '/var/lib/serverhub-migrate', '/var/lib/serverhub-stage-runtime',
-    '/var/lib/serverhub-staging', '/var/lib/serverhub-stage-data',
+    '/var/lib/serverhub-ai-api', '/var/lib/serverhub-ai-worker', '/var/lib/serverhub-ai-node',
+    '/var/lib/serverhub-ai', '/var/lib/serverhub-ai-migrate', '/var/lib/serverhub-ai-stage-runtime',
+    '/var/lib/serverhub-ai-staging', '/var/lib/serverhub-ai-stage-data',
     '/var/lib/serverhub-broker', '/var/log/serverhub-broker',
     '/var/lib/serverhub-release', '/var/lib/serverhub-recovery',
     '/var/lib/serverhub-status', '/var/lib/serverhub-install',
-    '/run/serverhub-ai-broker', '/etc/apparmor.d/serverhub-build',
+    '/run/serverhub-ai-broker', '/etc/apparmor.d/serverhub-ai-build',
 )
-ACCOUNTS = ('serverhub-api', 'serverhub-worker', 'serverhub-node',
-            'serverhub-migrate', 'serverhub-staging', 'serverhub-ai')
+ACCOUNTS = ('serverhub-ai-api', 'serverhub-ai-worker', 'serverhub-ai-node',
+            'serverhub-ai-migrate', 'serverhub-ai-staging', 'serverhub-ai')
 DATABASE = 'serverhub'
 ROLES = ('serverhub_api', 'serverhub_worker', 'serverhub_migrate')
 
@@ -51,9 +51,9 @@ def claim(root=Path('/')):
         return None
     protected(path)
     value = json.loads(path.read_text())
-    if value != {'product': 'serverhub-ai-os', 'namespace': 2, 'paths': list(PATHS),
+    if value != {'product': 'serverhub-ai-os', 'namespace': 3, 'paths': list(PATHS),
                  'accounts': list(ACCOUNTS)}:
-        raise ConflictError('Unknown AI OS ownership claim; inspect without deleting it')
+        raise ConflictError('Unknown/legacy AI OS ownership claim; do not delete it. Namespace 2 requires explicit serverhub.ops.migrate_units --plan/--apply; see docs/control-coexistence.md')
     return value
 
 
@@ -61,7 +61,7 @@ def write_claim(root=Path('/')):
     path = root / CLAIM.lstrip('/')
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     protected(path.parent)
-    value = {'product': 'serverhub-ai-os', 'namespace': 2, 'paths': list(PATHS),
+    value = {'product': 'serverhub-ai-os', 'namespace': 3, 'paths': list(PATHS),
              'accounts': list(ACCOUNTS)}
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w') as stream:
@@ -88,9 +88,9 @@ def inspect(*, root=Path('/'), units=(), runner=subprocess.run, live=True):
                             uids.append(pwd.getpwnam(account).pw_uid)
                         except KeyError:
                             pass
-                if owned and name == '/var/lib/serverhub-stage-runtime' and path.exists():
+                if owned and name == '/var/lib/serverhub-ai-stage-runtime' and path.exists():
                     try:
-                        pwd.getpwnam('serverhub-staging')
+                        pwd.getpwnam('serverhub-ai-staging')
                     except KeyError:
                         try:
                             pwd.getpwuid(path.stat().st_uid)
@@ -151,7 +151,7 @@ def inspect(*, root=Path('/'), units=(), runner=subprocess.run, live=True):
                     entry = lookup(name)
                     if owned:
                         if kind == 'user':
-                            home = '/var/lib/serverhub-stage-runtime' if name == 'serverhub-staging' else '/var/lib/' + name
+                            home = '/var/lib/serverhub-ai-stage-runtime' if name == 'serverhub-ai-staging' else '/var/lib/' + name
                             groups = {grp.getgrgid(gid).gr_name for gid in os.getgrouplist(name, entry.pw_gid)}
                             if (entry.pw_uid == 0 or entry.pw_dir != home
                                     or entry.pw_shell not in ('/usr/sbin/nologin', '/sbin/nologin')
@@ -250,10 +250,10 @@ def valid_dropin(unit, name, text):
             'InaccessiblePaths=-/etc/serverhub/api.env -/etc/serverhub/recovery.env '
             '-/etc/serverhub/broker.yaml -/var/backups/serverhub '
             '-/var/lib/serverhub-recovery -/var/lib/serverhub-release '
-            '-/var/run/docker.sock -/run/serverhub-broker -/var/lib/serverhub-node\n'
+            '-/var/run/docker.sock -/run/serverhub-ai-broker -/var/lib/serverhub-ai-node\n'
         )
     if unit == 'serverhub-ai-worker.service' and name == '10-ai-identity.conf':
-        return text == '[Service]\nUser=serverhub-ai\nGroup=serverhub-worker\n'
+        return text == '[Service]\nUser=serverhub-ai\nGroup=serverhub-ai-worker\n'
     if unit == 'serverhub-ai-broker.service' and name == '20-administration.conf':
         match = re.fullmatch(
             r'\[Service\]\nReadWritePaths=([^\n]+) -/var/log/apt -/var/log/dpkg.log\n'

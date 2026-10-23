@@ -114,7 +114,7 @@ def await_job(identity, timeout=1800, restart_after_patch=False):
     deadline=time.monotonic()+timeout
     last_report=0
     while time.monotonic()<deadline:
-        run(['runuser','-u','serverhub-node','--',python,'-c',
+        run(['runuser','-u','serverhub-ai-node','--',python,'-c',
              'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],cwd='/')
         job=client.get('/api/jobs/'+identity,headers=headers).json()
         developer=job.get('checkpoint',{}).get('developer') or {}
@@ -147,7 +147,7 @@ assert recovery_evidence.get('pid_changed') and job['attempts']>=2,job
 assert job['result']['staging']['verified'] and job['result']['production_deployed'] is False
 assert (source/'app/version.py').read_text()!=original
 assert run(['git','-c','safe.directory='+str(source),'-C',str(source),'rev-parse','HEAD'])==fixture_commit
-work=Path('/var/lib/serverhub-worker/development/workspaces/jarvis')/job['id']
+work=Path('/var/lib/serverhub-ai-worker/development/workspaces/jarvis')/job['id']
 import ast
 assert ast.literal_eval(next(node.value for node in ast.parse((work/'app/version.py').read_text()).body if isinstance(node,ast.Assign) and any(isinstance(name,ast.Name) and name.id=='VERSION' for name in node.targets)))=='0.23.0'
 previous=json.loads(Path('/var/lib/serverhub-broker/operations/stage-jarvis.state').read_text())

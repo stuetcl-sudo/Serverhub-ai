@@ -223,7 +223,7 @@ feature in Jarvis OS.
 ## Audit and acceptance boundaries
 
 Ubuntu 24.04 user-namespace restrictions are handled by an unattached,
-root-installed serverhub-build AppArmor label used explicitly by aa-exec for
+root-installed serverhub-ai-build AppArmor label used explicitly by aa-exec for
 Bubblewrap. On Ubuntu this explicit label permits creation of the nested user
 namespace; the worker has no host capabilities. ProtectKernelTunables is disabled
 on the worker unit because its locked parent /proc/sys mount prevents bubblewrap

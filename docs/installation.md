@@ -26,8 +26,8 @@ replace the system's Node or install the controller in Docker. TLS access to apt
 PyPI, npm and nodejs.org is required; use reviewed caches for an offline environment.
 The build tools are pinned; apt security updates are intentionally not frozen.
 
-The installer creates dedicated `serverhub-api`, `serverhub-worker`,
-`serverhub-node`, `serverhub-staging`, and `serverhub-migrate` accounts; a separate `serverhub` database
+The installer creates dedicated `serverhub-ai-api`, `serverhub-ai-worker`,
+`serverhub-ai-node`, `serverhub-ai-staging`, and `serverhub-ai-migrate` accounts; a separate `serverhub` database
 and roles; root-owned release files; hardened systemd units; protected configuration;
 and initial owner credentials. It does not edit existing SSH, firewall, VPN, Docker
 workloads or reverse-proxy configuration. PostgreSQL package installation starts a
@@ -131,7 +131,7 @@ sudo env PYTHONPATH="$PWD/src" .build-venv/bin/python -m serverhub.ops.installer
 
 The controller's public HTTPS certificate must be trusted by that node. Set `name`
 and the one-use `enrollment_token` in `/etc/serverhub/node.yaml` locally as root;
-keep root ownership, group `serverhub-node`, mode 0640. A private CA can be supplied
+keep root ownership, group `serverhub-ai-node`, mode 0640. A private CA can be supplied
 with `ca_bundle`. Then start `serverhub-ai-node.service`. The resulting individual
 identity and durable command journal are private to the node account. Remove the
 consumed token from the configuration. Revocation requires a new owner enrollment.
