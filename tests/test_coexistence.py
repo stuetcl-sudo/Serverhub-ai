@@ -156,7 +156,8 @@ def test_root_enrolled_administration_dropin_can_survive_upgrade(tmp_path):
     assert plan(SOURCE, root=tmp_path)['state'] == 'reviewed'
 
 
-def test_independent_namespace_watchdog_restores_only_recorded_ai_resources(tmp_path, monkeypatch):
+@pytest.mark.parametrize("created", [True, False])
+def test_independent_namespace_watchdog_restores_only_recorded_ai_resources(tmp_path, monkeypatch, created):
     import base64
     import serverhub.ops.unit_recovery as watchdog
     actual_path = Path
@@ -175,7 +176,8 @@ def test_independent_namespace_watchdog_restores_only_recorded_ai_resources(tmp_
     control.write_bytes(b'untouched')
     unit = rooted('/etc/systemd/system/serverhub-ai-worker.service')
     unit.parent.mkdir(parents=True)
-    unit.write_text('candidate unit')
+    if created:
+        unit.write_text('candidate unit')
     data = {'state': 'armed', 'deadline': 100,
             'previous': '/opt/serverhub/releases/old',
             'units': [{'new': 'serverhub-ai-worker.service', 'old': 'serverhub-worker.service',

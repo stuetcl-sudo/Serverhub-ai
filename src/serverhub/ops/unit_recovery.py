@@ -32,7 +32,10 @@ def recover(*, force=False):
     if data['state'] != 'armed' or (not force and time.time() < data['deadline']):
         return {'state': data['state']}
     # Only units proven by plan() and recorded before any stop are ever touched.
-    _run(['systemctl', 'disable', '--now', *[x['new'] for x in data['units']]])
+    created = [x['new'] for x in data['units']
+               if Path('/etc/systemd/system', x['new']).is_file()]
+    if created:
+        _run(['systemctl', 'disable', '--now', *created])
     for path, saved in data['files'].items():
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
