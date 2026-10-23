@@ -251,6 +251,21 @@ def migrate(source, *, repair_legacy_permissions=False):
     if JOURNAL.exists() and json.loads(JOURNAL.read_text()).get('state') == 'armed':
         raise ConflictError('Migration is armed; wait for recovery or run --rollback')
     data = plan(source)
+    # Repair requires prebuilt artifacts. Validate them before arming rollback,
+    # disabling services, or changing any systemd unit. Builds run as an
+    # unprivileged checkout owner, never implicitly inside root migration.
+    source = Path(source).resolve()
+    wheels = list((source / 'dist').glob('*.whl'))
+    if len(wheels) != 1:
+        raise ConflictError(
+            'Migration requires exactly one prebuilt wheel in dist/. '
+            'Build as the checkout owner before --apply.'
+        )
+    if not (source / 'frontend/dist/index.html').is_file():
+        raise ConflictError(
+            'Migration requires prebuilt frontend/dist/index.html. '
+            'Run npm ci and npm run build as the checkout owner before --apply.'
+        )
     if data['unsafe_runtime_paths'] and not repair_legacy_permissions:
         raise ConflictError('Anchored legacy runtime has writable files. Review --plan and explicitly use --repair-legacy-permissions to seal only the verified AI OS runtime; no service changed')
     for name in ('serverhub-ai-namespace-recovery.service', 'serverhub-ai-namespace-recovery.timer'):
