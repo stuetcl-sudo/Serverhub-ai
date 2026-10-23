@@ -215,6 +215,7 @@ def repair(source):
                 }
             )
         )
+        (release / "installed.json").chmod(0o644)
         installer._activate(release)
         installer._run(["systemctl", "daemon-reload"])
         installer._run(["systemctl", "restart", "serverhub-ai-api.service", "serverhub-ai-worker.service"])

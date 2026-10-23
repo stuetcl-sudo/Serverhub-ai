@@ -130,7 +130,7 @@ def test_claimed_install_rejects_loaded_foreign_unit(tmp_path, monkeypatch):
     import serverhub.ops.coexistence as module
     monkeypatch.setattr(module, 'claim', lambda root: {'owned': True})
     monkeypatch.setattr(module, 'protected', lambda path, **kwargs: None)
-    monkeypatch.setattr(module, 'api_owns_port', lambda runner: True)
+    monkeypatch.setattr(module, 'api_owns_port', lambda runner, port: True)
     def missing(name):
         raise KeyError(name)
     monkeypatch.setattr(module.pwd, 'getpwnam', missing)
@@ -139,3 +139,17 @@ def test_claimed_install_rejects_loaded_foreign_unit(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=0, stdout='LoadState=loaded\nFragmentPath=/usr/lib/systemd/system/foreign.service\nDropInPaths=\n')
     result = inspect(root=tmp_path, units=['serverhub-ai-worker.service'], runner=runner)
     assert any(c['kind'] == 'service' and 'Foreign' in c['reason'] for c in result['conflicts'])
+
+
+def test_root_enrolled_administration_dropin_can_survive_upgrade(tmp_path):
+    from serverhub.ops.coexistence import valid_dropin
+    content = ('[Service]\nReadWritePaths=/etc /usr /var/cache/apt /var/lib/apt /var/lib/dpkg -/var/log/apt -/var/log/dpkg.log\n'
+               'ReadOnlyPaths=/etc/serverhub /opt/serverhub /etc/ssh /etc/systemd/system /etc/sudoers /etc/sudoers.d /etc/pam.d\n')
+    assert valid_dropin('serverhub-ai-broker.service', '20-administration.conf', content)
+    assert not valid_dropin('serverhub-ai-worker.service', '20-administration.conf', content)
+    assert not valid_dropin('serverhub-ai-broker.service', '20-administration.conf', content + 'User=attacker\n')
+    units = legacy(tmp_path)
+    drop = units / 'serverhub-broker.service.d'
+    drop.mkdir()
+    (drop / '20-administration.conf').write_text(content)
+    assert plan(SOURCE, root=tmp_path)['state'] == 'reviewed'

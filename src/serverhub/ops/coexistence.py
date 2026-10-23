@@ -9,6 +9,7 @@ import grp
 import json
 import os
 import pwd
+import re
 import socket
 import subprocess
 from pathlib import Path
@@ -87,6 +88,14 @@ def inspect(*, root=Path('/'), units=(), runner=subprocess.run, live=True):
                             uids.append(pwd.getpwnam(account).pw_uid)
                         except KeyError:
                             pass
+                if owned and name == '/var/lib/serverhub-stage-runtime' and path.exists():
+                    try:
+                        pwd.getpwnam('serverhub-staging')
+                    except KeyError:
+                        try:
+                            pwd.getpwuid(path.stat().st_uid)
+                        except KeyError:
+                            uids.append(path.stat().st_uid)  # orphan of the claimed staging account
                 protected(path, leaf_uids=uids)
             elif path.is_symlink():
                 raise ConflictError(f'Symlinked reserved path: {name}')
@@ -110,10 +119,14 @@ def inspect(*, root=Path('/'), units=(), runner=subprocess.run, live=True):
                 issue('service', unit, 'Timer points outside AI OS namespace')
         if dropins.exists():
             for drop in dropins.iterdir():
-                if (unit != 'serverhub-ai-worker.service' or drop.name != '10-ai-identity.conf'
-                        or drop.is_symlink() or not drop.is_file()
-                        or drop.read_text() != '[Service]\nUser=serverhub-ai\nGroup=serverhub-worker\n'):
+                if (drop.is_symlink() or not drop.is_file()
+                        or not valid_dropin(unit, drop.name, drop.read_text())):
                     issue('service', unit, 'Unrecognized drop-in; explicit review required')
+                elif live:
+                    try:
+                        protected(drop)
+                    except ConflictError as error:
+                        issue('service', unit, str(error))
         if (target.exists() or target.is_symlink() or dropins.exists()) and not owned:
             issue('service', unit, 'Unclaimed unit or drop-in exists')
         if live:
@@ -153,17 +166,28 @@ def inspect(*, root=Path('/'), units=(), runner=subprocess.run, live=True):
                     pass
         # A listener may belong to another application even on an existing AI OS
         # host. Identify its process via systemd; never kill it to free the port.
-        for family, address in [(socket.AF_INET, ('127.0.0.1', 9080)),
-                                (socket.AF_INET6, ('::1', 9080))]:
+        port = 9080
+        if owned:
+            for filename in ('api.env', 'access.env'):
+                config = root / 'etc/serverhub' / filename
+                if config.exists():
+                    protected(config)
+                    for line in config.read_text().splitlines():
+                        if line.startswith('SERVERHUB_API_PORT='):
+                            port = int(line.split('=', 1)[1].strip('\"\''))
+            if not 1 <= port <= 65535:
+                raise ConflictError('Invalid configured API listener port')
+        for family, address in [(socket.AF_INET, ('127.0.0.1', port)),
+                                (socket.AF_INET6, ('::1', port))]:
             try:
                 with socket.socket(family, socket.SOCK_STREAM) as probe:
                     probe.bind(address)
             except OSError as error:
                 if error.errno in (97, 99):  # IPv6 unavailable
                     continue
-                if owned and api_owns_port(runner):
+                if owned and api_owns_port(runner, port):
                     continue
-                issue('port', '9080/tcp', 'Address unavailable; stop and identify the listener or configure an isolated access plan')
+                issue('port', f'{port}/tcp', 'Address unavailable; stop and identify the listener or configure an isolated access plan')
         # Inspect, never alter, an already installed PostgreSQL cluster.
         import shutil
         if shutil.which('psql') and shutil.which('runuser') and not owned:
@@ -190,13 +214,13 @@ def require_safe(**kwargs):
     return report
 
 
-def api_owns_port(runner):
+def api_owns_port(runner, port=9080):
     result = runner(['systemctl', 'show', 'serverhub-ai-api.service', '--property=ControlGroup', '--value'],
                     check=False, text=True, capture_output=True, timeout=15, cwd='/')
     group = result.stdout.strip()
     if result.returncode or not group.startswith('/system.slice/serverhub-ai-api.service'):
         return False
-    result = runner(['ss', '-H', '-lntp', 'sport = :9080'], check=False, text=True,
+    result = runner(['ss', '-H', '-lntp', f'sport = :{port}'], check=False, text=True,
                     capture_output=True, timeout=15, cwd='/')
     import re
     listeners = result.stdout.splitlines()
@@ -214,3 +238,18 @@ def api_owns_port(runner):
             except OSError:
                 return False
     return True
+
+
+def valid_dropin(unit, name, text):
+    if unit == 'serverhub-ai-worker.service' and name == '10-ai-identity.conf':
+        return text == '[Service]\nUser=serverhub-ai\nGroup=serverhub-worker\n'
+    if unit == 'serverhub-ai-broker.service' and name == '20-administration.conf':
+        match = re.fullmatch(
+            r'\[Service\]\nReadWritePaths=([^\n]+) -/var/log/apt -/var/log/dpkg.log\n'
+            r'ReadOnlyPaths=/etc/serverhub /opt/serverhub /etc/ssh /etc/systemd/system /etc/sudoers /etc/sudoers.d /etc/pam.d\n', text)
+        if not match:
+            return False
+        paths = match[1].split(' ')
+        return (paths == sorted(set(paths)) and {'/usr', '/etc', '/var/lib/dpkg', '/var/lib/apt', '/var/cache/apt'} <= set(paths)
+                and all(re.fullmatch(r'/[A-Za-z0-9_./-]+', value) and '..' not in Path(value).parts for value in paths))
+    return False

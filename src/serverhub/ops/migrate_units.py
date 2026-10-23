@@ -13,7 +13,7 @@ from pathlib import Path
 import subprocess
 import time
 
-from .coexistence import CLAIM, ConflictError, claim, protected, write_claim
+from .coexistence import CLAIM, ConflictError, claim, protected, write_claim, valid_dropin
 from .installer import Installer
 
 JOURNAL = Path('/var/lib/serverhub-install/unit-migration.json')
@@ -38,7 +38,16 @@ def plan(source, *, root=Path('/')):
         raise ConflictError('Legacy current release is not an AI OS release symlink')
     installed = current / 'installed.json'
     if root == Path('/'):
-        protected(installed.resolve())
+        # Legacy installer wrote this non-secret file after chmod normalization.
+        # Permit its root:root group-writable mode only if group 0 has no other
+        # members; the independent 0600 install journal must match its digest.
+        record = installed.resolve()
+        protected(record.parent)
+        info = record.stat()
+        import grp
+        if (record.is_symlink() or info.st_uid != 0 or info.st_gid != 0
+                or info.st_mode & 0o002 or any(name != 'root' for name in grp.getgrgid(0).gr_mem)):
+            raise ConflictError('Unsafe legacy installed.json ownership or world write permission')
     if json.loads(installed.read_text())['manifest']['trust_boundary_digest'] != data['trust_digest']:
         raise ConflictError('Legacy release and installer trust records disagree')
     units = []
@@ -65,9 +74,12 @@ def plan(source, *, root=Path('/')):
             raise ConflictError(f'Legacy unit {old} is foreign or customized; explicit manual review required; no service changed')
         drop = target.with_name(old + '.d')
         if drop.exists():
-            expected_drop = '[Service]\nUser=serverhub-ai\nGroup=serverhub-worker\n'
-            if old != 'serverhub-worker.service' or list(drop.iterdir()) != [drop / '10-ai-identity.conf'] or (drop / '10-ai-identity.conf').read_text() != expected_drop:
-                raise ConflictError(f'Unrecognized legacy drop-in: {old}')
+            for item in drop.iterdir():
+                if (item.is_symlink() or not item.is_file()
+                        or not valid_dropin(new, item.name, item.read_text())):
+                    raise ConflictError(f'Unrecognized legacy drop-in: {old}')
+                if root == Path('/'):
+                    protected(item)
         units.append({'old': old, 'new': new})
     return {'units': units, 'previous': str(current.resolve()), 'state': 'reviewed',
             'preserved': '/opt/serverhub-control and all foreign services; accounts, data and database remain in place'}
@@ -102,10 +114,13 @@ def recover(*, force=False):
         os.chown(target, saved['uid'], saved['gid'])
     for unit in data['units']:
         Path('/etc/systemd/system', unit['new']).unlink(missing_ok=True)
-        drop = Path('/etc/systemd/system', unit['new'] + '.d/10-ai-identity.conf')
-        drop.unlink(missing_ok=True)
-        if drop.parent.exists() and not list(drop.parent.iterdir()):
-            drop.parent.rmdir()
+        directory = Path('/etc/systemd/system', unit['new'] + '.d')
+        for saved_path in data['files']:
+            saved = Path(saved_path)
+            if saved.parent.name == unit['old'] + '.d':
+                (directory / saved.name).unlink(missing_ok=True)
+        if directory.exists() and not list(directory.iterdir()):
+            directory.rmdir()
     current = Path('/opt/serverhub/current')
     replacement = current.with_name('.namespace-recover')
     replacement.unlink(missing_ok=True)
@@ -155,7 +170,7 @@ def migrate(source):
         if pending.exists() and json.loads(pending.read_text()).get('state') in ('armed', 'running', 'applying'):
             raise ConflictError('Finish or recover pending operation first: ' + str(pending))
     files = [Path('/etc/systemd/system', x['old']) for x in data['units']]
-    files += list(Path('/etc/systemd/system/serverhub-worker.service.d').glob('*'))
+    files += [p for unit in data['units'] for p in Path('/etc/systemd/system', unit['old'] + '.d').glob('*')]
     files += [p for p in Path('/etc/serverhub').rglob('*') if p.is_file()]
 
     data['files'] = {}
@@ -185,16 +200,18 @@ def migrate(source):
             for unit in data['units']:
                 text = text.replace(unit['old'], unit['new'])
             text = text.replace('/run/serverhub-broker', '/run/serverhub-ai-broker').replace(
-                'RuntimeDirectory=serverhub-broker', 'RuntimeDirectory=serverhub-ai-broker')
+                'RuntimeDirectory=serverhub-broker', 'RuntimeDirectory=serverhub-ai-broker').replace('/opt/serverhub/recovery/', '/opt/serverhub/recovery-ai/')
             new.write_text(text)
             old.unlink()
-            drop = Path(str(old) + '.d/10-ai-identity.conf')
-            if drop.exists():
-                replacement = Path(str(new) + '.d/10-ai-identity.conf')
-                replacement.parent.mkdir()
-                replacement.write_bytes(drop.read_bytes())
-                drop.unlink()
-                drop.parent.rmdir()
+            dropdir = Path(str(old) + '.d')
+            if dropdir.exists():
+                replacement = Path(str(new) + '.d')
+                replacement.mkdir()
+                for drop in dropdir.iterdir():
+                    import shutil
+                    shutil.copy2(drop, replacement / drop.name)
+                    drop.unlink()
+                dropdir.rmdir()
         for path in [Path('/etc/serverhub/broker.yaml'), Path('/etc/serverhub/node.yaml')]:
             text = path.read_text().replace('/run/serverhub-broker', '/run/serverhub-ai-broker')
             path.write_text(text)

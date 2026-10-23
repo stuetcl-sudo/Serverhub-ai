@@ -48,6 +48,9 @@ TRUST_FILES = [
     "src/serverhub/ai/providers.py",
     "src/serverhub/node/watchdog.py",
     "src/serverhub/ops/installer.py",
+    "src/serverhub/ops/coexistence.py",
+    "src/serverhub/ops/migrate_units.py",
+    "src/serverhub/ops/unit_recovery.py",
     "src/serverhub/ops/release.py",
     "src/serverhub/ops/backup.py",
 ]
@@ -608,6 +611,8 @@ class Installer:
                         }
                     )
                 )
+
+                (release / "installed.json").chmod(0o644)
 
             phase("artifacts", artifacts)
             credentials = state["credentials"]

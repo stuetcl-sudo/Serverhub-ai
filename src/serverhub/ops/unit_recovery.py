@@ -41,10 +41,13 @@ def recover(*, force=False):
         os.chown(target, saved['uid'], saved['gid'])
     for unit in data['units']:
         Path('/etc/systemd/system', unit['new']).unlink(missing_ok=True)
-        drop = Path('/etc/systemd/system', unit['new'] + '.d/10-ai-identity.conf')
-        drop.unlink(missing_ok=True)
-        if drop.parent.exists() and not list(drop.parent.iterdir()):
-            drop.parent.rmdir()
+        directory = Path('/etc/systemd/system', unit['new'] + '.d')
+        for saved_path in data['files']:
+            saved = Path(saved_path)
+            if saved.parent.name == unit['old'] + '.d':
+                (directory / saved.name).unlink(missing_ok=True)
+        if directory.exists() and not list(directory.iterdir()):
+            directory.rmdir()
     current = Path('/opt/serverhub/current')
     replacement = current.with_name('.namespace-recover')
     replacement.unlink(missing_ok=True)
