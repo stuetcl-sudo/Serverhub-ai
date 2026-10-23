@@ -1,0 +1,36 @@
+name: Real Ollama model execution
+on:
+  workflow_dispatch:
+  push:
+    branches: [release/production-readiness]
+    paths: ['src/serverhub/ai/**', 'tests/test_real_ollama_job.py', '.github/workflows/real-ollama.yml']
+  pull_request:
+    paths: ['src/serverhub/ai/**', 'tests/test_real_ollama_job.py', '.github/workflows/real-ollama.yml']
+jobs:
+  qwen-real:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[test]'
+      - name: Start actual pinned Ollama, bound to loopback only
+        run: |
+          docker run -d --name ollama --memory=5g --cpus=4 -p 127.0.0.1:11434:11434 -e OLLAMA_NUM_PARALLEL=1 ollama/ollama:0.40.9
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:11434/api/tags && break; sleep 2; done
+          docker exec ollama ollama pull qwen2.5:3b
+          curl -fsS http://127.0.0.1:11434/api/tags
+      - name: Execute real Qwen through the persistent authorized job engine
+        run: python -m pytest tests/test_real_ollama_job.py -v -s --junitxml=real-ollama.xml
+        env:
+          SERVERHUB_REAL_OLLAMA_URL: http://127.0.0.1:11434
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-ollama-results
+          path: real-ollama.xml
+      - name: Provider diagnostics
+        if: failure()
+        run: docker logs --tail 60 ollama

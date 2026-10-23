@@ -94,10 +94,20 @@ TOOLS: dict[str, tuple[type[BaseModel], str]] = {
 NODE_TOOLS = {"inventory.refresh", "diagnostics.network", "systemd.status", "systemd.logs", "systemd.restart", "docker.restart", "docker.compose.apply", "security.scan"}
 
 
-def tool_schemas() -> list[dict]:
+def tool_schemas(profile: str = "all") -> list[dict]:
     core = [{"type": "function", "function": {"name": name.replace(".", "__"), "description": description,
              "parameters": model.model_json_schema()}} for name, (model, description) in TOOLS.items()]
-    return core + operation_schemas()
+    if profile == "all":
+        return core + operation_schemas()
+    base = {"inventory.read", "inventory.query", "inventory.refresh", "task.verify", "agent.specialize"}
+    families = {"infrastructure": set(), "linux": {"systemd.", "package.", "configuration.", "diagnostics."},
+                "docker": {"docker.", "catalog."}, "network": {"diagnostics.network"},
+                "security": {"security.", "host.audit"}, "development": {"development."},
+                "monitoring": {"memory.", "host.audit"}, "verification": set()}
+    prefixes = families.get(profile, set())
+    return [schema for schema in core + operation_schemas()
+            if (schema["function"]["name"].replace("__", ".") in base or
+                any(schema["function"]["name"].replace("__", ".").startswith(prefix) for prefix in prefixes))]
 
 
 def _save(ctx, state: dict) -> None:
@@ -351,7 +361,7 @@ def autonomous_job(ctx, spec: dict) -> dict:
             raise ValueError("Configured model route is unavailable")
         messages = list(state["messages"])
         messages[0] = {"role": "system", "content": BASE_INSTRUCTIONS + "\nCurrent specialist: " + specialist.instructions}
-        schemas = tool_schemas()
+        schemas = tool_schemas(state["specialist"])
         messages, compaction = compact_context(messages, schemas, routes[route], budget.token_limit - budget.tokens_used)
         if compaction:
             state["messages"] = messages
