@@ -106,7 +106,12 @@ Before stopping proven AI OS units, migration writes a root-only file/config/uni
 checkpoint and arms a standalone systemd rollback timer that also runs after boot.
 It changes only those proven units and AI node/broker socket configuration, then
 runs the reviewed backup/migration/upgrade/health workflow. Credentials, database,
-accounts, audit and workload data stay in place. The previous independent recovery
+accounts, audit and workload data stay in place. Proven AI service names in the
+broker allowlist are retargeted to their new names. A registered broker plan
+referring to old unit names elsewhere blocks migration for explicit plan review.
+Existing controller policy grants are retained without widening their arguments;
+review grants/jobs that explicitly name old AI units before resuming them. Old
+names are denied by the migrated broker instead of being redirected to Control. The previous independent recovery
 runtime remains intact. New recovery code is installed separately in `recovery-ai`.
 
 On failure it restores the old current-release link, exact saved configuration,

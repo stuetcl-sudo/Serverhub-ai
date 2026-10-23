@@ -25,6 +25,27 @@ def old_name(name):
     return name.replace('serverhub-ai-', 'serverhub-', 1)
 
 
+def migrate_broker_services(config, units):
+    """Retarget only the allowlist entries proven to name AI OS services.
+
+    Existing controller grants are not broadened. Old argument grants will be
+    denied at the broker until their owner explicitly reviews the new targets.
+    """
+    mapping = {item['old']: item['new'] for item in units}
+    names = set(mapping) | {name.removesuffix('.service') for name in mapping}
+    def references(value):
+        if isinstance(value, dict):
+            return any(references(key) or references(item) for key, item in value.items())
+        if isinstance(value, list):
+            return any(references(item) for item in value)
+        return isinstance(value, str) and value in names
+    if references({key: value for key, value in config.items() if key != 'allowed_services'}):
+        raise ConflictError('A registered broker plan references a legacy AI unit outside allowed_services; review that plan before migration')
+    result = dict(config)
+    result['allowed_services'] = [mapping.get(name, name) for name in config.get('allowed_services', [])]
+    return result
+
+
 def plan(source, *, root=Path('/')):
     installer = Installer(source, root=root)
     if claim(root):
@@ -127,6 +148,12 @@ def plan(source, *, root=Path('/')):
                            for path in loaded.get('DropInPaths', '').split())):
                 raise ConflictError(f'Loaded legacy unit {old} differs from the reviewed file; no stop or daemon-reload was performed')
         units.append({'old': old, 'new': new})
+    broker = root / 'etc/serverhub/broker.yaml'
+    if broker.exists():
+        import yaml
+        if root == Path('/'):
+            protected(broker)
+        migrate_broker_services(yaml.safe_load(broker.read_text()), units)
     return {'units': units, 'previous': str(current.resolve()), 'state': 'reviewed',
             'legacy_metadata_mode': oct(metadata_mode), 'metadata_normalization': metadata_mode != 0o644,
             'unsafe_runtime_paths': sorted(set(unsafe_runtime)),
@@ -294,6 +321,9 @@ def migrate(source, *, repair_legacy_permissions=False):
                 dropdir.rmdir()
         for path in [Path('/etc/serverhub/broker.yaml'), Path('/etc/serverhub/node.yaml')]:
             text = path.read_text().replace('/run/serverhub-broker', '/run/serverhub-ai-broker')
+            if path.name == 'broker.yaml':
+                import yaml
+                text = yaml.safe_dump(migrate_broker_services(yaml.safe_load(text), data['units']))
             info = path.stat()
             _atomic_file(path, text.encode(), info.st_mode & 0o777, info.st_uid, info.st_gid)
         write_claim()

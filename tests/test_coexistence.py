@@ -236,3 +236,16 @@ def test_runtime_sealing_removes_writes_without_following_symlinks(tmp_path):
     assert executable.stat().st_mode & 0o111 == 0o111
     assert not (source / 'module.pyc').exists()
     assert outside.stat().st_mode & 0o777 == 0o666
+
+
+def test_broker_migration_retargets_proven_ai_only_and_blocks_unreviewed_plan_references():
+    from serverhub.ops.migrate_units import migrate_broker_services
+    units = [{'old': 'serverhub-worker.service', 'new': 'serverhub-ai-worker.service'}]
+    config = {'allowed_services': ['serverhub-worker.service', 'serverhub-docker-ro.service'],
+              'allowed_containers': ['unrelated']}
+    result = migrate_broker_services(config, units)
+    assert result['allowed_services'] == ['serverhub-ai-worker.service', 'serverhub-docker-ro.service']
+    assert config['allowed_services'][0] == 'serverhub-worker.service'
+    assert result['allowed_containers'] == ['unrelated']
+    with pytest.raises(ConflictError, match='registered broker plan'):
+        migrate_broker_services({**config, 'package_plans': {'name': {'verify': ['systemctl', 'is-active', 'serverhub-worker.service']}}}, units)
