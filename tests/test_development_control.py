@@ -82,7 +82,11 @@ def test_mcp_project_job_lifecycle_and_scopes(control, registered):
     readonly = mcp_token(identity, ['serverhub:read'])
     assert client.post('/mcp', headers=headers, json={'jsonrpc':'2.0','id':1,'method':'tools/list'}).status_code == 401
     assert client.get('/api/projects', headers=mcp).status_code == 401
-    assert not call(client,mcp,'list_projects')['result'].get('isError')
+    listed = call(client,mcp,'list_projects')['result']
+    assert not listed.get('isError')
+    import json
+    descriptor = json.loads(listed['content'][0]['text'])[0]
+    assert descriptor['execution_location'] == 'controller' and descriptor['isolation'] == 'bubblewrap'
     denied = client.post('/mcp', headers=readonly, json={'jsonrpc':'2.0','id':1,'method':'tools/call',
         'params':{'name':'create_development_job','arguments':{'project':registered.name}}})
     assert denied.status_code == 403

@@ -57,7 +57,7 @@ def projects(actor: Principal = Depends(current_principal), db=Depends(get_db)):
             "build_steps": len(project.build), "test_steps": len(project.tests),
             "independent_checks": len(project.independent_checks), "staging_checks": len(project.staging_checks),
             "dependency_network": project.allow_dependency_network, "production_deployment": False,
-            "execution_location": "controller sandbox", "staging_requires_host": True})
+            "execution_location": "controller", "isolation": "bubblewrap", "staging_requires_host": True})
     return rows
 
 
