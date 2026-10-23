@@ -96,7 +96,14 @@ Reported execution context is node evidence, not proof against a compromised
 node. Actual selected provider/model/route are recorded in job events.
 
 New broker audit records are append-oriented, fsynced and hash-linked under a
-locked root-only regular file. Group/world-readable files, symlinks, incomplete
+locked root-only regular file, defaulting to
+`/var/lib/serverhub-broker/audit/events.jsonl`. Systemd creates the broker state
+directory as root-owned 0700. The default avoids `/var/log` ancestors that may be
+group-writable on Ubuntu: a protected child alone cannot prevent parent-directory
+replacement. Existing `/var/log/serverhub-broker/events.jsonl` files are retained;
+an operator may copy a reviewed legacy audit file to the new protected location
+before broker activation to preserve one chain. Explicit custom audit paths still
+must satisfy the full ancestor checks. Group/world-readable files, symlinks, incomplete
 trailing records and unsafe ancestors are rejected. Existing legacy records form
 an explicitly unlinked prefix; they are not retroactively authenticated. Use
 `serverhub.node.broker.verify_broker_audit(path)` for a read-only chain check.
@@ -122,7 +129,9 @@ The fixture is not a real Ollama model.
 
 The configured test VM `192.168.122.10:9080` and old production-side forwarding
 port `192.168.68.135:19080` both timed out from this development environment on
-2026-10-23. No SSH credentials or network path to those hosts are available here.
+2026-10-23. Direct, proxy-disabled requests to both addresses additionally failed
+with `ConnectError: [Errno 101] Network is unreachable`. No SSH credentials or
+network path to those hosts are available here.
 Consequently the actually installed revision, failed tunnel's systemd/journal
 state and real private Ollama endpoint cannot be inspected or verified. No
 production changes were made. ServerHub Control MCP ping succeeded, but its

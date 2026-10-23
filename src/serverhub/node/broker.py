@@ -10,6 +10,7 @@ import uuid
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import socket
@@ -336,7 +337,7 @@ class BrokerServer(socketserver.UnixStreamServer):
 
 
 def append_broker_audit(config: dict, record: dict) -> None:
-    path = Path(config.get("audit_log", "/var/log/serverhub-broker/events.jsonl"))
+    path = Path(config.get("audit_log", "/var/lib/serverhub-broker/audit/events.jsonl"))
     if not path.is_absolute() or path.is_symlink():
         raise BrokerDenied("unsafe audit path")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -441,7 +442,8 @@ class BrokerHandler(socketserver.StreamRequestHandler):
                                     "privilege": privilege, "result": {"verified": response.get("result", {}).get("verified"),
                                     "exit_code": response.get("result", {}).get("exit_code"),
                                     "error": response.get("error")}})
-            except (OSError, BrokerDenied):
+            except (OSError, BrokerDenied) as error:
+                logging.getLogger(__name__).error("Protected broker audit unavailable (%s): %s", type(error).__name__, error)
                 response = {"ok": False, "error": "protected broker audit unavailable; action outcome uncertain"}
         self.wfile.write(json.dumps(response, separators=(",", ":")).encode()+b"\n")
 

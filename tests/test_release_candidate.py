@@ -234,3 +234,12 @@ def test_critical_service_diagnostics_require_exact_allowlist_but_restarts_stay_
     with pytest.raises(broker.BrokerDenied, match="protected"):
         broker.execute("systemd.restart", {"service": "serverhub-api.service"}, config)
     assert calls == ["serverhub-api.service"]
+
+
+def test_broker_audit_state_directory_is_protected_without_relaxing_ancestor_checks():
+    from pathlib import Path
+    source = Path(__file__).resolve().parents[1]
+    unit = (source / "packaging/systemd/serverhub-broker.service").read_text()
+    assert "StateDirectory=serverhub-broker" in unit
+    assert "StateDirectoryMode=0700" in unit
+    assert "/var/lib/serverhub-broker" in unit

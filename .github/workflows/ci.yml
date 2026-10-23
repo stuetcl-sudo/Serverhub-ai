@@ -82,5 +82,5 @@ jobs:
       - name: Native service diagnostics
         if: failure()
         run: |
-          sudo systemctl status serverhub-api serverhub-worker --no-pager || true
-          sudo journalctl -u serverhub-api -u serverhub-worker --no-pager -n 100 || true
+          sudo systemctl status serverhub-api serverhub-worker serverhub-broker --no-pager || true
+          sudo journalctl -u serverhub-api -u serverhub-worker -u serverhub-broker --no-pager -n 100 || true

@@ -30,6 +30,8 @@ if Path("/etc/serverhub/api.env").exists():
 
 from serverhub.ops.installer import Installer, InstallError
 
+print(json.dumps({"audit_parent_modes": {str(path): oct(path.stat().st_mode & 0o777)
+    for path in (Path("/var/log"), Path("/var/lib"))}}), flush=True)
 source = Path(__file__).resolve().parents[1]
 interrupted = False
 
@@ -207,8 +209,8 @@ for _ in range(30):
 assert broker_result["state"] == "succeeded", broker_result
 assert broker_result["result"]["execution_context"]["effective_uid"] == 0
 assert broker_result["result"]["execution_context"]["peer_uid"] == node.pw_uid
-assert verify_broker_audit("/var/log/serverhub-broker/events.jsonl")["valid"]
-records = [json.loads(line)["record"] for line in Path("/var/log/serverhub-broker/events.jsonl").read_text().splitlines()]
+assert verify_broker_audit("/var/lib/serverhub-broker/audit/events.jsonl")["valid"]
+records = [json.loads(line)["record"] for line in Path("/var/lib/serverhub-broker/audit/events.jsonl").read_text().splitlines()]
 assert any(record.get("correlation", {}).get("job_id") == status_job.json()["id"] for record in records)
 # The AI runtime cannot connect directly to the privileged socket.
 probe = subprocess.run(["runuser", "-u", "serverhub-ai", "--", python, "-c",
