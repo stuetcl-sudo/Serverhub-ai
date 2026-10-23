@@ -18,6 +18,7 @@ def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_
     source=repository(tmp_path/'source')
     project=Project(name='example',repository=str(source),tests=[Command(argv=['/usr/bin/true'])])
     monkeypatch.setattr(autonomous,'load_projects',lambda:{'example':project})
+    monkeypatch.setattr('serverhub.development.config.load_projects',lambda:{'example':project})
     config=ProviderConfig(kind='ollama',base_url='http://127.0.0.1',model='fixture',context_limit=16384,max_output_tokens=512)
     monkeypatch.setattr(autonomous,'load_routes',lambda:{'default':config})
     class IsolatedRunnerFixture:
@@ -50,7 +51,7 @@ def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_
     HANDLERS['development_autonomous']=autonomous.autonomous_development
     with SessionLocal() as db:
         db.add(Policy(name='scoped development',subject_id='owner',host_id='node1',project='example',environment='any',
-            operations=['development.workspace','development.read','development.patch','development.test','development.stage'],
+            operations=['development.artifact','development.workspace','development.read','development.patch','development.test','development.stage'],
             constraints={},expires_at=utcnow()+timedelta(hours=1),created_by='owner'))
         db.commit()
         job=submit_job(db,owner,'development_autonomous',{'project':'example','prompt':'Repair the failing application version'},

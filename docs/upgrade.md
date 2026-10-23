@@ -129,3 +129,12 @@ The standalone migration timer restores the old claim, config, units and origina
 homes after an interrupted/unverified conversion. After verified migration,
 select only identity-compatible releases for ordinary code rollback; do not
 restore generic Control-conflicting services or legacy identity defaults.
+
+### Development/MCP follow-up
+
+The exact legacy empty project mapping is normalized to an array during backed-up
+repair. Malformed nonempty configuration fails safely instead of being replaced.
+No new SQL revision is needed. Existing host-specific development grants are not
+broadened: review/regrant a controller-only project profile, adding staging,
+network or draft PR publication only when wanted. See [the exact reviewed upgrade
+and rollback procedure](development-mcp.md#reviewed-production-procedure--not-executed).

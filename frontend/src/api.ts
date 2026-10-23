@@ -32,7 +32,7 @@ export async function api<T = Json>(
         ? detail
         : Array.isArray(detail)
           ? detail.map((d: Json) => d.msg).join("; ")
-          : "Request could not be completed";
+          : detail?.message ? `${detail.message}${detail.remediation ? `. ${detail.remediation}` : ""}` : "Request could not be completed";
     throw new ApiError(response.status, message);
   }
   if (data === null && response.status !== 204)

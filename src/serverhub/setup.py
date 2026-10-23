@@ -114,7 +114,9 @@ class ProfileGrant(BaseModel):
     model_config = ConfigDict(extra="forbid")
     profile: str
     subject_id: str
-    host_id: str
+    host_id: str | None = None
+    allow_staging: bool = False
+    allow_publication: bool = False
     project: str | None = Field(default=None, max_length=200)
     hours: int = Field(default=24, ge=1, le=24 * 366)
     services: list[str] = Field(default_factory=list, max_length=50)
@@ -133,9 +135,9 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
     require_owner(actor)
     if body.profile not in PROFILES or not db.get(User, body.subject_id):
         raise HTTPException(422, "Choose a known profile and authenticated account")
-    host = db.get(Host, body.host_id)
-    if not host or host.revoked:
-        raise HTTPException(422, "Choose an enrolled, non-revoked host")
+    host = db.get(Host, body.host_id) if body.host_id else None
+    if (body.profile != "development" or body.host_id or body.allow_staging) and (not host or host.revoked):
+        raise HTTPException(422, "Choose an enrolled, non-revoked host; controller-only development needs no host")
     if any(
         not re.fullmatch(r"[A-Za-z0-9_.@-]{1,160}", value)
         for value in body.services + body.containers + body.network_targets + body.storage_targets + body.backup_targets + body.package_targets + body.configuration_targets + body.compose_targets
@@ -144,9 +146,12 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
     if body.profile == "development" and not body.project:
         raise HTTPException(422, "Development profile requires an explicitly registered project")
     if body.profile == "development":
-        from .development.config import load_projects
+        if any((body.services, body.containers, body.storage_targets, body.network_targets, body.backup_targets, body.package_targets, body.configuration_targets, body.compose_targets)):
+            raise HTTPException(422, "Development grants cannot include infrastructure targets; create a separate host-scoped profile")
+        from .development.config import configured_projects
 
-        if body.project not in load_projects():
+        project_contract = configured_projects().get(body.project)
+        if project_contract is None:
             raise HTTPException(422, "Project is not registered in the protected project configuration")
     operations = [
         (
@@ -163,6 +168,8 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
             "read",
         )
     ]
+    if body.profile == "development":
+        operations = []
     if body.storage_targets:
         operations.append((["diagnostics.storage"], {"target": body.storage_targets}, "read"))
     if body.network_targets:
@@ -188,11 +195,12 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
         if body.containers:
             operations.append((["docker.restart"], {"container_names": body.containers}, "maintenance"))
     if body.profile == "development":
-        operations.append((["development.deploy"], {"target": [body.project]}, "staging"))
+        if body.allow_staging:
+            operations.append((["development.deploy"], {"target": [body.project]}, "staging"))
         operations.append(
             (
                 [
-                    "development.workspace", "development.read",
+                    "development.workspace", "development.read", "development.artifact",
                     "development.patch",
                     "development.dependencies",
                     "development.test",
@@ -201,16 +209,21 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
                 "development",
             )
         )
-        operations.append((["development.stage"], {}, "staging"))
+        if body.allow_staging:
+            operations.append((["development.stage"], {}, "staging"))
         if body.allow_dependency_network:
             operations.append((["development.network"], {"phase": ["dependencies"]}, "development"))
+    if body.allow_publication:
+        if body.profile != "development" or not project_contract.publication_paths or not project_contract.publication_token_env:
+            raise HTTPException(422, "Draft PR publication requires a root-registered project publisher and a development profile")
+        operations.append((["development.publish"], {"target":[body.project]}, "development"))
     expires = utcnow() + timedelta(hours=body.hours)
     created = []
     for ops, constraints, environment in operations:
         row = Policy(
             name=PROFILES[body.profile]["name"],
             subject_id=body.subject_id,
-            host_id=body.host_id,
+            host_id=None if body.profile == "development" and environment == "development" else body.host_id,
             project=body.project,
             operations=ops,
             constraints=constraints,

@@ -158,7 +158,7 @@ def authorize(db, principal, operation: str, host_id=None, project=None, argumen
 
 def visible_host_ids(db, principal) -> list[str]:
     result = []
-    for host in db.scalars(select(Host)).all():
+    for host in db.scalars(select(Host).where(Host.revoked.is_(False))).all():
         try:
             authorize(db, principal, "inventory.read", host.id)
             result.append(host.id)

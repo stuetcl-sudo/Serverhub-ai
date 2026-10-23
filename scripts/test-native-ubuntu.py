@@ -293,7 +293,13 @@ subprocess.run(["userdel","serverhub-ai-staging"],check=True)
 legacy_models = Path("/etc/serverhub/models.yaml")
 legacy_models.write_text("routes:\n  default: obsolete-provider-reference\n")
 legacy_models.chmod(0o600)
+legacy_projects = Path("/etc/serverhub/projects.yaml")
+legacy_projects.write_text("projects: {}\n")
+legacy_projects.chmod(0o644)
+assert client.get("/api/projects", headers=headers).json() == []
 upgraded = repair(source)
+assert legacy_projects.read_text().endswith("projects: []\n")
+assert client.get("/api/projects", headers=headers).status_code == 200
 assert upgraded["state"] == "upgraded"
 assert subprocess.run(["id","serverhub-ai-staging"],capture_output=True).returncode==0
 assert subprocess.check_output(["systemctl","is-active","serverhub-ai-operation-watchdog.timer"],text=True).strip()=="active"

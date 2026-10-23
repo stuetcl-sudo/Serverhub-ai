@@ -2103,12 +2103,13 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const r = useResource<Json>(`/jobs/${id}`),
     events = useResource<Json[]>(`/jobs/${id}/events`),
     notice = useContext(ToastContext),
+    user = useContext(UserContext),
     [busy, setBusy] = useState(false);
   const job = r.data;
   async function action(name: string) {
     setBusy(true);
     try {
-      await post(`/jobs/${id}/${name}`);
+      await post(name === "publish" ? `/projects/jobs/${id}/publish` : `/jobs/${id}/${name}`);
       notice(`Job ${name} requested.`);
       await r.reload();
       await events.reload();
@@ -2238,6 +2239,8 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
               {job.result && (
                 <>
                   <h4>Result</h4>
+                  {job.state === "succeeded" && job.result.verified && ["development", "development_autonomous"].includes(job.kind) && ["owner", "admin"].includes(user?.role || "") && <button className="button secondary" disabled={busy} onClick={() => action("publish")}>Publish verified candidate as draft PR</button>}
+                  {job.result.publication?.pull_request && <p><a href={job.result.publication.pull_request} target="_blank" rel="noreferrer">Open candidate draft PR</a></p>}
                   <JsonView value={job.result} />
                 </>
               )}
@@ -3619,6 +3622,7 @@ function Integrations() {
 }
 function Projects() {
   const r = useResource<Json[]>("/projects"),
+    hosts = useResource<Json[]>("/hosts"),
     notice = useContext(ToastContext);
   const [project, setProject] = useState<Json | null>(null),
     [patchText, setPatchText] = useState(""),
@@ -3730,7 +3734,10 @@ function Projects() {
             </label>
             <label>
               Enrolled staging host ID (required for runtime deployment)
-              <input value={targetHost} onChange={(event) => setTargetHost(event.target.value)} maxLength={100} />
+              <select value={targetHost} onChange={(event) => setTargetHost(event.target.value)} required={stage}>
+                <option value="">Controller sandbox only</option>
+                {rows(hosts.data).filter(h => !h.revoked).map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+              </select>
             </label>
             <label>
               Proposed patch (optional; ignored when an autonomous task is supplied)
@@ -3752,7 +3759,7 @@ function Projects() {
               Deploy to enrolled isolated staging (autonomous task) or run configured staging checks
             </label>
             <p className="muted">
-              The worker creates an isolated Git workspace and checks the active
+              Grant the Development profile once for this project and account under Approval policies. Controller-only checks need no host or privileged broker. The worker creates an isolated Git workspace and checks the active
               project policy. Production deployment is a separate release
               operation.
             </p>

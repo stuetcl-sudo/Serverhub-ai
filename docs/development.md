@@ -27,15 +27,19 @@ Submit a job using this body (job execution limits may also be supplied):
 The base commit must exactly match the configured remote base ref. Omit it to use the
 current configured ref. Project-scoped active policies must explicitly allow
 `development.workspace`, `development.patch`, `development.dependencies`,
-`development.test` and `development.stage` as needed. Dependency commands with network
+`development.test`, `development.artifact` and optionally `development.stage` as needed. Dependency commands with network
 also require `development.network` and `allow_dependency_network:true` in owner config.
 User-supplied commands, URLs, destination paths or additional job fields are rejected.
 
 A model can queue this same pipeline through the `development.submit` tool using a
 structured patch. It receives a child job ID rather than a fabricated deployment result.
-The current implementation does not automatically generate a new patch in response to
-failed tests; failed results and workspace state are retained for the next authorized
-repair job. It does not finish Jarvis functionality merely by having this pipeline.
+For autonomous correction, use `development_autonomous` with a bounded prompt instead:
+its fixed tool catalog supports plans, source inspection, bounded edits, configured
+checks and finish. Failed checks feed back into the next model round. Identical
+failed checks and three rounds without source/check progress stop with partial
+results. The original repository and independent acceptance checks cannot be modified.
+A small local model can still fail; a verified result is mandatory for success.
+
 
 ## Isolation and verification
 
@@ -57,11 +61,14 @@ symlinks but are excluded from candidate archives and cannot be patched through 
 workflow. Archives reject hardlinks and traversal, normalize ownership/timestamps and
 have size/file-count bounds. Candidate paths do not include arbitrary host content.
 
-Staging checks execute configured isolated commands and record pass/fail. The workflow
-does not yet start or retain a generic externally accessible staging service; use a
-reviewed registered deployment adapter for that lifecycle. `release:true` requires a
-production policy but still fails closed because no generic production deploy adapter
-is installed. The platform's own signed-release maintenance path is separate.
+Opt-in staging requires an explicit enrolled host, independent root-owned checks,
+a separate staging policy and a root-enrolled `development.deploy` broker plan.
+The broker starts a dedicated private-network systemd staging unit, tests HTTP
+health inside that namespace, and restores the verified predecessor if the new
+candidate fails. It never uses Jarvis production port 8088. Normal controller-only
+build/test/archive jobs need no host or root broker. `release:true` still fails
+closed without a separately configured production adapter.
+
 
 ## Restart behavior
 
@@ -73,6 +80,5 @@ commands may execute again inside the isolated workspace. They must therefore be
 idempotent install/build operations.
 
 If bubblewrap is missing or cannot create its namespaces, the job stops before running
-project code. There is no unsandboxed fallback. This delivery environment allowed real
-Git/patch/archive tests but denied namespace creation; actual sandbox code execution
-must be verified on the intended native Linux host before using development jobs.
+project code. There is no unsandboxed fallback. See [the MCP/Jarvis follow-up guide](development-mcp.md) for the current executable
+Ubuntu CI pilot, scoped grants, publisher, upgrade and remaining external checks.

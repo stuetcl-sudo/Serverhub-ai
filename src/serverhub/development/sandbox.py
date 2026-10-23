@@ -119,6 +119,10 @@ class SandboxRunner:
             return CommandResult(list(command.argv), process.returncode or 0, content, timed_out)
 
     def preflight(self, workspace: Path) -> dict:
-        result = self.run(workspace, Command(argv=["/usr/bin/true"], timeout=10))
+        result = self.run(workspace, Command(argv=["/usr/bin/python3", "-I", "-c",
+            "import importlib.util,json,ssl,sys; "
+            "tools={k:importlib.util.find_spec(k) is not None for k in ('pip','venv')}; "
+            "print(json.dumps({'python':sys.version.split()[0],'tools':tools,'sandbox':True})); "
+            "sys.exit(0 if all(tools.values()) else 78)"], timeout=10))
         return {"available": result.returncode == 0, "returncode": result.returncode,
-                "detail": result.output, "unsandboxed_fallback": False}
+                "detail": result.output, "remediation": "Install python3-pip, python3-venv, bubblewrap and the AI AppArmor profile through reviewed native repair; never use a production virtualenv", "unsandboxed_fallback": False}

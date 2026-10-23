@@ -209,3 +209,41 @@ def write_manifest(path: Path, payload: dict) -> None:
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def source_patch(workspace, base_commit):
+    if not base_commit or not COMMIT.fullmatch(base_commit):
+        return None
+    try:
+        patch = git(workspace, "diff", "--no-ext-diff", "--no-textconv", base_commit, "HEAD", timeout=30)
+        return patch if len(patch.encode()) <= 500000 else None
+    except DevelopmentError:
+        return None
+
+
+def source_changes(workspace: Path, base_commit: str | None) -> list | None:
+    """Bounded tracked UTF-8 changes; no arbitrary file-reading API is exposed."""
+    if not base_commit or not re.fullmatch(r"[a-f0-9]{40,64}", base_commit):
+        return None
+    paths = git(workspace, "diff", "--name-only", "--no-renames", "-z", base_commit, "HEAD").split("\0")
+    changed, total = [], 0
+    for name in filter(None, paths):
+        safe_relative(name)
+        path = workspace / name
+        if path.exists():
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 200000:
+                return None
+            try:
+                content = path.read_text(encoding="utf-8")
+            except UnicodeError:
+                return None
+            if "\0" in content:
+                return None
+            total += len(content.encode())
+        else:
+            content = None
+        changed.append({"path": name, "content": content,
+                        "sha256": hashlib.sha256(content.encode()).hexdigest() if content is not None else None})
+        if total > 500000 or len(changed) > 100:
+            return None
+    return changed

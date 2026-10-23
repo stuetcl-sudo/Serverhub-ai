@@ -418,6 +418,7 @@ it("submits configured development workflow without arbitrary command arguments"
   await userEvent.click(
     await screen.findByRole("button", { name: "Run project workflow" }),
   );
+  await userEvent.selectOptions(screen.getByLabelText(/Enrolled staging host ID/), "host-a");
   await userEvent.click(
     screen.getByLabelText(/Deploy to enrolled isolated staging/),
   );
@@ -430,6 +431,7 @@ it("submits configured development workflow without arbitrary command arguments"
   );
   expect(JSON.parse(String(call?.[1]?.body))).toEqual({
     kind: "development",
+    host_id: "host-a",
     project: "jarvis",
     spec: { project: "jarvis", stage: true },
   });
@@ -512,7 +514,7 @@ it("submits a scoped autonomous project task and staging host without executable
   render(<App />);
   await userEvent.click(await screen.findByRole("button", { name: "Run project workflow" }));
   await userEvent.type(screen.getByLabelText(/Autonomous development task/), "Repair the application version");
-  await userEvent.type(screen.getByLabelText(/Enrolled staging host ID/), "host-a");
+  await userEvent.selectOptions(screen.getByLabelText(/Enrolled staging host ID/), "host-a");
   await userEvent.click(screen.getByLabelText(/Deploy to enrolled isolated staging/));
   await userEvent.click(screen.getByRole("button", { name: "Submit workflow" }));
   await screen.findByText("Job execution");

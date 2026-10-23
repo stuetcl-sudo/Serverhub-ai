@@ -65,3 +65,9 @@ Its credentials/OAuth/configuration are not modified. The optional legacy adapte
 queues a durable `operation`/`host.audit` job and returns its ID immediately.
 `job_progress` and `job_result` expose the same state as the dashboard. It never
 executes a repair or claims synchronous completion. See [host-audit.md](host-audit.md).
+
+## Development autonomy tools
+
+See [development-mcp.md](development-mcp.md) for dedicated project/job/log/artifact/
+resume/cancel tools, expiring project profiles, optional draft PR publication and
+the real Ubuntu OAuth/MCP/Jarvis acceptance workflow. Control's connection is separate.

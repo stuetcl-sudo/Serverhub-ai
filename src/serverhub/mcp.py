@@ -511,8 +511,67 @@ TOOLS = [
     ),
 ]
 
+# Dedicated development tools expose only registered project identities and job
+# controls. They reuse REST authentication/authorization; no command/path input.
+TOOLS += [
+    ("list_projects", "List registered development projects visible to this identity", _object(), "serverhub:read"),
+    ("create_development_job", "Queue a durable registered-project workflow; omit prompt for no-patch validation",
+     _object({"project": {"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+              "prompt":{"type":"string","minLength":1,"maxLength":16000}, "stage":{"type":"boolean"},
+              "host_id":HOST, "idempotency_key":{"type":"string","minLength":1,"maxLength":200},
+              "token_budget":{"type":"integer","minimum":0,"maximum":100000}}, ["project"]), "serverhub:jobs"),
+    ("job_logs", "Read bounded own-job events after a cursor", _object({"job_id":HOST,
+        "after":{"type":"integer","minimum":0}}, ["job_id"]), "serverhub:read"),
+    ("publish_development_result", "Publish a verified bounded candidate as a draft PR to its root-registered repository; separate policy required", _object({"job_id":HOST}, ["job_id"]), "serverhub:jobs"),
+    ("development_artifacts", "Read the authorized job's candidate manifest and bounded source patch, never arbitrary files",
+        _object({"job_id":HOST},["job_id"]), "serverhub:read"),
+    ("resume_job", "Resume own paused/approval-blocked job only after its initiating identity has the missing permission",
+        _object({"job_id":HOST},["job_id"]), "serverhub:jobs"),
+    ("cancel_job", "Cancel own persistent job and its dependent child work",
+        _object({"job_id":HOST},["job_id"]), "serverhub:jobs"),
+    ("grant_development_profile", "Owner-only explicit expiring project grant; staging and dependency networking are opt-in",
+        _object({"project":{"type":"string","maxLength":64}, "subject_id":HOST, "host_id":HOST,
+            "hours":{"type":"integer","minimum":1,"maximum":8784},
+            "allow_publication":{"type":"boolean"},"allow_staging":{"type":"boolean"},"allow_dependency_network":{"type":"boolean"}},
+            ["project","subject_id","hours"]), "serverhub:policies"),
+    ("revoke_policy", "Owner-only revoke an exact policy ID; live tools recheck policy",
+        _object({"policy_id":HOST},["policy_id"]), "serverhub:policies"),
+]
+
 
 def _call(name, arguments, actor, db):
+    if name == "publish_development_result":
+        from .extensions import publish_development
+        return publish_development(arguments["job_id"], actor, db)
+    if name == "list_projects":
+        from .extensions import projects
+        return projects(actor, db)
+    if name == "grant_development_profile":
+        from .setup import grant_profile, ProfileGrant
+        return grant_profile(ProfileGrant(profile="development", **arguments), actor, db)
+    if name == "revoke_policy":
+        return api.update_policy(arguments["policy_id"], api.PolicyUpdate(enabled=False), actor, db)
+    if name == "create_development_job":
+        spec = {"project": arguments["project"], "stage": arguments.get("stage", False)}
+        if arguments.get("prompt"):
+            spec["prompt"] = arguments["prompt"]
+        return api.add_job(api.NewJob(kind="development_autonomous" if "prompt" in spec else "development",
+            project=arguments["project"], host_id=arguments.get("host_id"), spec=spec,
+            idempotency_key=arguments.get("idempotency_key"), token_budget=arguments.get("token_budget", 20000)), actor, db)
+    if name == "job_logs":
+        return api.job_events(arguments["job_id"], actor, arguments.get("after",0), db)
+    if name in {"resume_job", "cancel_job"}:
+        return api.job_action(arguments["job_id"], "resume" if name == "resume_job" else "cancel", actor, db)
+    if name == "development_artifacts":
+        value = api.job(arguments["job_id"], actor, db)
+        if value["kind"] not in {"development", "development_autonomous"}:
+            raise HTTPException(422, "Select a development job")
+        result = value.get("result") or {}
+        candidate = result.get("candidate") or {}
+        return {"job_id":value["id"], "state":value["state"], "verified":result.get("verified",False),
+            "manifest":{key:candidate[key] for key in ("sha256","commit","files","bytes") if key in candidate},
+            "source_patch":result.get("source_patch"), "patch_available":result.get("source_patch") is not None,
+            "archive_delivery":"Candidate archive retained in protected worker storage; MCP exposes manifest and bounded patch only"}
     if name == "list_policy_templates":
         require_owner(actor)
         return policy_templates()
@@ -649,7 +708,8 @@ async def rpc(request: Request, identity=Depends(mcp_actor), db=Depends(get_db))
         except (PermissionDenied, HTTPException, ValueError, ValidationError) as exc:
             db.rollback()
             result = {
-                "content": [{"type": "text", "text": str(getattr(exc, "detail", exc))}],
+                "content": [{"type": "text", "text": json.dumps({"message": str(getattr(exc, "detail", exc)),
+                        "denial": exc.details if isinstance(exc, PermissionDenied) else None}, default=str)}],
                 "isError": True,
             }
         except Exception as exc:

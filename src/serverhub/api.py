@@ -349,6 +349,15 @@ def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], princi
         if job.state not in {"paused", "waiting_approval"}:
             raise HTTPException(409, "Only paused or policy-blocked jobs can resume")
         authorize(db, principal, "job.submit", job.host_id, job.project)
+        denial = (job.result or {}).get("denial")
+        if job.state == "waiting_approval" and isinstance(denial, dict) and denial.get("operation"):
+            from .auth import Principal
+            owner = db.get(User, job.owner_id)
+            if not owner:
+                raise HTTPException(409, "Job initiating account no longer exists")
+            authorize(db, Principal(id=owner.id, username=owner.username, role=owner.role), denial["operation"],
+                      job.host_id, job.project, denial.get("arguments", {}),
+                      denial.get("environment") == "production")
         job.state = "queued"
         job.run_after = utcnow()
     append_audit(db, principal.id, "job." + action, job.id)

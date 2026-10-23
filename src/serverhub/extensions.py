@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import httpx
+
 import hashlib
 import json
 from pathlib import Path
@@ -42,11 +44,46 @@ def catalog(q: str = "", actor: Principal = Depends(current_principal)):
 
 
 @router.get("/projects")
-def projects(actor: Principal = Depends(current_principal)):
-    require_owner(actor)
-    from .development.config import project_descriptors
+def projects(actor: Principal = Depends(current_principal), db=Depends(get_db)):
+    from .development.config import configured_projects
+    rows = []
+    for project in configured_projects().values():
+        if actor.role != "owner":
+            try:
+                authorize(db, actor, "development.read", project=project.name)
+            except PermissionDenied:
+                continue
+        rows.append({"name": project.name, "base_ref": project.base_ref,
+            "build_steps": len(project.build), "test_steps": len(project.tests),
+            "independent_checks": len(project.independent_checks), "staging_checks": len(project.staging_checks),
+            "dependency_network": project.allow_dependency_network, "production_deployment": False,
+            "execution_location": "controller sandbox", "staging_requires_host": True})
+    return rows
 
-    return project_descriptors()
+
+@router.post("/projects/jobs/{job_id}/publish")
+def publish_development(job_id: str, actor: Principal = Depends(current_principal), db=Depends(get_db)):
+    from .api import _job_scope
+    from .development.config import configured_projects, DevelopmentError
+    from .development.publication import publish_candidate
+    job = _job_scope(db, actor, job_id)
+    db.refresh(job, with_for_update=True)
+    project = configured_projects().get(job.project)
+    if job.kind not in {"development", "development_autonomous"} or not project:
+        raise HTTPException(422, "Select a verified registered development job")
+    authorize(db, actor, "development.publish", project=project.name, arguments={"target":project.name})
+    if (job.result or {}).get("publication"):
+        return job.result["publication"]
+    try:
+        publication = publish_candidate(project, job)
+    except DevelopmentError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except httpx.HTTPError:
+        raise HTTPException(502, "GitHub publication connection failed; retry this same job to reconcile its candidate branch") from None
+    job.result = {**job.result, "publication":publication}
+    append_audit(db, actor.id, "development.publish", job.id, publication)
+    db.commit()
+    return publication
 
 
 class ChatRequest(BaseModel):
@@ -58,9 +95,12 @@ class ChatRequest(BaseModel):
 
 @router.post("/chat", status_code=202)
 def chat(body: ChatRequest, actor: Principal = Depends(current_principal), db=Depends(get_db)):
-    job = submit_job(
-        db, actor, "autonomous", {"prompt": body.prompt}, host_id=body.host_id, project=body.project
-    )
+    try:
+        job = submit_job(
+            db, actor, "autonomous", {"prompt": body.prompt}, host_id=body.host_id, project=body.project
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
     db.commit()
     return to_dict(job)
 

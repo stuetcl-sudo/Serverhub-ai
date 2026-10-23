@@ -187,6 +187,17 @@ def collect_diagnostics(db):
                 str(exc)[:300],
                 "Check directory traversal and asset modes with namei -l; rebuild assets if missing",
             )
+    import subprocess
+    try:
+        probe = subprocess.run(["systemctl", "is-active", "serverhub-ai-broker.service"],
+                               text=True, capture_output=True, timeout=5, cwd="/")
+        add("ai_broker", "ok" if probe.returncode == 0 else "warning",
+            "AI broker active" if probe.returncode == 0 else "AI broker inactive; controller-only development still works",
+            "Host diagnostics and runtime staging require the separate serverhub-ai-broker.service. After reviewed installation/enrollment use sudo systemctl enable --now serverhub-ai-broker.service. Never substitute legacy serverhub-broker.service.",
+            required_for=["native host tools", "runtime staging"], required_for_controller_checks=False)
+    except (OSError, subprocess.SubprocessError):
+        add("ai_broker", "warning", "AI broker state unavailable in this environment",
+            "Check serverhub-ai-broker.service on the AI OS host; the Control broker is unrelated")
     for name in ("serverhub-ai-api.service", "serverhub-ai-worker.service"):
         target = Path("/etc/systemd/system") / name
         try:

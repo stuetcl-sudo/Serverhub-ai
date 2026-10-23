@@ -191,6 +191,10 @@ def repair(source):
         )
         for unit in installer.units():
             installer.write("/etc/systemd/system/" + unit, (source / "packaging/systemd" / unit).read_text())
+        from serverhub.development.config import normalize_empty_projects
+        projects_path = Path("/etc/serverhub/projects.yaml")
+        if projects_path.exists():
+            normalize_empty_projects(projects_path, installer.write)
         # Validate non-secret provider format before relaxing fallback readability.
         models = Path("/etc/serverhub/models.yaml")
         models_state = protect_model_fallback(models) if models.exists() else "needs_setup"

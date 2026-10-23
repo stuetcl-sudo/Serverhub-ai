@@ -24,6 +24,8 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
     if not apply:
         return {'state':'plan','families':{key:list(value) for key,value in plans.items()},
                 'privileges':'Root package/configuration adapters only; protected runtime/audit/SSH paths remain read-only'}
+    from serverhub.ops.coexistence import require_safe
+    require_safe(units=['serverhub-ai-broker.service'])
     path=protected(config)
     current=load_config(str(path))
     for key,value in plans.items():
@@ -74,7 +76,8 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
     protected('/var/lib/serverhub-broker/operations',create=True)
     protected('/var/lib/serverhub-ai-staging',create=True)
     subprocess.run(['systemctl','daemon-reload'],check=True)
-    subprocess.run(['systemctl','restart','serverhub-ai-broker'],check=True)
+    subprocess.run(['systemctl','enable','--now','serverhub-ai-broker.service'],check=True)
+    subprocess.run(['systemctl','restart','serverhub-ai-broker.service'],check=True)
     return {'state':'enrolled','families':{key:list(value) for key,value in plans.items()}}
 
 

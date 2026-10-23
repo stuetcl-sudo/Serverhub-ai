@@ -93,6 +93,27 @@ def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | N
                project: str | None = None, parent_id: str | None = None, depends_on: list | None = None,
                idempotency_key: str | None = None, run_after=None, max_attempts: int = 3,
                time_limit: int = 3600, token_budget: int = 20000, cost_budget: float = 1.0, priority: int = 0) -> Job:
+    if kind in {"development", "development_autonomous"}:
+        from .development.config import configured_projects
+        if not isinstance(spec, dict) or not isinstance(spec.get("project"), str):
+            raise ValueError("Development jobs require a registered project")
+        if project is None:
+            project = spec["project"]
+        if project != spec["project"] or project not in configured_projects():
+            raise ValueError("Authenticated job project and registered specification must match")
+        if spec.get("stage") is True and not host_id:
+            raise ValueError("Isolated staging requires an explicitly selected enrolled host; controller-only checks do not need one")
+    elif kind == "autonomous" and host_id is None:
+        from .policy import visible_host_ids
+        choices = visible_host_ids(db, principal)
+        if len(choices) == 1:
+            host_id = choices[0]
+        else:
+            raise ValueError("Select an enrolled host before inspecting infrastructure: no unambiguous authorized host is available")
+    if kind in {"autonomous", "development", "development_autonomous"} and host_id:
+        selected_host = db.get(Host, host_id)
+        if not selected_host or selected_host.revoked:
+            raise ValueError("Select an enrolled, non-revoked host")
     authorize(db, principal, "job.submit", host_id, project)
     if kind not in HANDLERS:
         raise ValueError(f"Unknown job kind: {kind}")
@@ -328,7 +349,7 @@ def execute_job(job_id: str, worker_id: str):
             ctx.check_cancelled()
             job.result = redact(result if isinstance(result, dict) else {"value": result})
             job.progress = 1.0
-            unverified = job.result.get("completed") is False or (job.kind in {"autonomous", "development_autonomous"} and not job.result.get("verified"))
+            unverified = job.result.get("completed") is False or (job.kind in {"autonomous", "development", "development_autonomous"} and not job.result.get("verified"))
             job.state = "partial" if unverified else "succeeded"
             job.finished_at = utcnow()
             job.error = None

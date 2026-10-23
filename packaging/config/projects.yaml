@@ -1,2 +1,2 @@
 # Root-owned project settings. Commands run only in a verified sandbox.
-projects: {}
+projects: []

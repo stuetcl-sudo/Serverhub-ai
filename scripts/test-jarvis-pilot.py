@@ -4,6 +4,11 @@ The version regression is deliberately injected into a LOCAL fork. This is an
 autonomous repair acceptance test, not a claim that upstream Jarvis is broken.
 """
 import json
+import base64
+import hashlib
+import re
+import secrets
+from urllib.parse import parse_qs, urlsplit
 import os
 from pathlib import Path
 import pwd
@@ -48,6 +53,8 @@ checks=root/'checks'
 checks.mkdir(mode=0o755)
 checks.chmod(0o755)
 (checks/'check.py').write_text("from pathlib import Path\nimport ast,sys\nbase=Path(sys.argv[1]) if len(sys.argv)>1 else Path('/workspace')\nmodule=ast.parse((base/'app/version.py').read_text())\nassert any(isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='VERSION' for t in n.targets) and ast.literal_eval(n.value)=='0.23.0' for n in module.body)\nprint('Independent version acceptance passed')\n")
+with (checks/'check.py').open('a') as check:
+    check.write("import os,resource\nif str(base)=='/workspace':\n    assert not any(Path(p).exists() for p in ['/etc/serverhub','/opt/serverhub-control','/run/docker.sock','/var/run/docker.sock','/home/dennis'])\n    assert not any(k.startswith('SERVERHUB_') or k in ('GITHUB_TOKEN','SSH_AUTH_SOCK') for k in os.environ)\n    assert resource.getrlimit(resource.RLIMIT_AS)[0] <= 2048*1024*1024\n    assert resource.getrlimit(resource.RLIMIT_NPROC)[0] <= 128\n    print('Independent sandbox secret/mount/resource boundaries passed')\n")
 (checks/'check.py').chmod(0o644)
 python='/opt/serverhub/current/venv/bin/python'
 # /usr/bin Python remains inside the minimal sandbox. Dependencies and package
@@ -105,7 +112,7 @@ provider={'kind':'ollama','base_url':'http://127.0.0.1:11434','model':'qwen2.5:3
 saved=client.put('/api/settings/models/development',headers=headers,json=provider)
 saved.raise_for_status()
 grant=client.post('/api/policies/profiles',headers=headers,json={'profile':'development','subject_id':login.json()['user']['id'],
-    'host_id':host,'project':'jarvis','hours':1,'allow_dependency_network':True})
+    'project':'jarvis','hours':1,'allow_dependency_network':True})
 grant.raise_for_status()
 
 recovery_evidence={}
@@ -132,6 +139,58 @@ def await_job(identity, timeout=1800, restart_after_patch=False):
             return job
         time.sleep(1)
     raise AssertionError('Jarvis acceptance job exceeded integration deadline')
+
+# A separate no-patch run uses upstream main, with no host or staging permission.
+# Register and consent to a distinct AI OS OAuth client; never reuse Control tokens.
+registered=client.post('/api/mcp/clients',headers=headers,json={'name':'Disposable Jarvis MCP acceptance',
+    'redirect_uris':['https://client.example.invalid/callback']})
+registered.raise_for_status()
+verifier=secrets.token_urlsafe(48)
+parameters={'client_id':registered.json()['client_id'],'redirect_uri':'https://client.example.invalid/callback',
+    'response_type':'code','scope':'serverhub:read serverhub:jobs serverhub:policies',
+    'code_challenge':base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode(),
+    'code_challenge_method':'S256','state':'isolated-ci','resource':'https://127.0.0.1:9080/mcp'}
+consent=client.get('/oauth/authorize',params=parameters,headers=headers)
+consent.raise_for_status()
+nonce=re.search(r'name="consent_nonce" value="([^"]+)"',consent.text).group(1)
+consent=client.post('/oauth/authorize',headers=headers,data={'consent_nonce':nonce,'decision':'approve'},follow_redirects=False)
+assert consent.status_code==303
+code=parse_qs(urlsplit(consent.headers['location']).query)['code'][0]
+access=client.post('/oauth/token',headers={'Origin':'https://127.0.0.1:9080'},data={'grant_type':'authorization_code',
+    'client_id':parameters['client_id'],'redirect_uri':parameters['redirect_uri'],'code':code,
+    'code_verifier':verifier,'resource':parameters['resource']})
+access.raise_for_status()
+mcp_headers={'Authorization':'Bearer '+access.json()['access_token'],'MCP-Protocol-Version':'2025-11-25'}
+def mcp_call(name, arguments):
+    response=client.post('/mcp',headers=mcp_headers,json={'jsonrpc':'2.0','id':1,'method':'tools/call',
+        'params':{'name':name,'arguments':arguments}})
+    response.raise_for_status()
+    result=response.json()['result']
+    assert not result.get('isError'),result
+    return json.loads(result['content'][0]['text'])
+
+main_project={**project,'repository':'https://github.com/stuetcl-sudo/Jarvis-os.git','base_ref':'main'}
+projects.write_text(yaml.safe_dump({'projects':[main_project]}))
+projects.chmod(0o644)
+assert mcp_call('list_projects',{})[0]['execution_location']=='controller'
+no_patch=mcp_call('create_development_job',{'project':'jarvis','idempotency_key':'jarvis-upstream-main-no-patch'})
+no_patch=await_job(no_patch['id'])
+assert no_patch['state']=='succeeded' and no_patch['result']['verified'],no_patch
+assert no_patch['host_id'] is None and no_patch['result']['production_deployed'] is False
+assert no_patch['result']['candidate']['commit']==upstream
+assert no_patch['result']['source_patch']==''
+logs=mcp_call('job_logs',{'job_id':no_patch['id']})
+artifact=mcp_call('development_artifacts',{'job_id':no_patch['id']})
+assert artifact['verified'] and artifact['manifest']['sha256'] and logs
+print('JARVIS_MAIN_NO_PATCH='+json.dumps({'state':no_patch['state'],'verified':True,'upstream_commit':upstream,
+    'host':None,'transport':'OAuth S256 MCP','commands':[{k:v for k,v in c.items() if k in ('phase','returncode','output')} for c in no_patch['result']['commands']]}),flush=True)
+# The model repair runs on a local fork of that exact public main commit. Its
+# separate staging grant cannot authorize production or a different project.
+projects.write_text(yaml.safe_dump({'projects':[project]}))
+projects.chmod(0o644)
+staging_grant=mcp_call('grant_development_profile',{'subject_id':login.json()['user']['id'],
+    'project':'jarvis','hours':1,'allow_dependency_network':True,'allow_staging':True,'host_id':host})
+assert any(p['environment']=='staging' and p['host_id']==host for p in staging_grant['policies'])
 
 response=client.post('/api/jobs',headers=headers,json={'kind':'development_autonomous','project':'jarvis','host_id':host,
     'token_budget':100000,'time_limit':1800,'max_attempts':2,'spec':{'project':'jarvis','stage':True,'max_steps':16,
