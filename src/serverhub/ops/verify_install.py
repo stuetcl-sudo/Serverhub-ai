@@ -131,7 +131,7 @@ def verify(client, token, *, host_id=None, model_route=None, timeout=180,
                 # Never copy raw prompt, route configuration, credentials or log bodies.
                 remedies = {
                     "database": "Use the reviewed backed-up repair workflow to validate connectivity and migrations",
-                    "worker": "Inspect journalctl -u serverhub-worker and worker.env/sandbox permissions",
+                    "worker": "Inspect journalctl -u serverhub-ai-worker and worker.env/sandbox permissions",
                     "models": "Open Setup, configure a route and run Test connection & tools",
                     "frontend": "Rebuild frontend assets and run the reviewed repair workflow; check API read permissions",
                     "policies": "Use Approval policies to enroll an exact expiring grant if needed",

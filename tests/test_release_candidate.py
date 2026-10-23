@@ -97,13 +97,13 @@ def test_dedicated_ai_identity_is_opt_in_and_keeps_broker_separate(tmp_path):
     source = Path(__file__).resolve().parents[1]
     default = Installer(source, root=tmp_path / "default")
     default.stage()
-    assert not (default.root / "etc/systemd/system/serverhub-worker.service.d").exists()
+    assert not (default.root / "etc/systemd/system/serverhub-ai-worker.service.d").exists()
     dedicated = Installer(source, root=tmp_path / "dedicated", ai_identity=True)
     dedicated.stage()
-    dropin = (dedicated.root / "etc/systemd/system/serverhub-worker.service.d/10-ai-identity.conf").read_text()
+    dropin = (dedicated.root / "etc/systemd/system/serverhub-ai-worker.service.d/10-ai-identity.conf").read_text()
     assert "User=serverhub-ai" in dropin
     assert "Group=serverhub-worker" in dropin
-    assert "User=root" in (dedicated.root / "etc/systemd/system/serverhub-broker.service").read_text()
+    assert "User=root" in (dedicated.root / "etc/systemd/system/serverhub-ai-broker.service").read_text()
     assert "allowed_services: []" in (dedicated.root / "etc/serverhub/broker.yaml").read_text()
     assert not (dedicated.root / "etc/sudoers.d").exists()
 
@@ -228,18 +228,18 @@ def test_critical_service_diagnostics_require_exact_allowlist_but_restarts_stay_
         return {"service": service, "active": "active"}
     monkeypatch.setattr(broker, "_systemd_status", status)
     with pytest.raises(broker.BrokerDenied, match="allowlisted"):
-        broker.execute("systemd.status", {"service": "serverhub-api.service"}, {})
-    config = {"allowed_services": ["serverhub-api.service"]}
-    assert broker.execute("systemd.status", {"service": "serverhub-api.service"}, config)["verified"]
+        broker.execute("systemd.status", {"service": "serverhub-ai-api.service"}, {})
+    config = {"allowed_services": ["serverhub-ai-api.service"]}
+    assert broker.execute("systemd.status", {"service": "serverhub-ai-api.service"}, config)["verified"]
     with pytest.raises(broker.BrokerDenied, match="protected"):
-        broker.execute("systemd.restart", {"service": "serverhub-api.service"}, config)
-    assert calls == ["serverhub-api.service"]
+        broker.execute("systemd.restart", {"service": "serverhub-ai-api.service"}, config)
+    assert calls == ["serverhub-ai-api.service"]
 
 
 def test_broker_audit_state_directory_is_protected_without_relaxing_ancestor_checks():
     from pathlib import Path
     source = Path(__file__).resolve().parents[1]
-    unit = (source / "packaging/systemd/serverhub-broker.service").read_text()
+    unit = (source / "packaging/systemd/serverhub-ai-broker.service").read_text()
     assert "StateDirectory=serverhub-broker" in unit
     assert "StateDirectoryMode=0700" in unit
     assert "/var/lib/serverhub-broker" in unit

@@ -50,7 +50,7 @@ def safe_extract(archive: Path, destination: Path):
 
 
 class ReleaseManager:
-    SERVICES = ("serverhub-api.service", "serverhub-worker.service")
+    SERVICES = ("serverhub-ai-api.service", "serverhub-ai-worker.service")
 
     def __init__(self, install_root="/opt/serverhub", state_root="/var/lib/serverhub-release", *,
                  public_key="/etc/serverhub/trusted-release-key.pem", trust_digest="/etc/serverhub/trust-boundaries.sha256",
@@ -66,6 +66,12 @@ class ReleaseManager:
         self.clock = clock or time.time
 
     def _protect(self):
+        if self.require_root and self.install_root == Path('/opt/serverhub'):
+            from .coexistence import claim, require_safe
+            from .installer import CONTROLLER_UNITS, NODE_UNITS
+            if claim() is None:
+                raise ReleaseError('Namespace ownership missing; use reviewed unit migration before upgrade/rollback')
+            require_safe(units=CONTROLLER_UNITS + NODE_UNITS, live=False)
         if self.require_root and os.geteuid() != 0:
             raise ReleaseError("release operations require the independent root maintenance account")
         for path in (self.install_root, self.state_root):
@@ -236,7 +242,7 @@ class ReleaseManager:
         try:
             self._switch(release)
             self._run(["systemctl", "restart", *self.SERVICES])
-            self._run(["systemctl", "try-restart", "serverhub-broker.service", "serverhub-node.service"])
+            self._run(["systemctl", "try-restart", "serverhub-ai-broker.service", "serverhub-ai-node.service"])
             from .installer import Installer
             url, ca = Installer(release)._health_configuration()
             self._run([str(release / "venv/bin/serverhub"), "health", "--url", url,
@@ -252,7 +258,7 @@ class ReleaseManager:
     def _rollback(self, journal):
         self._switch(Path(journal["previous"]))
         self._run(["systemctl", "restart", *self.SERVICES])
-        self._run(["systemctl", "try-restart", "serverhub-broker.service", "serverhub-node.service"])
+        self._run(["systemctl", "try-restart", "serverhub-ai-broker.service", "serverhub-ai-node.service"])
         journal["state"] = "reverted"
         journal["reverted_at"] = self.clock()
         self._write_journal(journal)

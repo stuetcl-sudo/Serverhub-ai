@@ -17,7 +17,7 @@ For a private PKI, supply its CA certificate through `SERVERHUB_HEALTH_CA`; neve
 turn off certificate validation. The example's private addresses are examples,
 not endpoints this release has configured.
 
-After explicit operator review, `sudo systemctl restart serverhub-api` loads the
+After explicit operator review, `sudo systemctl restart serverhub-ai-api` loads the
 optional access environment. The installer enables this systemd service, so it
 survives reboot. Certificate renewal must preserve the group/read permissions and
 restart the API; private-PKI enrollment/renewal is operator-managed. No HTTP

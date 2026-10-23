@@ -114,3 +114,5 @@ The validation JSON must report `state: passed` and contain check evidence. The
 owner must review that evidence and the source; possession of a JSON report is
 not itself independent approval. The tool packages deterministic web/migration
 archives and signs the manifest. No key is generated or stored in the repository.
+
+See [Control coexistence and legacy unit migration](control-coexistence.md) before installing alongside ServerHub Control or upgrading generic `serverhub-*.service` AI OS units. New AI OS services use `serverhub-ai-*`; never stop or replace Control units.

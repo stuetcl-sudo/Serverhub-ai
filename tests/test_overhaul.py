@@ -257,7 +257,7 @@ def test_migration_config_never_requires_the_callers_working_directory(tmp_path,
 
 def test_sandbox_masks_optional_paths_without_requiring_them():
     source = Path(__file__).resolve().parents[1]
-    for filename in ("serverhub-api.service", "serverhub-worker.service", "serverhub-node.service"):
+    for filename in ("serverhub-ai-api.service", "serverhub-ai-worker.service", "serverhub-ai-node.service"):
         content = (source / "packaging/systemd" / filename).read_text()
         paths = (
             next(line for line in content.splitlines() if line.startswith("InaccessiblePaths="))

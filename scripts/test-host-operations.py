@@ -168,7 +168,7 @@ try:
             'spec':{'operation':'configuration.apply','arguments':{'target':'fixture-config'}},
             'token_budget':0,'cost_budget':0})
         assert denied.status_code==403,denied.text
-        run(['systemctl','restart','serverhub-worker'])
+        run(['systemctl','restart','serverhub-ai-worker'])
         time.sleep(6)
         held=client.get('/api/jobs/'+scheduled.json()['id'],headers=headers).json()
         assert held['state']=='queued' and held['attempts']==0,held
@@ -220,13 +220,13 @@ try:
     journal.write_text(json.dumps({'id':identity,'kind':'docker_start','containers':[container],
         'state':'armed','deadline':time.time()-1}))
     journal.chmod(0o600)
-    assert run(['systemctl','is-active','serverhub-operation-watchdog.timer'])=='active'
+    assert run(['systemctl','is-active','serverhub-ai-operation-watchdog.timer'])=='active'
     for _ in range(80):
         if json.loads(journal.read_text())['state']=='reverted':
             break
         time.sleep(1)
     if json.loads(journal.read_text())['state']!='reverted':
-        print('WATCHDOG_DIAGNOSTIC='+run(['journalctl','-u','serverhub-operation-watchdog.service','--no-pager','-n','12']),flush=True)
+        print('WATCHDOG_DIAGNOSTIC='+run(['journalctl','-u','serverhub-ai-operation-watchdog.service','--no-pager','-n','12']),flush=True)
     assert json.loads(journal.read_text())['state']=='reverted'
     assert run(['docker','inspect','--format','{{.State.Running}}',container])=='true'
     output['independent_watchdog_abandoned_offline_operation']='passed'

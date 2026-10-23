@@ -22,7 +22,7 @@ SOURCE = Path(__file__).resolve().parents[1]
 def test_native_installer_stage_is_contained_and_records_real_files(tmp_path):
     result = Installer(SOURCE, root=tmp_path).stage()
     assert result["state"] == "staged"
-    assert (tmp_path / "etc/systemd/system/serverhub-api.service").is_file()
+    assert (tmp_path / "etc/systemd/system/serverhub-ai-api.service").is_file()
     assert (tmp_path / "etc/serverhub/recovery.env").stat().st_mode & 0o777 == 0o600
     broker = (tmp_path / "etc/serverhub/broker.yaml").read_text()
     assert "socket_gid: 999" in broker
@@ -48,13 +48,13 @@ def test_node_stage_does_not_install_controller_credentials(tmp_path):
     Installer(SOURCE, root=tmp_path, role="node").stage()
     assert not (tmp_path / "etc/serverhub/api.env").exists()
     assert not (tmp_path / "etc/serverhub/worker.env").exists()
-    assert not (tmp_path / "etc/systemd/system/serverhub-api.service").exists()
-    assert (tmp_path / "etc/systemd/system/serverhub-node.service").exists()
+    assert not (tmp_path / "etc/systemd/system/serverhub-ai-api.service").exists()
+    assert (tmp_path / "etc/systemd/system/serverhub-ai-node.service").exists()
 
 
 def test_worker_and_node_are_not_root_or_docker_group():
-    worker = (SOURCE / "packaging/systemd/serverhub-worker.service").read_text()
-    node = (SOURCE / "packaging/systemd/serverhub-node.service").read_text()
+    worker = (SOURCE / "packaging/systemd/serverhub-ai-worker.service").read_text()
+    node = (SOURCE / "packaging/systemd/serverhub-ai-node.service").read_text()
     assert "User=serverhub-worker" in worker
     assert "User=serverhub-node" in node
     assert "NoNewPrivileges=true" in worker
@@ -200,13 +200,13 @@ def test_release_independent_watchdog_restores_previous_symlink(tmp_path):
     result = manager.watchdog()
     assert result["state"] == "reverted"
     assert (install / "current").resolve() == old
-    assert calls[0] == ["systemctl", "restart", "serverhub-api.service", "serverhub-worker.service"]
+    assert calls[0] == ["systemctl", "restart", "serverhub-ai-api.service", "serverhub-ai-worker.service"]
 
 
 def test_independent_recovery_units_do_not_execute_current_candidate():
-    for name in ["serverhub-backup.service", "serverhub-recovery.service", "serverhub-release-watchdog.service"]:
+    for name in ["serverhub-ai-backup.service", "serverhub-ai-recovery.service", "serverhub-ai-release-watchdog.service"]:
         unit = (SOURCE / "packaging/systemd" / name).read_text()
-        assert "ExecStart=/opt/serverhub/recovery/venv/bin/python" in unit
+        assert "ExecStart=/opt/serverhub/recovery-ai/venv/bin/python" in unit
         assert "ExecStart=/opt/serverhub/current" not in unit
 
 

@@ -3,7 +3,7 @@ Description=ServerHub independent native release rollback watchdog
 [Service]
 Type=oneshot
 User=root
-ExecStart=/opt/serverhub/recovery/venv/bin/python -m serverhub.ops.release watchdog
+ExecStart=/opt/serverhub/recovery-ai/venv/bin/python -m serverhub.ops.release watchdog
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

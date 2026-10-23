@@ -3,7 +3,7 @@ Description=ServerHub independent configuration rollback watchdog
 [Service]
 Type=oneshot
 User=root
-ExecStart=/opt/serverhub/recovery/venv/bin/python -m serverhub.node.watchdog --directory /var/lib/serverhub-recovery tick
+ExecStart=/opt/serverhub/recovery-ai/venv/bin/python -m serverhub.node.watchdog --directory /var/lib/serverhub-recovery tick
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

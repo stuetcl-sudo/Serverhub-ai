@@ -4,6 +4,6 @@ Description=Recover abandoned authorized host operations
 OnActiveSec=5s
 OnUnitInactiveSec=30s
 AccuracySec=1s
-Unit=serverhub-operation-watchdog.service
+Unit=serverhub-ai-operation-watchdog.service
 [Install]
 WantedBy=timers.target

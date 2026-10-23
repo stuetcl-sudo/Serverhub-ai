@@ -500,7 +500,7 @@ def main() -> None:
     if os.geteuid() != 0:
         raise SystemExit("broker requires root; only native systemd service should launch it")
     config = load_config(args.config)
-    path = Path(config.get("socket", "/run/serverhub-broker/control.sock"))
+    path = Path(config.get("socket", "/run/serverhub-ai-broker/control.sock"))
     path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     if path.exists():
         if not path.is_socket():

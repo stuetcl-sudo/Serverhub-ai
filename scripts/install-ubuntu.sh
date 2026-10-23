@@ -11,6 +11,9 @@ source /etc/os-release
 SERVERHUB_BUILD_ONLY=false
 if [[ "${1:-}" == --build-only ]]; then SERVERHUB_BUILD_ONLY=true; shift; fi
 python3.12 -c 'import sys; assert sys.version_info >= (3,12)'
+if [[ "$SERVERHUB_BUILD_ONLY" != true ]]; then
+  sudo env PYTHONPATH="$PWD/src" python3.12 -m serverhub.ops.installer --source "$PWD" --preflight
+fi
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends python3-venv python3-pip postgresql-16 postgresql-client-16 ca-certificates iproute2 procps util-linux curl xz-utils bubblewrap git apparmor
 # Official Node binary, pinned to an upstream security release and SHA256.

@@ -147,7 +147,7 @@ previous Compose manifest and waits for its healthchecks. Stateful application
 updates require separately tested migration and data recovery contracts.
 
 Root transaction journals are in /var/lib/serverhub-broker/operations, and
-serverhub-operation-watchdog.timer invokes an independently installed stdlib-only
+serverhub-ai-operation-watchdog.timer invokes an independently installed stdlib-only
 recovery executable. Do not disable that timer. A journal already reverted by
 recovery cannot be rearmed/committed by a late broker heartbeat.
 

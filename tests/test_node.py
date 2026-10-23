@@ -92,7 +92,7 @@ def test_broker_rejects_arbitrary_exec_and_protected_units(monkeypatch):
     with pytest.raises(broker.BrokerDenied):
         broker.execute("shell.exec", {"command": "id"}, {})
     with pytest.raises(broker.BrokerDenied, match="protected"):
-        broker.execute("systemd.restart", {"service": "serverhub-api.service"}, {"allowed_services": ["serverhub-api.service"]})
+        broker.execute("systemd.restart", {"service": "serverhub-ai-api.service"}, {"allowed_services": ["serverhub-ai-api.service"]})
     with pytest.raises(broker.BrokerDenied, match="unexpected"):
         broker.execute("systemd.restart", {"service": "demo.service", "command": "id"}, {"allowed_services": ["demo.service"]})
 

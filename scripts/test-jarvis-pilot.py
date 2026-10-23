@@ -119,9 +119,9 @@ def await_job(identity, timeout=1800, restart_after_patch=False):
         job=client.get('/api/jobs/'+identity,headers=headers).json()
         developer=job.get('checkpoint',{}).get('developer') or {}
         if restart_after_patch and not recovery_evidence and developer.get('patch_count',0)>0 and not developer.get('ready'):
-            before_pid=run(['systemctl','show','serverhub-worker','--property=MainPID','--value'])
-            run(['systemctl','restart','serverhub-worker'])
-            after_pid=run(['systemctl','show','serverhub-worker','--property=MainPID','--value'])
+            before_pid=run(['systemctl','show','serverhub-ai-worker','--property=MainPID','--value'])
+            run(['systemctl','restart','serverhub-ai-worker'])
+            after_pid=run(['systemctl','show','serverhub-ai-worker','--property=MainPID','--value'])
             assert before_pid!=after_pid and int(after_pid)>0
             recovery_evidence.update(restarted_after_source_commit=True,pid_changed=True)
             print('JARVIS_WORKER_INTERRUPTION='+json.dumps(recovery_evidence),flush=True)

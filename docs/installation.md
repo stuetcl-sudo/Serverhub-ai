@@ -55,7 +55,7 @@ Do not delete the journal or environment files to bypass a failure. For a failur
 
 ```sh
 sudo cat /var/lib/serverhub-install/last-command-error.log
-sudo journalctl -u serverhub-api -u serverhub-worker -n 100 --no-pager
+sudo journalctl -u serverhub-ai-api -u serverhub-ai-worker -n 100 --no-pager
 ```
 
 Command stderr is protected because it may contain sensitive connection details.
@@ -132,7 +132,7 @@ sudo env PYTHONPATH="$PWD/src" .build-venv/bin/python -m serverhub.ops.installer
 The controller's public HTTPS certificate must be trusted by that node. Set `name`
 and the one-use `enrollment_token` in `/etc/serverhub/node.yaml` locally as root;
 keep root ownership, group `serverhub-node`, mode 0640. A private CA can be supplied
-with `ca_bundle`. Then start `serverhub-node.service`. The resulting individual
+with `ca_bundle`. Then start `serverhub-ai-node.service`. The resulting individual
 identity and durable command journal are private to the node account. Remove the
 consumed token from the configuration. Revocation requires a new owner enrollment.
 
@@ -165,3 +165,5 @@ sudo sh -c 'set -a; . /etc/serverhub/api.env; set +a; \
 It reports actionable findings and never repairs or broadens permissions. The
 controller cannot inspect another service's mount namespace directly; systemd path
 checks and node broker evidence state their scope explicitly.
+
+See [Control coexistence and legacy unit migration](control-coexistence.md) before installing alongside ServerHub Control or upgrading generic `serverhub-*.service` AI OS units. New AI OS services use `serverhub-ai-*`; never stop or replace Control units.

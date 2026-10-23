@@ -110,7 +110,7 @@ def collect_diagnostics(db):
             "worker",
             "ok" if workers else "error",
             f"{len(workers)} worker heartbeat(s) in the last 60 seconds",
-            "Inspect journalctl -u serverhub-worker; check sandbox paths, worker.env permissions and database grants",
+            "Inspect journalctl -u serverhub-ai-worker; check sandbox paths, worker.env permissions and database grants",
             workers=[{"id": r.worker_id, "job_id": r.job_id} for r in workers],
         )
     except Exception:
@@ -187,7 +187,7 @@ def collect_diagnostics(db):
                 str(exc)[:300],
                 "Check directory traversal and asset modes with namei -l; rebuild assets if missing",
             )
-    for name in ("serverhub-api.service", "serverhub-worker.service"):
+    for name in ("serverhub-ai-api.service", "serverhub-ai-worker.service"):
         target = Path("/etc/systemd/system") / name
         try:
             content = target.read_text()

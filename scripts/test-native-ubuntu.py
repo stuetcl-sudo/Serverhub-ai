@@ -34,6 +34,10 @@ from serverhub.ops.installer import Installer, InstallError
 print(json.dumps({"audit_parent_modes": {str(path): oct(path.stat().st_mode & 0o777)
     for path in (Path("/var/log"), Path("/var/lib"))}}), flush=True)
 source = Path(__file__).resolve().parents[1]
+import runpy
+control_fixture = runpy.run_path(str(source / 'scripts/coexistence-fixture.py'))
+control_fixture['start']()
+control_fixture['conflicts'](source)
 interrupted = False
 
 
@@ -60,7 +64,7 @@ assert json.loads(Path("/var/lib/serverhub-install/state.json").read_text())["st
 assert installer.apply(install_dependencies=True, enable_broker=True)["state"] == "installed"
 assert installer.apply(install_dependencies=True, enable_broker=True)["state"] == "installed"
 assert Path("/etc/serverhub/api.env").read_bytes() == before
-assert subprocess.check_output(["systemctl", "show", "serverhub-worker", "--property=User", "--value"], text=True).strip() == "serverhub-ai"
+assert subprocess.check_output(["systemctl", "show", "serverhub-ai-worker", "--property=User", "--value"], text=True).strip() == "serverhub-ai"
 assert pwd.getpwnam("serverhub-ai").pw_shell.endswith("nologin")
 
 
@@ -137,7 +141,7 @@ nodeconfig = {
     "state_dir": "/var/lib/serverhub-node",
     "controller_url": "http://127.0.0.1:9080",
     "allow_loopback_http": True,
-    "broker_socket": "/run/serverhub-broker/control.sock",
+    "broker_socket": "/run/serverhub-ai-broker/control.sock",
     "enrollment_token": enroll.json()["token"],
 }
 config = Path("/etc/serverhub/native-ci-node.json")
@@ -169,7 +173,7 @@ user.raise_for_status()
 profile = client.post(
     "/api/policies/profiles",
     headers=headers,
-    json={"profile": "read_only", "subject_id": user.json()["id"], "host_id": host, "hours": 1, "services": ["serverhub-api.service"]},
+    json={"profile": "read_only", "subject_id": user.json()["id"], "host_id": host, "hours": 1, "services": ["serverhub-ai-api.service"]},
 )
 profile.raise_for_status()
 adult = client.post(
@@ -193,11 +197,11 @@ assert unauthorized.status_code == 403
 # Critical service diagnostics may be granted; restarts remain protected.
 broker_path = Path("/etc/serverhub/broker.yaml")
 broker_config = yaml.safe_load(broker_path.read_text())
-broker_config["allowed_services"] = ["serverhub-api.service"]
+broker_config["allowed_services"] = ["serverhub-ai-api.service"]
 broker_path.write_text(yaml.safe_dump(broker_config))
-subprocess.run(["systemctl", "restart", "serverhub-broker"], check=True)
+subprocess.run(["systemctl", "restart", "serverhub-ai-broker"], check=True)
 status_job = client.post("/api/jobs", headers=adult_headers, json={"kind": "operation", "host_id": host,
-    "spec": {"operation": "systemd.status", "arguments": {"service": "serverhub-api.service"}}})
+    "spec": {"operation": "systemd.status", "arguments": {"service": "serverhub-ai-api.service"}}})
 status_job.raise_for_status()
 for _ in range(30):
     subprocess.run(["runuser", "-u", "serverhub-node", "--", python, "-c",
@@ -215,7 +219,7 @@ records = [json.loads(line)["record"] for line in Path("/var/lib/serverhub-broke
 assert any(record.get("correlation", {}).get("job_id") == status_job.json()["id"] for record in records)
 # The AI runtime cannot connect directly to the privileged socket.
 probe = subprocess.run(["runuser", "-u", "serverhub-ai", "--", python, "-c",
-    'import socket; s=socket.socket(socket.AF_UNIX); s.connect("/run/serverhub-broker/control.sock")'],
+    'import socket; s=socket.socket(socket.AF_UNIX); s.connect("/run/serverhub-ai-broker/control.sock")'],
     cwd="/", capture_output=True, text=True)
 assert probe.returncode != 0 and "PermissionError" in probe.stderr
 # A local admission failure must pause without spending a model/job attempt.
@@ -276,8 +280,8 @@ assert checks["database"]["status"] == "ok", checks["database"]
 # Upgrade the same reviewed source to exercise backups, role grants, directory
 # traversal and activation/health in a real native systemd environment.
 # Model an older installation which lacks the new staging account/recovery unit.
-subprocess.run(["systemctl","disable","--now","serverhub-operation-watchdog.timer"],check=True)
-for unit in ("serverhub-operation-watchdog.service","serverhub-operation-watchdog.timer"):
+subprocess.run(["systemctl","disable","--now","serverhub-ai-operation-watchdog.timer"],check=True)
+for unit in ("serverhub-ai-operation-watchdog.service","serverhub-ai-operation-watchdog.timer"):
     Path("/etc/systemd/system",unit).unlink()
 subprocess.run(["systemctl","daemon-reload"],check=True)
 subprocess.run(["userdel","serverhub-staging"],check=True)
@@ -287,7 +291,7 @@ legacy_models.chmod(0o600)
 upgraded = repair(source)
 assert upgraded["state"] == "upgraded"
 assert subprocess.run(["id","serverhub-staging"],capture_output=True).returncode==0
-assert subprocess.check_output(["systemctl","is-active","serverhub-operation-watchdog.timer"],text=True).strip()=="active"
+assert subprocess.check_output(["systemctl","is-active","serverhub-ai-operation-watchdog.timer"],text=True).strip()=="active"
 assert upgraded["models_configuration"] == "needs_setup"
 assert legacy_models.stat().st_mode & 0o777 == 0o600
 assert client.get("/api/settings/models", headers=headers).json()["configured"]
@@ -332,7 +336,7 @@ access.write_text("SERVERHUB_API_BIND=127.0.0.1\nSERVERHUB_PUBLIC_URL=https://12
     + f"SERVERHUB_HEALTH_URL=https://127.0.0.1:9080\nSERVERHUB_HEALTH_CA={cert}\n")
 os.chown(access, 0, api_gid)
 access.chmod(0o640)
-subprocess.run(["systemctl", "restart", "serverhub-api"], check=True)
+subprocess.run(["systemctl", "restart", "serverhub-ai-api"], check=True)
 installer._healthchecks(previous)
 with httpx.Client(base_url="https://127.0.0.1:9080", verify=ssl.create_default_context(cafile=str(cert)), trust_env=False) as tls:
     assert tls.get("/api/hosts").status_code == 401
@@ -382,11 +386,11 @@ print('INSTALLED_ACCEPTANCE_EVIDENCE=' + json.dumps({'state': acceptance['state'
       'cli_state': cli_acceptance['state'], 'model_provider': 'HTTP fixture, not actual inference',
       'managed_configuration_changed': False}), flush=True)
 # Restart again to prove no terminal-held tunnel or inherited TLS process exists.
-subprocess.run(["systemctl", "restart", "serverhub-api"], check=True)
+subprocess.run(["systemctl", "restart", "serverhub-ai-api"], check=True)
 installer._healthchecks(previous)
 # Exercise the independent systemd watchdog in a separate root process with
 # the activation process absent. Only this disposable runner's releases are used.
-subprocess.run(["systemctl", "stop", "serverhub-release-watchdog.timer"], check=True)
+subprocess.run(["systemctl", "stop", "serverhub-ai-release-watchdog.timer"], check=True)
 pending_path = Path("/var/lib/serverhub-release/pending.json")
 abandoned = json.loads(pending_path.read_text())
 assert Path(abandoned["previous"]).resolve() == previous
@@ -395,12 +399,12 @@ assert candidate.is_relative_to(Path("/opt/serverhub/releases")) and candidate.i
 abandoned["state"], abandoned["deadline"] = "armed", time.time() - 1
 pending_path.write_text(json.dumps(abandoned))
 installer._activate(candidate)
-subprocess.run(["systemctl", "start", "serverhub-release-watchdog.service"], check=True)
+subprocess.run(["systemctl", "start", "serverhub-ai-release-watchdog.service"], check=True)
 assert Path("/opt/serverhub/current").resolve() == previous
 assert json.loads(pending_path.read_text())["state"] == "reverted"
 installer._healthchecks(previous)
 assert verify_broker_audit("/var/lib/serverhub-broker/audit/events.jsonl")["valid"]
-subprocess.run(["systemctl", "start", "serverhub-release-watchdog.timer"], check=True)
+subprocess.run(["systemctl", "start", "serverhub-ai-release-watchdog.timer"], check=True)
 # No production systems are contacted. Emit only non-secret result evidence.
 print(
     json.dumps(
@@ -426,3 +430,5 @@ print(
     )
 )
 mock.shutdown()
+
+control_fixture['verify']()

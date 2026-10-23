@@ -48,7 +48,7 @@ def launch_stage(spec):
         'StateDirectory=serverhub-stage-data/'+data.name, 'StateDirectoryMode=0700', 'ProtectProc=invisible', 'NoNewPrivileges=yes','PrivateNetwork=yes','PrivateTmp=yes','ProtectSystem=strict','ProtectHome=yes',
         'CapabilityBoundingSet=','RestrictSUIDSGID=yes','ProtectKernelTunables=yes','ProtectKernelModules=yes',
         'ProtectControlGroups=yes','TasksMax=128',f'MemoryMax={spec["memory_mb"]}M',f'ReadWritePaths={data}',
-        'InaccessiblePaths=-/etc/serverhub -/opt/serverhub -/var/backups/serverhub -/run/serverhub-broker -/var/run/docker.sock -/var/lib/serverhub-worker']
+        'InaccessiblePaths=-/etc/serverhub -/opt/serverhub -/var/backups/serverhub -/run/serverhub-ai-broker -/var/run/docker.sock -/var/lib/serverhub-worker']
     command=['/usr/bin/systemd-run','--quiet','--unit',spec['unit'],
              '--working-directory',str(directory)]
     for prop in properties:

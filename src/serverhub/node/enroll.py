@@ -56,7 +56,7 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
         out.flush()
         os.fsync(out.fileno())
     os.replace(temporary,path)
-    directory=Path('/etc/systemd/system/serverhub-broker.service.d')
+    directory=Path('/etc/systemd/system/serverhub-ai-broker.service.d')
     directory.mkdir(mode=0o755,exist_ok=True)
     # Scope writable namespaces needed by approved distro package scripts. Root
     # approved artifacts are a powerful capability, never treated as unprivileged.
@@ -74,7 +74,7 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
     protected('/var/lib/serverhub-broker/operations',create=True)
     protected('/var/lib/serverhub-staging',create=True)
     subprocess.run(['systemctl','daemon-reload'],check=True)
-    subprocess.run(['systemctl','restart','serverhub-broker'],check=True)
+    subprocess.run(['systemctl','restart','serverhub-ai-broker'],check=True)
     return {'state':'enrolled','families':{key:list(value) for key,value in plans.items()}}
 
 

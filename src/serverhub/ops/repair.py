@@ -85,9 +85,11 @@ def repair(source):
     previous = current.resolve(strict=True)
     if not previous.is_relative_to(Path("/opt/serverhub/releases")):
         raise InstallError("Current release is outside the native release directory")
+    from .coexistence import require_safe
+    require_safe(units=installer.units(), runner=installer.runner)
     backup = BackupManager().create(env["SERVERHUB_DATABASE_URL"], [Path("/etc/serverhub")])
     snapshots = {}
-    for path in [*Path("/etc/serverhub").glob("*"), *Path("/etc/systemd/system").glob("serverhub-*")]:
+    for path in [*Path("/etc/serverhub").glob("*"), *(Path("/etc/systemd/system") / name for name in installer.units())]:
         if path.is_file() and not path.is_symlink():
             info = path.stat()
             snapshots[path] = (path.read_bytes(), info.st_mode & 0o777, info.st_uid, info.st_gid)
@@ -97,11 +99,11 @@ def repair(source):
     if profile_path.exists():
         info=profile_path.stat()
         snapshots[profile_path]=(profile_path.read_bytes(),info.st_mode&0o777,info.st_uid,info.st_gid)
-    stable_watchdog=Path("/opt/serverhub/recovery/operation_watchdog.py")
+    stable_watchdog=Path("/opt/serverhub/recovery-ai/operation_watchdog.py")
     if stable_watchdog.exists():
         info=stable_watchdog.stat()
         snapshots[stable_watchdog]=(stable_watchdog.read_bytes(),info.st_mode&0o777,info.st_uid,info.st_gid)
-    recovery_units=["serverhub-operation-watchdog.service","serverhub-operation-watchdog.timer"]
+    recovery_units=["serverhub-ai-operation-watchdog.service","serverhub-ai-operation-watchdog.timer"]
     introduced_units=[Path("/etc/systemd/system")/unit for unit in recovery_units
                       if not (Path("/etc/systemd/system")/unit).exists()]
     release = Path("/opt/serverhub/releases") / (
@@ -143,16 +145,20 @@ def repair(source):
         for path in release.rglob("*"):
             if not path.is_symlink():
                 path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
+        stable_runtime = Path('/opt/serverhub/recovery-ai')
+        installer._run([sys.executable, '-m', 'venv', str(stable_runtime / 'venv')])
+        installer._run([str(stable_runtime / 'venv/bin/pip'), 'install', '--require-hashes', '-r', str(source / 'requirements.lock')], timeout=1800)
+        installer._run([str(stable_runtime / 'venv/bin/pip'), 'install', '--no-deps', '--force-reinstall', str(wheels[0])])
         ensure_staging_account(installer)
         from .sandbox_setup import configure
         configure(installer)
         for unit in recovery_units:
             installer.write("/etc/systemd/system/"+unit,(source/"packaging/systemd"/unit).read_text())
         installer._run(["systemctl","daemon-reload"])
-        installer.write("/opt/serverhub/recovery/operation_watchdog.py",
+        installer.write("/opt/serverhub/recovery-ai/operation_watchdog.py",
                         (source / "src/serverhub/ops/operation_watchdog.py").read_text(), 0o600)
-        installer._run(["systemctl", "enable", "--now", "serverhub-release-watchdog.timer", "serverhub-operation-watchdog.timer"])
-        installer._run(["systemctl","restart","serverhub-operation-watchdog.timer"])
+        installer._run(["systemctl", "enable", "--now", "serverhub-ai-release-watchdog.timer", "serverhub-ai-operation-watchdog.timer"])
+        installer._run(["systemctl","restart","serverhub-ai-operation-watchdog.timer"])
         recovery_journal = {
             "state": "armed",
             "previous": str(previous),
@@ -162,7 +168,7 @@ def repair(source):
             "release_id": release.name,
         }
         recovery._write_journal(recovery_journal)
-        installer._run(["systemctl", "stop", "serverhub-api.service", "serverhub-worker.service"])
+        installer._run(["systemctl", "stop", "serverhub-ai-api.service", "serverhub-ai-worker.service"])
         environment = dict(
             os.environ,
             **env,
@@ -211,8 +217,8 @@ def repair(source):
         )
         installer._activate(release)
         installer._run(["systemctl", "daemon-reload"])
-        installer._run(["systemctl", "restart", "serverhub-api.service", "serverhub-worker.service"])
-        installer._run(["systemctl", "try-restart", "serverhub-broker.service", "serverhub-node.service"])
+        installer._run(["systemctl", "restart", "serverhub-ai-api.service", "serverhub-ai-worker.service"])
+        installer._run(["systemctl", "try-restart", "serverhub-ai-broker.service", "serverhub-ai-node.service"])
         installer._healthchecks(release)
         recovery_journal["state"], recovery_journal["verified_at"] = "verified", time.time()
         recovery._write_journal(recovery_journal)
@@ -231,7 +237,7 @@ def repair(source):
             subprocess.run(["/usr/sbin/apparmor_parser","--remove",str(profile_path)],check=False,capture_output=True,timeout=30)
             profile_path.unlink()
         if introduced_units:
-            subprocess.run(["systemctl","disable","--now","serverhub-operation-watchdog.timer"],check=False,capture_output=True,timeout=30)
+            subprocess.run(["systemctl","disable","--now","serverhub-ai-operation-watchdog.timer"],check=False,capture_output=True,timeout=30)
             for path in introduced_units:
                 path.unlink(missing_ok=True)
         if stable_watchdog not in snapshots:
@@ -241,8 +247,8 @@ def repair(source):
             path.chmod(mode)
             os.chown(path, uid, gid)
         installer._run(["systemctl", "daemon-reload"])
-        installer._run(["systemctl", "restart", "serverhub-api.service", "serverhub-worker.service"])
-        installer._run(["systemctl", "try-restart", "serverhub-broker.service", "serverhub-node.service"])
+        installer._run(["systemctl", "restart", "serverhub-ai-api.service", "serverhub-ai-worker.service"])
+        installer._run(["systemctl", "try-restart", "serverhub-ai-broker.service", "serverhub-ai-node.service"])
         if recovery_journal:
             recovery_journal["state"], recovery_journal["reverted_at"] = "reverted", time.time()
             recovery._write_journal(recovery_journal)

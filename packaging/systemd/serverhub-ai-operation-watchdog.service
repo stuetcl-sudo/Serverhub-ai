@@ -3,7 +3,7 @@ Description=ServerHub independent operation rollback watchdog
 [Service]
 Type=oneshot
 User=root
-ExecStart=/usr/bin/python3 -I /opt/serverhub/recovery/operation_watchdog.py
+ExecStart=/usr/bin/python3 -I /opt/serverhub/recovery-ai/operation_watchdog.py
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

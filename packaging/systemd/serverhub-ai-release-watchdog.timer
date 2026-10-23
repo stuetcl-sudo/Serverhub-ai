@@ -4,6 +4,6 @@ Description=Check unverified native releases independently of AI jobs
 OnBootSec=30
 OnUnitActiveSec=15
 AccuracySec=1
-Unit=serverhub-release-watchdog.service
+Unit=serverhub-ai-release-watchdog.service
 [Install]
 WantedBy=timers.target

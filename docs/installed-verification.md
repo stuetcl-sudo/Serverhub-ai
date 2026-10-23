@@ -80,3 +80,5 @@ For an old checkout, first fetch/check out the reviewed PR commit, then use
 as described in [the upgrade guide](upgrade.md). The reviewed repair backs up
 configuration/database and arms independent recovery. Run the verifier after it;
 never run `scripts/test-native-ubuntu.py` on that existing VM.
+
+See [Control coexistence and legacy unit migration](control-coexistence.md) before installing alongside ServerHub Control or upgrading generic `serverhub-*.service` AI OS units. New AI OS services use `serverhub-ai-*`; never stop or replace Control units.
