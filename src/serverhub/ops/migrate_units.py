@@ -192,6 +192,13 @@ def _run(argv):
 
 
 def _save(value):
+    # Legacy installations may have no installer journal directory. Create it
+    # with root-only access, but never trust an existing symlink/foreign owner.
+    parent = JOURNAL.parent
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = parent.lstat()
+    if parent.is_symlink() or info.st_uid != 0 or info.st_gid != 0 or info.st_mode & 0o077:
+        raise ConflictError('Unsafe migration journal directory: ' + str(parent))
     temp = JOURNAL.with_suffix('.tmp')
     fd = os.open(temp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'w') as stream:
