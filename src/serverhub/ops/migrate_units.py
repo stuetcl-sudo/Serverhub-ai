@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -37,18 +38,43 @@ def plan(source, *, root=Path('/')):
     if not current.is_symlink() or not current.resolve().is_relative_to((root / 'opt/serverhub/releases').resolve()):
         raise ConflictError('Legacy current release is not an AI OS release symlink')
     installed = current / 'installed.json'
+    metadata_mode = installed.stat().st_mode & 0o777
     if root == Path('/'):
-        # Legacy installer wrote this non-secret file after chmod normalization.
-        # Permit its root:root group-writable mode only if group 0 has no other
-        # members; the independent 0600 install journal must match its digest.
-        record = installed.resolve()
-        protected(record.parent)
-        info = record.stat()
-        import grp
-        if (record.is_symlink() or info.st_uid != 0 or info.st_mode & 0o002
-                or (info.st_mode & 0o020 and (info.st_gid != 0 or any(name != 'root' for name in grp.getgrgid(0).gr_mem)))):
-            raise ConflictError(f'Unsafe legacy installed.json: uid={info.st_uid}, gid={info.st_gid}, mode={oct(info.st_mode & 0o777)}. Review the root-owned legacy record before migration; no service changed')
-    if json.loads(installed.read_text())['manifest']['trust_boundary_digest'] != data['trust_digest']:
+        # installed.json was not chmod'ed by older installers. It is not a trust
+        # anchor. Independently validate the root-only code anchor and actual
+        # installed modules, including for a previously repaired/upgraded host
+        # whose initial install journal's trust digest is intentionally stale.
+        trusted_digest = root / 'etc/serverhub/trust-boundaries.sha256'
+        anchor_path = root / 'etc/serverhub/trusted-code-hashes.json'
+        protected(trusted_digest)
+        protected(anchor_path)
+        expected_trust = trusted_digest.read_text().strip()
+        anchor = json.loads(anchor_path.read_text())
+        if anchor.get('format') != 1 or not anchor.get('files'):
+            raise ConflictError('Missing independent legacy code anchor')
+        packages = list(current.resolve().glob('venv/lib/python*/site-packages/serverhub'))
+        if len(packages) != 1:
+            raise ConflictError('Cannot uniquely locate legacy installed package')
+        site = packages[0].parent
+        actual_files = {str(p.relative_to(site)) for p in packages[0].rglob('*.py')}
+        if actual_files != set(anchor['files']):
+            raise ConflictError('Installed legacy package differs from the root-owned code anchor')
+        for name, checksum in anchor['files'].items():
+            if not name.startswith('serverhub/') or '..' in Path(name).parts:
+                raise ConflictError('Invalid legacy code anchor path')
+            module = site / name
+            protected(module)
+            if hashlib.sha256(module.read_bytes()).hexdigest() != checksum:
+                raise ConflictError('Installed legacy code hash mismatch: ' + name)
+        if installed.is_symlink() or installed.stat().st_uid != 0:
+            raise ConflictError('Legacy release record must be an ordinary root-owned file')
+        protected(installed.resolve().parent)
+        expected = {'manifest': {'release_id': current.resolve().name,
+                                'schema_revision': '0005_priority',
+                                'trust_boundary_digest': expected_trust}}
+        if json.loads(installed.read_text()) != expected:
+            raise ConflictError('Legacy release record does not match independently verified release identity/trust/schema')
+    elif json.loads(installed.read_text())['manifest']['trust_boundary_digest'] != data['trust_digest']:
         raise ConflictError('Legacy release and installer trust records disagree')
     units = []
     for new in installer.units():
@@ -93,6 +119,7 @@ def plan(source, *, root=Path('/')):
                 raise ConflictError(f'Loaded legacy unit {old} differs from the reviewed file; no stop or daemon-reload was performed')
         units.append({'old': old, 'new': new})
     return {'units': units, 'previous': str(current.resolve()), 'state': 'reviewed',
+            'legacy_metadata_mode': oct(metadata_mode), 'metadata_normalization': metadata_mode != 0o644,
             'preserved': '/opt/serverhub-control and all foreign services; accounts, data and database remain in place'}
 
 
@@ -193,6 +220,8 @@ def migrate(source):
         info = path.stat()
         data['files'][str(path)] = {'content': base64.b64encode(path.read_bytes()).decode(),
                                    'mode': info.st_mode & 0o777, 'uid': info.st_uid, 'gid': info.st_gid}
+    metadata = Path(data['previous']) / 'installed.json'
+    metadata.chmod(0o644)
     data.update(state='armed', deadline=time.time() + 1800)
     _save(data)
     # Stable standalone stdlib recovery: does not depend on a candidate wheel.
