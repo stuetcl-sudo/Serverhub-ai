@@ -1,5 +1,6 @@
 """No test here touches the real service manager or host identities."""
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -153,3 +154,57 @@ def test_root_enrolled_administration_dropin_can_survive_upgrade(tmp_path):
     drop.mkdir()
     (drop / '20-administration.conf').write_text(content)
     assert plan(SOURCE, root=tmp_path)['state'] == 'reviewed'
+
+
+def test_independent_namespace_watchdog_restores_only_recorded_ai_resources(tmp_path, monkeypatch):
+    import base64
+    import serverhub.ops.unit_recovery as watchdog
+    actual_path = Path
+    def rooted(*parts):
+        path = actual_path(*parts)
+        if path.is_absolute() and not path.is_relative_to(tmp_path):
+            return tmp_path / str(path).lstrip('/')
+        return path
+    journal = tmp_path / 'var/lib/serverhub-install/unit-migration.json'
+    journal.parent.mkdir(parents=True)
+    current = rooted('/opt/serverhub/current')
+    current.parent.mkdir(parents=True)
+    current.symlink_to('/opt/serverhub/releases/bad')
+    control = rooted('/opt/serverhub-control/sentinel')
+    control.parent.mkdir()
+    control.write_bytes(b'untouched')
+    unit = rooted('/etc/systemd/system/serverhub-ai-worker.service')
+    unit.parent.mkdir(parents=True)
+    unit.write_text('candidate unit')
+    data = {'state': 'armed', 'deadline': 100,
+            'previous': '/opt/serverhub/releases/old',
+            'units': [{'new': 'serverhub-ai-worker.service', 'old': 'serverhub-worker.service',
+                       'active': True, 'enabled': False}],
+            'files': {'/etc/systemd/system/serverhub-worker.service': {
+                'content': base64.b64encode(b'proven AI predecessor').decode(),
+                'mode': 0o644, 'uid': os.getuid(), 'gid': os.getgid()}}}
+    journal.write_text(json.dumps(data))
+    calls = []
+    monkeypatch.setattr(watchdog, 'Path', rooted)
+    monkeypatch.setattr(watchdog, 'JOURNAL', journal)
+    monkeypatch.setattr(watchdog, 'protected', lambda path: None)
+    monkeypatch.setattr(watchdog, '_run', lambda args: calls.append(args))
+    monkeypatch.setattr(watchdog.time, 'time', lambda: 99)
+    assert watchdog.recover()['state'] == 'armed'
+    assert not calls
+    monkeypatch.setattr(watchdog.time, 'time', lambda: 101)
+    assert watchdog.recover()['state'] == 'reverted'
+    assert not unit.exists()
+    assert rooted('/etc/systemd/system/serverhub-worker.service').read_bytes() == b'proven AI predecessor'
+    assert control.read_bytes() == b'untouched'
+    assert os.readlink(current) == '/opt/serverhub/releases/old'
+    assert ['systemctl', 'start', 'serverhub-worker.service'] in calls
+    assert not any('serverhub-broker.service' in args or 'serverhub-docker-ro.service' in args for args in calls)
+    assert not any(args[:2] == ['systemctl', 'enable'] for args in calls)
+
+
+def test_watchdog_and_interactive_recovery_have_identical_implementation():
+    import inspect
+    from serverhub.ops.migrate_units import recover
+    from serverhub.ops.unit_recovery import recover as standalone
+    assert inspect.getsource(recover) == inspect.getsource(standalone)

@@ -44,7 +44,11 @@ and again inside the root installer. It inspects destination units (including
 loaded vendor/transient units, aliases and drop-ins), reserved paths and symlinks,
 NSS users/groups, TCP 9080 and existing PostgreSQL objects. A stopped/uninspectable
 existing PostgreSQL cluster blocks installation; have its administrator inspect
-and start it before rerunning. Preflight never starts it or deletes objects.
+and start it before rerunning. Preflight never starts it or deletes objects. Reserved path
+ancestors must be root-owned and not group/world writable; an unsafe shared
+ancestor is reported without changing global host permissions. The disposable
+GitHub image normalizes its runner-owned `/opt` and writable `/var/log` explicitly
+as test preparation, outside the production installer.
 `--build-only` only builds and does not claim or migrate an installed namespace.
 
 A clean preflight creates a root-only ownership claim immediately before the
@@ -74,7 +78,8 @@ sudo env PYTHONPATH="$PWD/src" .build-venv/bin/python -m serverhub.ops.migrate_u
 
 The plan verifies the completed legacy installer journal, current release trust
 record, every old unit's exact expected content, and the known optional worker
-identity drop-in. A foreign or customized legacy worker/broker, mixed Control/AI
+identity and root-enrolled broker administration drop-ins. It also checks that
+loaded systemd fragments match the reviewed files without a pending daemon reload. A foreign or customized legacy worker/broker, mixed Control/AI
 installation, occupied new namespace or pending operation **aborts before any
 service change**. No generic `serverhub-*` snapshot/stop operation is used.
 Customized/older unit layouts require manual review; do not replace a Control

@@ -15,6 +15,9 @@ if os.environ.get('SERVERHUB_DISPOSABLE_TEST') != 'fresh-ubuntu-ci' or not os.en
     raise SystemExit('Disposable root Ubuntu CI only')
 if Path('/etc/serverhub').exists() or Path('/opt/serverhub-control').exists():
     raise SystemExit('Refusing existing installation')
+# Use an ordinary secure Ubuntu operator umask for the exact older installer.
+# The candidate itself sets metadata modes explicitly, independent of umask.
+os.umask(0o022)
 source = Path(__file__).resolve().parents[1]
 legacy = Path(sys.argv[1]).resolve()
 subprocess.run([sys.executable, '-m', 'serverhub.ops.installer', '--source', str(legacy), '--apply',

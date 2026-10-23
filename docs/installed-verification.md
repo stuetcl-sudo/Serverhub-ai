@@ -67,18 +67,16 @@ This is an installed-system check, not a production-readiness certification or a
 database restore drill. Backups, application-specific acceptance, real reboot,
 intended storage mounts and off-host audit retention require separate validation.
 
-## Current private-VM blocker
+## Owner test VM result
 
-The development environment tested direct TCP to `192.168.122.10:22` and `:9080`
-on 2026-10-23; both failed with OS error 101, **Network is unreachable**.
-No private test VM upgrade or verification is claimed. Its earlier installed
-version cannot be inferred from the current repository. GitHub access and
-disposable Ubuntu CI remain available; production was not changed.
+The owner subsequently upgraded and checked the local test VM: **12 passed,
+2 partial, 0 failed**. The partial checks concern approval policies and host
+enrollment. This is the owner's observed result, not a new remote execution by
+the development environment. The earlier direct-access failure (OS error 101)
+is historical and does not imply that the VM remains unupgraded.
 
-For an old checkout, first fetch/check out the reviewed PR commit, then use
-`./scripts/install-ubuntu.sh --build-only` and `sudo ./scripts/repair-install.sh`
-as described in [the upgrade guide](upgrade.md). The reviewed repair backs up
-configuration/database and arms independent recovery. Run the verifier after it;
-never run `scripts/test-native-ubuntu.py` on that existing VM.
+Before its next upgrade, review [the namespace migration](control-coexistence.md).
+Run this verifier after migration; never run the destructive fresh-runner CI
+scripts on an existing VM or the physical production server.
 
 See [Control coexistence and legacy unit migration](control-coexistence.md) before installing alongside ServerHub Control or upgrading generic `serverhub-*.service` AI OS units. New AI OS services use `serverhub-ai-*`; never stop or replace Control units.

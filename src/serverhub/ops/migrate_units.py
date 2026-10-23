@@ -45,8 +45,8 @@ def plan(source, *, root=Path('/')):
         protected(record.parent)
         info = record.stat()
         import grp
-        if (record.is_symlink() or info.st_uid != 0 or info.st_gid != 0
-                or info.st_mode & 0o002 or any(name != 'root' for name in grp.getgrgid(0).gr_mem)):
+        if (record.is_symlink() or info.st_uid != 0 or info.st_mode & 0o002
+                or (info.st_mode & 0o020 and (info.st_gid != 0 or any(name != 'root' for name in grp.getgrgid(0).gr_mem)))):
             raise ConflictError('Unsafe legacy installed.json ownership or world write permission')
     if json.loads(installed.read_text())['manifest']['trust_boundary_digest'] != data['trust_digest']:
         raise ConflictError('Legacy release and installer trust records disagree')
@@ -80,6 +80,17 @@ def plan(source, *, root=Path('/')):
                     raise ConflictError(f'Unrecognized legacy drop-in: {old}')
                 if root == Path('/'):
                     protected(item)
+        if root == Path('/'):
+            result = subprocess.run(['systemctl', 'show', old,
+                '--property=FragmentPath,DropInPaths,ExecStart,NeedDaemonReload'],
+                check=False, text=True, capture_output=True, timeout=15, cwd='/')
+            loaded = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+            if (result.returncode or loaded.get('FragmentPath') != str(target)
+                    or loaded.get('NeedDaemonReload') != 'no'
+                    or '/opt/serverhub-control' in loaded.get('ExecStart', '')
+                    or any(not path.startswith(str(drop) + '/')
+                           for path in loaded.get('DropInPaths', '').split())):
+                raise ConflictError(f'Loaded legacy unit {old} differs from the reviewed file; no stop or daemon-reload was performed')
         units.append({'old': old, 'new': new})
     return {'units': units, 'previous': str(current.resolve()), 'state': 'reviewed',
             'preserved': '/opt/serverhub-control and all foreign services; accounts, data and database remain in place'}

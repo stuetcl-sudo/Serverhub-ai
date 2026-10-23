@@ -6,7 +6,7 @@ and collection-gap evidence, and can exercise a fixed read-only persistent job.
 
 ## Stability/autonomy overhaul and legacy installations
 
-For an installation with no resume journal, or a reviewed change to protected code, use the explicit local-root workflow below. This is not callable by an AI worker. It intentionally accepts reviewed trust-boundary changes; signing a normal autonomous release must never silently replace its trust anchors.
+For a namespaced installation with `/var/lib/serverhub-install/ownership.json`, use the explicit local-root workflow below after reviewing protected-code changes. Legacy generic-unit installations must first use [the verified namespace migration](control-coexistence.md); unclaimed/partial installations without the required legacy journal need manual review and are not silently adopted. This is not callable by an AI worker. It intentionally accepts reviewed trust-boundary changes; signing a normal autonomous release must never silently replace its trust anchors.
 
 ```sh
 # Check out the reviewed release/production-readiness branch/ref as your normal user.
@@ -14,7 +14,7 @@ For an installation with no resume journal, or a reviewed change to protected co
 sudo ./scripts/repair-install.sh
 ```
 
-This preserves database passwords, sessions, enrolled identities and operator configuration. An invalid/obsolete model fallback remains root-only and does not block the upgrade; configure a validated database route through Setup afterwards. Only a schema-validated non-secret fallback is made readable to service users. It creates and checks a protected PostgreSQL/configuration backup, prepares a new native runtime, stops API/worker during migration, applies additive migrations `0004_runtime` and `0005_priority`, reapplies explicit grants, updates reviewed systemd units and code anchors, switches the release, and checks API/worker/frontend health. The existing recovery runtime remains independent.
+This preserves database passwords, sessions, enrolled identities and operator configuration. An invalid/obsolete model fallback remains root-only and does not block the upgrade; configure a validated database route through Setup afterwards. Only a schema-validated non-secret fallback is made readable to service users. It creates and checks a protected PostgreSQL/configuration backup, prepares a new native runtime, stops API/worker during migration, applies additive migrations `0004_runtime` and `0005_priority`, reapplies explicit grants, updates reviewed systemd units and code anchors, switches the release, and checks API/worker/frontend health. The reviewed upgrade also updates the separate `recovery-ai` maintenance runtime; normal signed releases do not change it.
 
 An independent 300-second release watchdog is armed before service interruption. A normal failure restores the previous release and saved configuration/units, restarts services, and retains backups. An abruptly killed repair can be reverted by the watchdog to the previous code; its configuration snapshot remains in the protected backup for administrator restoration. No automatic destructive database downgrade occurs. The old pre-overhaul health endpoint expects revision 0003 exactly, so it may report a migration mismatch after code rollback to 0003 while additive schema 0004/0005 remains. Complete the reviewed upgrade or perform a separately reviewed recovery; do not edit `alembic_version` to hide this mismatch.
 
@@ -25,7 +25,7 @@ A failed first install created by the new journaled installer should be resumed 
 ## Normal signed releases
 
 
-The independent maintenance runtime is installed at `/opt/serverhub/recovery/venv` and is not switched during normal upgrades. Recovery timers use it instead of candidate code.
+The independent maintenance runtime is installed at `/opt/serverhub/recovery-ai/venv` and is not switched during normal upgrades. Recovery timers use it instead of candidate code.
 
 The worker cannot modify installed code, systemd definitions, policy/audit tables,
 backup archives, recovery journals, trust digests, or signing keys. Native release
@@ -64,7 +64,7 @@ ancestors, then:
 sudo ./scripts/upgrade.sh verify --bundle /opt/serverhub-upgrade/bundle
 sudo ./scripts/upgrade.sh prepare --bundle /opt/serverhub-upgrade/bundle
 sudo sh -c '. /etc/serverhub/recovery.env; export SERVERHUB_DATABASE_URL; \
-  /opt/serverhub/recovery/venv/bin/python -m serverhub.ops.release activate \
+  /opt/serverhub/recovery-ai/venv/bin/python -m serverhub.ops.release activate \
   --release OWNER_VERIFIED_RELEASE_ID'
 ```
 

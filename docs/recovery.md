@@ -70,7 +70,7 @@ sudo ./scripts/uninstall.sh --apply
 ```
 
 Uninstall disables/removes only known ServerHub units and executable releases.
-It retains the stable `/opt/serverhub/recovery` recovery runtime, PostgreSQL data/roles, service accounts, node identity/journal,
+It retains the stable `/opt/serverhub/recovery-ai` recovery runtime, PostgreSQL data/roles, service accounts, node identity/journal,
 configuration, backups and rollback evidence. Remove retained sensitive data only
 under a separately reviewed disposal procedure.
 
