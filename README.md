@@ -1,5 +1,9 @@
 # ServerHub AI OS
 
+The [production-readiness candidate](docs/production-readiness.md) reconciles both
+feature branches and documents native TLS access, context compaction, dedicated
+worker identity, audit improvements and the remaining release gates.
+
 The [token-budget and execution fix](docs/token-budget-fix.md) records the measured
 20k failure, provider-aware accounting, durable reservations and attempt-safe
 preflight pause/resume behavior.

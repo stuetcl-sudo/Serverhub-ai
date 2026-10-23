@@ -132,10 +132,12 @@ class Installer:
         role="controller",
         public_url="https://serverhub.local",
         runner=None,
+        ai_identity=False,
     ):
         self.source = Path(source).resolve()
         self.root = Path(root).absolute()
         self.role = role
+        self.ai_identity = bool(ai_identity)
         self.public_url = public_url.rstrip("/")
         self.runner = runner or subprocess.run
         if not self.public_url.startswith("https://") or any(char in self.public_url for char in "\n\r'\" "):
@@ -200,6 +202,7 @@ class Installer:
             "role": self.role,
             "root": str(self.root),
             "public_url": self.public_url,
+            "ai_identity": self.ai_identity,
             "actions": [
                 "validate Ubuntu/Debian and Python 3.12",
                 "create dedicated nologin service accounts",
@@ -246,6 +249,9 @@ class Installer:
     ):
         for unit in self.units():
             self.write("/etc/systemd/system/" + unit, (self.source / "packaging/systemd" / unit).read_text())
+        if self.ai_identity and self.role == "controller":
+            self.write("/etc/systemd/system/serverhub-worker.service.d/10-ai-identity.conf",
+                       "[Service]\nUser=serverhub-ai\nGroup=serverhub-worker\n")
         self.write("/etc/serverhub/trust-boundaries.sha256", self.trust_digest() + "\n")
         # Python modules share one interpreter and can monkey-patch each other.
         # Anchor the whole package, rather than trusting a manifest's claim that
@@ -359,13 +365,26 @@ class Installer:
         temporary.symlink_to(release)
         os.replace(temporary, current)
 
+    def _health_configuration(self):
+        # Root-only deployment config, independent of the caller's environment.
+        from .repair import read_environment
+        options = {}
+        for filename in ("api.env", "access.env"):
+            path = self.path("/etc/serverhub/" + filename)
+            if path.exists():
+                options.update(read_environment(path))
+        return options.get("SERVERHUB_HEALTH_URL", "http://127.0.0.1:9080"), options.get("SERVERHUB_HEALTH_CA")
+
     def _healthchecks(self, release):
         import httpx
         from serverhub.diagnostics import verify_frontend_http
 
+        import ssl
+        url, ca = self._health_configuration()
+        verification = ssl.create_default_context(cafile=ca) if ca else True
         for attempt in range(30):
             try:
-                with httpx.Client(base_url="http://127.0.0.1:9080", timeout=5, trust_env=False) as client:
+                with httpx.Client(base_url=url, verify=verification, timeout=5, trust_env=False) as client:
                     response = client.get("/health")
                     response.raise_for_status()
                     verify_frontend_http(client)
@@ -397,6 +416,8 @@ class Installer:
         journal = self.path("/var/lib/serverhub-install/state.json")
         if journal.exists():
             state = json.loads(journal.read_text())
+            if bool(state.get("ai_identity", False)) != self.ai_identity:
+                raise InstallError("Resume must use the original --ai-identity option; changing service identity requires a reviewed migration")
             if (state["role"], state["public_url"], state["trust_digest"]) != (
                 self.role,
                 self.public_url,
@@ -412,6 +433,7 @@ class Installer:
                 )
             state = {
                 "format": 1,
+                "ai_identity": self.ai_identity,
                 "role": self.role,
                 "public_url": self.public_url,
                 "trust_digest": self.trust_digest(),
@@ -467,6 +489,9 @@ class Installer:
                 selected = (
                     ACCOUNTS if self.role == "controller" else {"serverhub-node": ACCOUNTS["serverhub-node"]}
                 )
+                selected = dict(selected)
+                if self.ai_identity and self.role == "controller":
+                    selected["serverhub-ai"] = "/var/lib/serverhub-ai"
                 for name, directory in selected.items():
                     try:
                         entry = pwd.getpwnam(name)
@@ -500,6 +525,9 @@ class Installer:
                     target.mkdir(parents=True, mode=0o700, exist_ok=True)
                     os.chown(target, entry.pw_uid, entry.pw_gid)
                     target.chmod(0o700)
+                if self.ai_identity and self.role == "controller":
+                    os.chown(self.path("/var/lib/serverhub-worker"), pwd.getpwnam("serverhub-ai").pw_uid,
+                             grp.getgrnam("serverhub-worker").gr_gid)
                 for directory, mode in (
                     ("/opt/serverhub", 0o755),
                     ("/var/backups/serverhub", 0o700),
@@ -785,11 +813,12 @@ def main(argv=None):
     parser.add_argument("--public-url", default="https://serverhub.local")
     parser.add_argument("--install-dependencies", action="store_true")
     parser.add_argument("--enable-broker", action="store_true")
+    parser.add_argument("--ai-identity", action="store_true", help="Run worker as dedicated serverhub-ai; no sudo/Docker/broker privileges are granted")
     parser.add_argument("--owner", default="owner")
     parser.add_argument("--owner-password-stdin", action="store_true")
     args = parser.parse_args(argv)
     try:
-        installer = Installer(args.source, root=args.root, role=args.role, public_url=args.public_url)
+        installer = Installer(args.source, root=args.root, role=args.role, public_url=args.public_url, ai_identity=args.ai_identity)
         if args.check:
             report = check_compatibility(args.role, args.source)
         elif args.plan:

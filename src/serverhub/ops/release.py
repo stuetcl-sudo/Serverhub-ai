@@ -236,7 +236,10 @@ class ReleaseManager:
         try:
             self._switch(release)
             self._run(["systemctl", "restart", *self.SERVICES])
-            self._run([str(release / "venv/bin/serverhub"), "health", "--url", "http://127.0.0.1:9080"], timeout=60)
+            from .installer import Installer
+            url, ca = Installer(release)._health_configuration()
+            self._run([str(release / "venv/bin/serverhub"), "health", "--url", url,
+                       *(["--ca-file", ca] if ca else [])], timeout=60)
             journal["state"] = "verified"
             journal["verified_at"] = self.clock()
             self._write_journal(journal)

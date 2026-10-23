@@ -5,6 +5,8 @@ The AI worker must not be in the node group and has no access to this socket.
 """
 from __future__ import annotations
 import argparse
+import fcntl
+import uuid
 import hashlib
 import hmac
 import json
@@ -297,8 +299,11 @@ def execute(operation: str, arguments: dict, config: dict) -> dict:
     raise BrokerDenied("operation unavailable")
 
 
-def call_broker(path: str, operation: str, arguments: dict, *, timeout: int = 180) -> dict:
-    payload = json.dumps({"operation": operation, "arguments": arguments}, separators=(",", ":")).encode()+b"\n"
+def call_broker(path: str, operation: str, arguments: dict, *, timeout: int = 180, audit_context: dict | None = None) -> dict:
+    envelope = {"operation": operation, "arguments": arguments}
+    if audit_context is not None:
+        envelope["audit_context"] = audit_context
+    payload = json.dumps(envelope, separators=(",", ":")).encode()+b"\n"
     if len(payload) > MAX_REQUEST:
         raise BrokerDenied("request too large")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -339,11 +344,62 @@ def append_broker_audit(config: dict, record: dict) -> None:
         metadata = parent.lstat()
         if stat.S_ISLNK(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o022:
             raise BrokerDenied("unsafe broker audit parent")
-    fd = os.open(path, os.O_WRONLY|os.O_APPEND|os.O_CREAT|os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "a") as out:
-        out.write(json.dumps(record)+"\n")
+    from serverhub.audit import redact
+    cleaned = redact(record)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+b") as out:
+        metadata = os.fstat(out.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o077:
+            raise BrokerDenied("broker audit must be a protected root-owned regular file")
+        fcntl.flock(out, fcntl.LOCK_EX)
+        size = out.seek(0, os.SEEK_END)
+        previous = "0" * 64
+        if size:
+            out.seek(max(0, size - 65536))
+            tail = out.read()
+            if not tail.endswith(b"\n"):
+                raise BrokerDenied("broker audit has an incomplete trailing record")
+            last = tail.splitlines()[-1]
+            try:
+                prior = json.loads(last)
+                previous = prior.get("hash") or hashlib.sha256(last).hexdigest()
+            except (ValueError, AttributeError):
+                raise BrokerDenied("broker audit trailing record is invalid") from None
+        body = {"format": 2, "previous_hash": previous, "record": cleaned}
+        digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        encoded = json.dumps({**body, "hash": digest}, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        if len(encoded) > 65536:
+            raise BrokerDenied("broker audit record exceeds bound")
+        out.seek(0, os.SEEK_END)
+        out.write(encoded)
         out.flush()
         os.fsync(out.fileno())
+
+
+def verify_broker_audit(path: str | Path) -> dict:
+    """Read-only integrity check. Root can rewrite the entire chain; export heads externally."""
+    previous, count, legacy = "0" * 64, 0, 0
+    with Path(path).open("rb") as stream:
+        while raw := stream.readline(65537):
+            if len(raw) > 65536 or not raw.endswith(b"\n"):
+                return {"valid": False, "checked": count, "reason": "incomplete_or_oversize_record"}
+            try:
+                row = json.loads(raw)
+                if row.get("format") != 2:
+                    if count != legacy:  # Legacy records may only precede the new chain.
+                        raise ValueError()
+                    previous = hashlib.sha256(raw.rstrip(b"\n")).hexdigest()
+                    legacy += 1
+                else:
+                    body = {key: row[key] for key in ("format", "previous_hash", "record")}
+                    digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                    if row["previous_hash"] != previous or not hmac.compare_digest(row["hash"], digest):
+                        raise ValueError()
+                    previous = digest
+            except (ValueError, KeyError, AttributeError, TypeError):
+                return {"valid": False, "checked": count, "reason": "broken_chain"}
+            count += 1
+    return {"valid": True, "checked": count, "legacy_unlinked": legacy, "head": previous}
 
 
 class BrokerHandler(socketserver.StreamRequestHandler):
@@ -352,6 +408,10 @@ class BrokerHandler(socketserver.StreamRequestHandler):
         _, uid, _ = struct.unpack("3i", self.connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
         response = {"ok": False, "error": "operation rejected"}
         operation = "invalid"
+        execution_id = uuid.uuid4().hex
+        context = {}
+        privilege = {"peer_uid": uid, "effective_uid": os.geteuid(), "effective_gid": os.getegid(),
+                     "adapter": "root_allowlisted_broker", "execution_id": execution_id}
         try:
             if uid not in self.server.config["allowed_uids"]:
                 raise BrokerDenied("peer identity is not allowlisted")
@@ -359,12 +419,17 @@ class BrokerHandler(socketserver.StreamRequestHandler):
             if len(raw) > MAX_REQUEST or not raw.endswith(b"\n"):
                 raise BrokerDenied("request exceeds frame limit")
             payload = json.loads(raw)
-            if not isinstance(payload, dict) or set(payload) != {"operation", "arguments"}:
+            if not isinstance(payload, dict) or not {"operation", "arguments"} <= set(payload) or set(payload) - {"operation", "arguments", "audit_context"}:
                 raise BrokerDenied("invalid request")
             operation = payload["operation"]
+            context = payload.get("audit_context", {})
+            if not isinstance(context, dict) or any(not isinstance(value, str) or len(value) > 200 for value in context.values()):
+                raise BrokerDenied("invalid audit correlation metadata")
             append_broker_audit(self.server.config, {"at": time.time(), "uid": uid,
-                                "operation": operation, "phase": "before"})
+                                "operation": operation, "arguments": payload["arguments"], "correlation": context,
+                                "privilege": privilege, "phase": "before"})
             result = execute(operation, payload["arguments"], self.server.config)
+            result["execution_context"] = privilege
             response = {"ok": True, "result": result}
         except (BrokerDenied, CollectionError, ValueError, OSError, TypeError, KeyError):
             response = {"ok": False, "error": "operation rejected or failed; inspect protected broker audit"}
@@ -372,7 +437,10 @@ class BrokerHandler(socketserver.StreamRequestHandler):
             try:
                 append_broker_audit(self.server.config, {"at": time.time(), "uid": uid,
                                     "operation": operation if isinstance(operation, str) else "invalid",
-                                    "phase": "after", "ok": response["ok"]})
+                                    "phase": "after", "ok": response["ok"], "correlation": context,
+                                    "privilege": privilege, "result": {"verified": response.get("result", {}).get("verified"),
+                                    "exit_code": response.get("result", {}).get("exit_code"),
+                                    "error": response.get("error")}})
             except (OSError, BrokerDenied):
                 response = {"ok": False, "error": "protected broker audit unavailable; action outcome uncertain"}
         self.wfile.write(json.dumps(response, separators=(",", ":")).encode()+b"\n")

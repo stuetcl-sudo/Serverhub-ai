@@ -5,6 +5,8 @@ confirmation and an ephemeral Ubuntu 24.04 runner; this file is not an AI tool.
 """
 
 import json
+import grp
+import ssl
 import pwd
 import httpx
 from serverhub.ops.repair import repair
@@ -40,7 +42,7 @@ def runner(command, **kwargs):
     return subprocess.run(command, **kwargs)
 
 
-installer = Installer(source, public_url="https://serverhub.test", runner=runner)
+installer = Installer(source, public_url="https://serverhub.test", runner=runner, ai_identity=True)
 try:
     installer.apply(
         install_dependencies=True, owner="ciowner", owner_password="isolated-native-owner-password-42"
@@ -53,6 +55,8 @@ assert json.loads(Path("/var/lib/serverhub-install/state.json").read_text())["st
 assert installer.apply(install_dependencies=True)["state"] == "installed"
 assert installer.apply(install_dependencies=True)["state"] == "installed"
 assert Path("/etc/serverhub/api.env").read_bytes() == before
+assert subprocess.check_output(["systemctl", "show", "serverhub-worker", "--property=User", "--value"], text=True).strip() == "serverhub-ai"
+assert pwd.getpwnam("serverhub-ai").pw_shell.endswith("nologin")
 
 
 # A loopback fixture implements only documented Ollama HTTP API messages. It never
@@ -266,11 +270,42 @@ assert Path("/opt/serverhub/current").resolve() == previous
 assert Path("/etc/serverhub/api.env").read_bytes() == before
 assert json.loads(Path("/var/lib/serverhub-release/pending.json").read_text())["state"] == "reverted"
 installer._healthchecks(previous)
+# Verify persistent direct TLS with the actual systemd API identity. Temporary
+# certificates and access configuration belong only to this disposable runner.
+cert_dir = Path("/etc/serverhub/tls")
+cert_dir.mkdir(mode=0o750)
+api_gid = grp.getgrnam("serverhub-api").gr_gid
+os.chown(cert_dir, 0, api_gid)
+cert, key = cert_dir / "cert.pem", cert_dir / "key.pem"
+subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+    "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
+    "-keyout", str(key), "-out", str(cert)], check=True, capture_output=True)
+for path in (cert, key):
+    os.chown(path, 0, api_gid)
+    path.chmod(0o640)
+access = Path("/etc/serverhub/access.env")
+access.write_text("SERVERHUB_API_BIND=127.0.0.1\nSERVERHUB_PUBLIC_URL=https://127.0.0.1:9080\n"
+    + f"SERVERHUB_TLS_CERTFILE={cert}\nSERVERHUB_TLS_KEYFILE={key}\n"
+    + f"SERVERHUB_HEALTH_URL=https://127.0.0.1:9080\nSERVERHUB_HEALTH_CA={cert}\n")
+os.chown(access, 0, api_gid)
+access.chmod(0o640)
+subprocess.run(["systemctl", "restart", "serverhub-api"], check=True)
+installer._healthchecks(previous)
+with httpx.Client(base_url="https://127.0.0.1:9080", verify=ssl.create_default_context(cafile=str(cert)), trust_env=False) as tls:
+    assert tls.get("/api/hosts").status_code == 401
+    assert tls.get("/").status_code == 200
+    from serverhub.diagnostics import verify_frontend_http
+    verify_frontend_http(tls)
+# Restart again to prove no terminal-held tunnel or inherited TLS process exists.
+subprocess.run(["systemctl", "restart", "serverhub-api"], check=True)
+installer._healthchecks(previous)
 # No production systems are contacted. Emit only non-secret result evidence.
 print(
     json.dumps(
         {
             "native_install": "passed",
+            "dedicated_ai_identity": "serverhub-ai",
+            "persistent_authenticated_tls": "passed",
             "interruption_resume": "passed",
             "idempotency": "passed",
             "api_worker": "healthy",

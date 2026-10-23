@@ -8,6 +8,7 @@ User=serverhub-api
 Group=serverhub-api
 WorkingDirectory=/opt/serverhub/current
 EnvironmentFile=/etc/serverhub/api.env
+EnvironmentFile=-/etc/serverhub/access.env
 ExecStart=/opt/serverhub/current/venv/bin/serverhub serve
 Restart=on-failure
 RestartSec=5

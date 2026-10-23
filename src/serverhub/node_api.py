@@ -214,6 +214,8 @@ def commands(node: Host = Depends(current_node), db=Depends(get_db)):
         result.append(
             {
                 "id": command.id,
+                "audit_context": {"command_id": command.id, "job_id": command.job_id, "host_id": node.id,
+                                  "operator_id": db.get(Job, command.job_id).owner_id},
                 "operation": command.operation,
                 "arguments": command.arguments,
                 "idempotency_key": command.idempotency_key,
@@ -265,7 +267,9 @@ def command_result(
         "node:" + node.id,
         "node.command." + body.state,
         command.id,
-        {"operation": command.operation, "job_id": command.job_id},
+        {"operation": command.operation, "job_id": command.job_id, "host_id": node.id,
+         "operator_id": db.get(Job, command.job_id).owner_id, "arguments": command.arguments,
+         "execution_context": body.result.get("execution_context"), "result": body.result},
     )
     db.commit()
     return {"accepted": True, "state": body.state}

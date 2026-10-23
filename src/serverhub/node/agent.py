@@ -189,7 +189,10 @@ class NodeAgent:
                 broker = self.config.get("broker_socket")
                 if not broker:
                     raise AgentError("privileged operation requires the separately configured broker")
-                result = call_broker(broker, operation, arguments)
+                if cmd.get("audit_context") is not None:
+                    result = call_broker(broker, operation, arguments, audit_context=cmd["audit_context"])
+                else:
+                    result = call_broker(broker, operation, arguments)
             state = "succeeded"
         except (AgentError, BrokerDenied, OSError, ValueError) as exc:
             state, result = "failed", {"error": str(exc)[:256], "failure_class": "execution", "retry_safe": operation in READ_OPERATIONS}

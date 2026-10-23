@@ -77,12 +77,12 @@ def create_app() -> FastAPI:
                   openapi_url="/openapi.json" if settings.enable_openapi else None)
     if not settings.dev_mode:
         hostname = urlsplit(settings.public_url).hostname
-        app.add_middleware(TrustedHostMiddleware, allowed_hosts=[hostname, "127.0.0.1", "localhost"])
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=[hostname, "127.0.0.1", "localhost", "::1"])
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         origin = request.headers.get("origin")
-        allowed_origins = set(settings.allowed_origins)
+        allowed_origins = set(settings.allowed_origins) | {settings.public_url}
         # Same-origin loopback UI through an SSH tunnel. Never accept an
         # arbitrary Origin, LAN HTTP origin, or Origin unrelated to Host.
         if request.url.hostname in {"127.0.0.1", "localhost", "::1"}:
@@ -149,7 +149,7 @@ def create_app() -> FastAPI:
         @app.get("/{path:path}", include_in_schema=False)
         def frontend_index(path: str):
             # Never disguise a missing API route as an HTML success response.
-            if path.startswith(("api/", "mcp/", ".well-known/", "oauth/")):
+            if path.split("/", 1)[0] in {"api", "mcp", ".well-known", "oauth", "assets"}:
                 return JSONResponse({"detail": "Not found"}, status_code=404)
             candidate = (frontend / path).resolve()
             if path and candidate.is_relative_to(frontend.resolve()) and candidate.is_file():

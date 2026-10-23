@@ -6,6 +6,7 @@ journaled before execution and ambiguous interrupted writes stop for reconciliat
 from __future__ import annotations
 
 import json
+import hashlib
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -14,7 +15,7 @@ from serverhub.audit import redact
 from serverhub.integrations.registry import OPERATIONS, IntegrationError, execute, operation_schemas
 from serverhub.host_audit import AuditArguments
 from .agents import AGENTS, BASE_INSTRUCTIONS
-from .providers import BudgetExceeded as ProviderBudgetExceeded, ChatProvider, ProviderError, PreflightRejected, UsageBudget, load_routes
+from .providers import BudgetExceeded as ProviderBudgetExceeded, ChatProvider, ProviderError, PreflightRejected, UsageBudget, load_routes, estimate_prompt
 
 
 class Arguments(BaseModel):
@@ -103,6 +104,38 @@ def _save(ctx, state: dict) -> None:
     checkpoint = dict(ctx.job.checkpoint or {})
     checkpoint["ai"] = state
     ctx.save_checkpoint(checkpoint, progress=min(0.95, state.get("step", 0) / max(1, int(getattr(ctx.job, "spec", {}).get("max_steps", 20)))))
+
+
+def compact_context(messages: list[dict], tools: list[dict], cfg, remaining: int) -> tuple[list[dict], dict | None]:
+    """Replace bulky observations with durable references, never model summaries.
+
+    Tool call/response linkage, instructions and the operator request remain intact.
+    Full results and verification evidence stay in the checkpoint outside the prompt.
+    This changes future input cost only; already billed usage is never refunded.
+    """
+    initial = estimate_prompt(messages, tools, kind=cfg.kind)["estimated_input_tokens"]
+    limit = min(cfg.context_limit, remaining)
+    target = max(0, limit - min(cfg.max_output_tokens, max(32, limit // 4)))
+    if initial <= target:
+        return messages, None
+    compacted = [dict(message) for message in messages]
+    removed = []
+    for message in compacted:
+        if message.get("role") != "tool" or len(message.get("content") or "") <= 512:
+            continue
+        content = message["content"]
+        message["content"] = json.dumps({"compacted": True, "call_id": message.get("tool_call_id"),
+            "checkpoint": "ai.completed_calls", "preview": content[:256],
+            "note": "Truncated observation, not complete evidence; request a bounded fresh query if necessary"})
+        removed.append(message.get("tool_call_id"))
+        if estimate_prompt(compacted, tools, kind=cfg.kind)["estimated_input_tokens"] <= target:
+            break
+    if not removed:
+        return messages, None
+    return compacted, {"input_before": initial,
+        "input_after": estimate_prompt(compacted, tools, kind=cfg.kind)["estimated_input_tokens"],
+        "compacted_calls": removed, "context_limit": cfg.context_limit,
+        "remaining_job_budget": remaining, "target": target}
 
 
 def _memory(ctx, query: str) -> dict:
@@ -208,7 +241,11 @@ def _pending_tools(ctx, state: dict, on_execution=None) -> None:
             _save(ctx, state)
             ctx.log("AI tool request", {"operation": operation, "arguments": call["arguments"],
                                         "specialist": state["specialist"]})
+            fingerprint = hashlib.sha256(json.dumps([operation, call["arguments"]], sort_keys=True).encode()).hexdigest()
+            failures = state.setdefault("failed_tools", {})
             try:
+                if failures.get(fingerprint, 0) >= 2:
+                    raise IntegrationError("Repeated failed operation suppressed; choose a changed diagnostic or remediation strategy", retryable=False)
                 if on_execution:
                     on_execution()
                 result = _run_tool(ctx, operation, call["arguments"], state, call_id)
@@ -217,10 +254,11 @@ def _pending_tools(ctx, state: dict, on_execution=None) -> None:
                 _save(ctx, state)
                 if mutating:
                     raise
-                if exc.retryable:
-                    from serverhub.jobs import RetryableError
-                    raise RetryableError(str(exc)) from exc
-                raise
+                failures[fingerprint] = min(3, failures.get(fingerprint, 0) + 1)
+                result = {"error": str(exc), "verified": False, "completed": False,
+                          "failure_class": "integration", "retryable": exc.retryable,
+                          "identical_failures": failures[fingerprint],
+                          "requires_changed_strategy": failures[fingerprint] >= 2}
             cleaned = redact(result)
             if len(json.dumps(cleaned, default=str).encode()) > 256 * 1024:
                 cleaned = {"truncated": True, "detail": "Tool output exceeds conversation bound; inspect inventory/API directly"}
@@ -297,6 +335,8 @@ def autonomous_job(ctx, spec: dict) -> dict:
             reservation = budget.last_preflight
             ctx.reserve_model_request(reservation["estimated_input_tokens"] + reservation["output_reserve_tokens"],
                                       reservation["cost_reserve"])
+        ctx.log("AI provider request", {"model": routes[route].model, "provider": routes[route].kind,
+                                       "model_route": route, "host_id": ctx.job.host_id})
         mark_execution()
     # Resume the saved model response before asking the provider for another one.
     _pending_tools(ctx, state, on_execution=mark_execution)
@@ -311,9 +351,16 @@ def autonomous_job(ctx, spec: dict) -> dict:
             raise ValueError("Configured model route is unavailable")
         messages = list(state["messages"])
         messages[0] = {"role": "system", "content": BASE_INSTRUCTIONS + "\nCurrent specialist: " + specialist.instructions}
+        schemas = tool_schemas()
+        messages, compaction = compact_context(messages, schemas, routes[route], budget.token_limit - budget.tokens_used)
+        if compaction:
+            state["messages"] = messages
+            state.setdefault("compactions", []).append(compaction)
+            _save(ctx, state)
+            ctx.log("Conversation observations compacted; full checkpoint evidence retained", compaction)
         previous_tokens, previous_cost = budget.tokens_used, budget.cost_used
         try:
-            completion = ChatProvider(routes[route]).complete(messages, tool_schemas(), budget,
+            completion = ChatProvider(routes[route]).complete(messages, schemas, budget,
                          before_request=before_model_request)
         except ProviderBudgetExceeded as exc:
             from serverhub.jobs import BudgetExceeded, PreflightRejected as JobPreflightRejected
