@@ -158,7 +158,8 @@ def test_root_enrolled_administration_dropin_can_survive_upgrade(tmp_path):
 
 
 @pytest.mark.parametrize("created", [True, False])
-def test_independent_namespace_watchdog_restores_only_recorded_ai_resources(tmp_path, monkeypatch, created):
+@pytest.mark.parametrize("prior_runtime", [True, False])
+def test_independent_namespace_watchdog_restores_only_recorded_ai_resources(tmp_path, monkeypatch, created, prior_runtime):
     import base64
     import serverhub.ops.unit_recovery as watchdog
     actual_path = Path
@@ -186,6 +187,14 @@ def test_independent_namespace_watchdog_restores_only_recorded_ai_resources(tmp_
             'files': {'/etc/systemd/system/serverhub-worker.service': {
                 'content': base64.b64encode(b'proven AI predecessor').decode(),
                 'mode': 0o644, 'uid': os.getuid(), 'gid': os.getgid()}}}
+    if prior_runtime:
+        backup = rooted('/opt/serverhub/recovery-ai.previous-identities')
+        backup.mkdir()
+        (backup / 'version').write_bytes(b'old protected recovery code')
+        runtime = rooted('/opt/serverhub/recovery-ai')
+        runtime.mkdir()
+        (runtime / 'version').write_bytes(b'new candidate recovery code')
+        data['recovery_runtime_backup'] = '/opt/serverhub/recovery-ai.previous-identities'
     journal.write_text(json.dumps(data))
     calls = []
     monkeypatch.setattr(watchdog, 'Path', rooted)
@@ -200,6 +209,9 @@ def test_independent_namespace_watchdog_restores_only_recorded_ai_resources(tmp_
     assert not unit.exists()
     assert rooted('/etc/systemd/system/serverhub-worker.service').read_bytes() == b'proven AI predecessor'
     assert control.read_bytes() == b'untouched'
+    if prior_runtime:
+        assert (runtime / 'version').read_bytes() == b'old protected recovery code'
+        assert not backup.exists()
     assert os.readlink(current) == '/opt/serverhub/releases/old'
     assert ['systemctl', 'start', 'serverhub-worker.service'] in calls
     assert not any('serverhub-broker.service' in args or 'serverhub-docker-ro.service' in args for args in calls)

@@ -68,6 +68,15 @@ def recover(*, force=False):
                 (directory / saved.name).unlink(missing_ok=True)
         if directory.exists() and not list(directory.iterdir()):
             directory.rmdir()
+    backup_runtime = data.get('recovery_runtime_backup')
+    if backup_runtime and Path(backup_runtime).exists():
+        backup_path = Path(backup_runtime)
+        protected(backup_path)
+        runtime = Path('/opt/serverhub/recovery-ai')
+        if runtime.exists() or runtime.is_symlink():
+            protected(runtime)
+            shutil.rmtree(runtime)
+        os.replace(backup_path, runtime)
     current = Path('/opt/serverhub/current')
     replacement = current.with_name('.namespace-recover')
     replacement.unlink(missing_ok=True)

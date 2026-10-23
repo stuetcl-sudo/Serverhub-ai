@@ -3,6 +3,7 @@
 Run only on a fresh disposable GitHub Ubuntu VM, separately from Control fixtures.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -33,6 +34,8 @@ old_claim = Path('/var/lib/serverhub-install/ownership.json').read_bytes() if na
 old_identities = {name: subprocess.check_output(['getent', 'passwd', name]) for name in ['serverhub-api', 'serverhub-worker', 'serverhub-node', 'serverhub-migrate', 'serverhub-staging']}
 before = {name: Path('/etc/serverhub', name).read_bytes() for name in ('api.env', 'worker.env', 'recovery.env', 'node.yaml', 'broker.yaml')}
 previous = Path('/opt/serverhub/current').resolve()
+recovery_module = next(Path('/opt/serverhub/recovery-ai/venv/lib').glob('python*/site-packages/serverhub/ops/coexistence.py')) if namespaced else None
+recovery_digest = hashlib.sha256(recovery_module.read_bytes()).hexdigest() if recovery_module else None
 metadata = (previous / 'installed.json').stat()
 print('LEGACY_METADATA=' + json.dumps({'uid': metadata.st_uid, 'gid': metadata.st_gid, 'mode': oct(metadata.st_mode & 0o777)}), flush=True)
 assert plan(source)['state'] == 'reviewed'
@@ -56,6 +59,9 @@ assert json.loads(migration_journal.read_text())['state'] == 'reverted', 'Indepe
 while time.monotonic() < limit and subprocess.run(['systemctl', 'is-active', '--quiet', 'serverhub-ai-namespace-recovery.service'], capture_output=True).returncode == 0:
     time.sleep(0.2)
 assert Path('/opt/serverhub/current').resolve() == previous
+if recovery_module:
+    assert hashlib.sha256(recovery_module.read_bytes()).hexdigest() == recovery_digest
+    subprocess.run(['/opt/serverhub/recovery-ai/venv/bin/python', '-c', 'from serverhub.ops.release import ReleaseManager; ReleaseManager()._protect()'], check=True, env={key:value for key,value in os.environ.items() if key != 'PYTHONPATH'})
 assert (Path('/var/lib/serverhub-install/ownership.json').read_bytes() if namespaced else None) == old_claim
 if not namespaced:
     assert not Path('/var/lib/serverhub-install/ownership.json').exists()
@@ -75,6 +81,9 @@ with patch.object(Installer, '_healthchecks', side_effect=RuntimeError('Intentio
     else:
         raise AssertionError('Expected migration rollback')
 assert Path('/opt/serverhub/current').resolve() == previous
+if recovery_module:
+    assert hashlib.sha256(recovery_module.read_bytes()).hexdigest() == recovery_digest
+    subprocess.run(['/opt/serverhub/recovery-ai/venv/bin/python', '-c', 'from serverhub.ops.release import ReleaseManager; ReleaseManager()._protect()'], check=True, env={key:value for key,value in os.environ.items() if key != 'PYTHONPATH'})
 assert (Path('/var/lib/serverhub-install/ownership.json').read_bytes() if namespaced else None) == old_claim
 if not namespaced:
     assert not Path('/var/lib/serverhub-install/ownership.json').exists()
@@ -95,6 +104,8 @@ for unit in ['serverhub-ai-api.service', 'serverhub-ai-worker.service', 'serverh
 if not namespaced:
     for unit in old_units:
         assert not Path('/etc/systemd/system', unit).exists()
+if namespaced:
+    assert Path('/opt/serverhub/recovery-ai.previous-identities/venv/bin/python').exists()
 assert '/run/serverhub-ai-broker/control.sock' in Path('/etc/serverhub/broker.yaml').read_text()
 if not namespaced:
     assert Path('/opt/serverhub/recovery/venv/bin/python').exists(), 'Legacy independent recovery retained'

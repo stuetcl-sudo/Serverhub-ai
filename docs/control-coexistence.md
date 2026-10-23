@@ -150,7 +150,10 @@ archived and unenrolled before migration, then reviewed/re-enrolled afterward;
 old project groups, deployments and AppArmor profile are retained. Unrecognized
 custom unit files/drop-ins or identity homes require manual review. A failed
 migration removes only journaled newly created accounts/copies and restores the
-previous claim and exact configuration. A successful conversion is retained across
+previous claim and exact configuration. For namespace-2 installations, the
+previous independent recovery runtime is retained in
+`/opt/serverhub/recovery-ai.previous-identities` and restored on failure (including
+its old code/claim compatibility); it is not overwritten in place. A successful conversion is retained across
 subsequent code rollbacks: do not reinstall old generic unit files. Normal reviewed
 upgrades use `sudo ./scripts/repair-install.sh`; schema-compatible release rollback
 uses `sudo ./scripts/upgrade.sh rollback`. Very old code with hardcoded old socket

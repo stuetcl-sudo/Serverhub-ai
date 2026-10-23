@@ -377,6 +377,15 @@ def recover(*, force=False):
                 (directory / saved.name).unlink(missing_ok=True)
         if directory.exists() and not list(directory.iterdir()):
             directory.rmdir()
+    backup_runtime = data.get('recovery_runtime_backup')
+    if backup_runtime and Path(backup_runtime).exists():
+        backup_path = Path(backup_runtime)
+        protected(backup_path)
+        runtime = Path('/opt/serverhub/recovery-ai')
+        if runtime.exists() or runtime.is_symlink():
+            protected(runtime)
+            shutil.rmtree(runtime)
+        os.replace(backup_path, runtime)
     current = Path('/opt/serverhub/current')
     replacement = current.with_name('.namespace-recover')
     replacement.unlink(missing_ok=True)
@@ -444,6 +453,11 @@ def migrate(source, *, repair_legacy_permissions=False):
         protected(Path('/opt/serverhub/recovery-ai'))
         if not data.get('previous_claim') and (not JOURNAL.exists() or json.loads(JOURNAL.read_text()).get('state') != 'reverted'):
             raise ConflictError('New recovery path already exists; review before migration')
+    if data.get('previous_claim') and Path('/opt/serverhub/recovery-ai').exists():
+        backup_runtime = Path('/opt/serverhub/recovery-ai.previous-identities')
+        if backup_runtime.exists() or backup_runtime.is_symlink():
+            raise ConflictError('Reserved previous recovery runtime path occupied; never overwrite it')
+        data['recovery_runtime_backup'] = str(backup_runtime)
     # Detect loaded vendor/transient new units too, even if no files exist.
     for item in data['units']:
         state = _run(['systemctl', 'show', item['new'], '--property=LoadState', '--value']).stdout.strip()
@@ -484,6 +498,8 @@ def migrate(source, *, repair_legacy_permissions=False):
     _run(['systemctl', 'enable', '--now', timer.name])
     try:
         _run(['systemctl', 'disable', '--now', *[x['old'] for x in data['units']]])
+        if data.get('recovery_runtime_backup'):
+            os.replace('/opt/serverhub/recovery-ai', data['recovery_runtime_backup'])
         if repair_legacy_permissions:
             from .runtime_permissions import seal_runtime
             # The root code anchor was checked immediately above; source bytes
