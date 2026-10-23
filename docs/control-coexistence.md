@@ -60,7 +60,15 @@ ancestors must be root-owned and not group/world writable; an unsafe shared
 ancestor is reported without changing global host permissions. The disposable
 GitHub image normalizes its runner-owned `/opt` and writable `/var/log` explicitly
 as test preparation, outside the production installer.
-`--build-only` only builds and does not claim or migrate an installed namespace.
+APT invocations in the shell workflow and Python installer set
+`NEEDRESTART_SUSPEND=1` **only in that subprocess**. This prevents the standard
+Ubuntu needrestart apt hook from restarting unrelated Control daemons after
+prerequisite installation. No global needrestart configuration, Control unit or
+service mask is edited. See the [Ubuntu 24.04 needrestart environment contract](https://manpages.ubuntu.com/manpages/noble/man1/needrestart.1.html).
+Ordinary dependency post-install actions for their own services (for example a
+new PostgreSQL cluster) still run. Custom operator-added APT hooks are outside
+this contract and must be reviewed before installation.
+`--build-only` builds with prerequisites and does not claim or migrate an installed namespace.
 
 A clean preflight creates a root-only ownership claim immediately before the
 first install phase. Resume uses the same claim and installer journal. An

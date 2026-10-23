@@ -347,6 +347,11 @@ class Installer:
         }
 
     def _run(self, command, *, env=None, stdin=None, timeout=600, cwd="/"):
+        if Path(command[0]).name == "apt-get":
+            # Ubuntu's apt needrestart hook can otherwise restart unrelated
+            # Control daemons. Scope suspension to this subprocess, never edit
+            # host needrestart configuration or mask foreign units.
+            env = dict(os.environ if env is None else env, NEEDRESTART_SUSPEND="1")
         try:
             return self.runner(
                 command,

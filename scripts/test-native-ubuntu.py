@@ -43,6 +43,8 @@ interrupted = False
 
 def runner(command, **kwargs):
     global interrupted
+    if Path(command[0]).name == "apt-get":
+        assert kwargs.get("env", {}).get("NEEDRESTART_SUSPEND") == "1"
     if command[-1:] == ["migrate"] and not interrupted:
         interrupted = True
         raise subprocess.CalledProcessError(

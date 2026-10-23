@@ -473,3 +473,23 @@ def test_docker_backup_cannot_read_control_or_retained_legacy_identity_state(pat
     backups.plan = {'allowed_bind_roots': ['/opt', '/var/lib']}
     with pytest.raises(DockerBackupError, match='Sensitive'):
         backups._source(path)
+
+
+@pytest.mark.parametrize('command', [['apt-get', 'update'], ['/usr/bin/apt-get', 'install', 'git']])
+def test_installer_apt_cannot_trigger_unrelated_needrestart(command, tmp_path):
+    calls = []
+    installer = Installer(SOURCE, root=tmp_path, runner=lambda argv, **kwargs: calls.append((argv, kwargs)))
+    caller_env = {'PATH': '/usr/bin:/bin', 'NEEDRESTART_SUSPEND': ''}
+    installer._run(command, env=caller_env)
+    assert calls[0][1]['env']['NEEDRESTART_SUSPEND'] == '1'
+    assert calls[0][1]['env']['PATH'] == caller_env['PATH']
+    assert caller_env['NEEDRESTART_SUSPEND'] == ''
+    assert not list(tmp_path.iterdir())
+
+
+def test_shell_prerequisite_installs_suspend_needrestart_without_global_changes():
+    text = (SOURCE / 'scripts/install-ubuntu.sh').read_text()
+    invocations = [line for line in text.splitlines() if 'apt-get ' in line]
+    assert invocations and all(line.startswith('sudo env NEEDRESTART_SUSPEND=1 apt-get ') for line in invocations)
+    assert 'needrestart.conf' not in text
+    assert 'systemctl mask' not in text
