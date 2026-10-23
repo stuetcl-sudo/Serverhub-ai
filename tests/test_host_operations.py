@@ -70,6 +70,8 @@ def test_once_delegated_maintenance_stays_exact_expiring_and_role_scoped(client,
     with SessionLocal() as db:
         for _ in range(3):
             authorize(db,owner,'package.apply','node1',arguments={'target':'approved'})
+            authorize(db,owner,'package.plan','node1',arguments={'target':'approved'})
+            authorize(db,owner,'configuration.plan','node1',arguments={'target':'app'})
             authorize(db,owner,'docker.backup.create','node1',arguments={'target':'data'})
         with pytest.raises(PermissionDenied):
             authorize(db,owner,'package.apply','node1',arguments={'target':'other'})

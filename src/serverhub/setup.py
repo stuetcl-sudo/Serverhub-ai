@@ -171,12 +171,15 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
         operations.append((["systemd.status", "systemd.logs"], {"service_names": body.services}, "read"))
     if body.backup_targets:
         operations.append((["docker.backup.list", "docker.backup.verify", "docker.restore.plan"], {"target": body.backup_targets}, "read"))
+    for targets,names in ((body.package_targets,["package.plan"]),(body.configuration_targets,["configuration.plan"])):
+        if targets:
+            operations.append((names,{"target":targets},"read"))
     if body.profile == "maintenance":
         if not (body.services or body.containers or body.backup_targets or body.package_targets or body.configuration_targets or body.compose_targets):
             raise HTTPException(422, "Maintenance requires at least one explicit service or container")
         for targets, names in ((body.backup_targets, ["docker.backup.create", "docker.restore.apply"]),
-                               (body.package_targets, ["package.plan", "package.apply"]),
-                               (body.configuration_targets, ["configuration.plan", "configuration.apply"]),
+                               (body.package_targets, ["package.apply"]),
+                               (body.configuration_targets, ["configuration.apply"]),
                                (body.compose_targets, ["docker.compose.update"])):
             if targets:
                 operations.append((names, {"target": targets}, "maintenance"))

@@ -56,7 +56,6 @@ def execute_administration(operation, arguments, config):
     state = protected(config.get('operations_state','/var/lib/serverhub-broker/operations'),create=True)
     transaction = uuid.uuid4().hex
     directory = state / transaction
-    directory.mkdir(mode=0o700)
     record = {'id':transaction,'target_name':target,'state':'armed','deadline':time.time()+300}
     journal = state / (transaction + '.json')
     if family == 'package_plans':
@@ -80,6 +79,7 @@ def execute_administration(operation, arguments, config):
             raise DockerBackupError('Unsupported package operation')
         if plan.get('stateless') is not True:
             raise DockerBackupError('Package plans require explicit stateless enrollment; data migrations need a separate verified application procedure')
+        directory.mkdir(mode=0o700)
         copies=[]
         for index,path in enumerate(previous):
             backup=directory / f'previous-{index}.deb'
@@ -122,6 +122,7 @@ def execute_administration(operation, arguments, config):
     service=plan.get('service')
     if service and (not re.fullmatch('[A-Za-z0-9_.@-]+\\.service',service) or PROTECTED_UNITS.match(service)):
         raise DockerBackupError('Protected configuration service')
+    directory.mkdir(mode=0o700)
     backup=directory/'configuration.before'
     shutil.copy2(path,backup)
     metadata=path.stat()
