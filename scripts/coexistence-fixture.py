@@ -73,12 +73,12 @@ def start():
 
 def conflicts(source):
     from serverhub.ops.coexistence import ConflictError, require_safe
-    from serverhub.ops.installer import Installer
+    from serverhub.ops.installer import Installer, InstallError
     units = Installer(source).units()
     def rejected(kind):
         try:
-            require_safe(units=units)
-        except ConflictError as error:
+            Installer(source).apply()
+        except (ConflictError, InstallError) as error:
             assert kind in str(error)
         else:
             raise AssertionError('Conflict not rejected: ' + kind)
