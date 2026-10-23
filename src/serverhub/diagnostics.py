@@ -121,12 +121,15 @@ def collect_diagnostics(db):
             "Worker heartbeat table unavailable",
             "Apply migration 0004_runtime and PostgreSQL grants",
         )
+    database_routes = False
     try:
         from .ai.providers import load_routes
         from .models import ModelRoute
 
         routes = load_routes()
-        readiness = {row.name: row.readiness for row in db.scalars(select(ModelRoute)).all()}
+        saved_routes = db.scalars(select(ModelRoute)).all()
+        database_routes = bool(saved_routes)
+        readiness = {row.name: row.readiness for row in saved_routes}
         add(
             "models",
             "ok" if "default" in routes else "error",
@@ -154,6 +157,10 @@ def collect_diagnostics(db):
                     "",
                     directory=str(target),
                 )
+            elif database_routes:
+                add(label, "ok", "Database routes are authoritative; unused fallback remains private",
+                    "Do not broaden permissions on a legacy file that may contain credentials",
+                    active=False)
             elif target.exists():
                 metadata = target.stat()
                 readable = os.access(target, os.R_OK)

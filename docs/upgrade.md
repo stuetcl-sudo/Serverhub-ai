@@ -1,5 +1,9 @@
 # Controlled native upgrades
 
+After a successful upgrade, run [installed verification](installed-verification.md).
+It checks the running service through the authenticated API, preserves warning
+and collection-gap evidence, and can exercise a fixed read-only persistent job.
+
 ## Stability/autonomy overhaul and legacy installations
 
 For an installation with no resume journal, or a reviewed change to protected code, use the explicit local-root workflow below. This is not callable by an AI worker. It intentionally accepts reviewed trust-boundary changes; signing a normal autonomous release must never silently replace its trust anchors.

@@ -144,6 +144,11 @@ allowlist. No worker account receives sudo, root SSH or Docker socket access.
 
 ## Self-diagnostics
 
+For an existing installation, use [the one-command installed verifier](installed-verification.md)
+to check authenticated API/assets/worker health and optionally run a live model
+probe and fixed read-only inventory job. It never runs the destructive fresh-CI
+installation scripts on your VM.
+
 **Setup & diagnostics** checks database/migration revisions, fresh worker heartbeats,
 model configuration and timestamped readiness evidence, API-readable assets,
 configuration permissions, sandbox paths, local tool presence, active grants and

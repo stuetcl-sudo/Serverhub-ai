@@ -12,6 +12,7 @@ import pwd
 import httpx
 from serverhub.ops.repair import repair
 from serverhub.node.broker import verify_broker_audit
+from serverhub.ops.verify_install import verify as verify_installed
 import os
 from pathlib import Path
 import subprocess
@@ -338,6 +339,48 @@ with httpx.Client(base_url="https://127.0.0.1:9080", verify=ssl.create_default_c
     assert tls.get("/").status_code == 200
     from serverhub.diagnostics import verify_frontend_http
     verify_frontend_http(tls)
+# Exercise the installed-system acceptance command against actual TLS/API/worker
+# and the disposable native node. The provider here is explicitly an HTTP fixture;
+# separate workflows test actual qwen inference. Collector gaps must remain partial.
+public_ca = Path('/etc/serverhub/native-public-ca.pem')
+public_ca.write_bytes(cert.read_bytes())
+public_ca.chmod(0o644)
+nodeconfig.update(controller_url='https://127.0.0.1:9080', ca_bundle=str(public_ca))
+config.write_text(json.dumps(nodeconfig))
+
+
+def poll_acceptance_node():
+    subprocess.run(['runuser', '-u', 'serverhub-node', '--', python, '-c',
+        'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],
+        cwd='/', check=True)
+
+
+with httpx.Client(base_url='https://127.0.0.1:9080',
+                  verify=ssl.create_default_context(cafile=str(cert)), trust_env=False) as acceptance_client:
+    acceptance = verify_installed(acceptance_client, headers['Authorization'].removeprefix('Bearer '),
+                                  host_id=host, model_route='default', poll=poll_acceptance_node)
+acceptance_checks = {item['id']: item for item in acceptance['checks']}
+for check in ('api', 'authentication_required', 'frontend', 'owner_authentication',
+              'diagnostic:database', 'diagnostic:worker', 'diagnostic:model_file', 'model_probe'):
+    assert acceptance_checks[check]['status'] == 'passed', acceptance
+assert acceptance_checks['persistent_inventory_job']['job_state'] == 'succeeded', acceptance
+temporary_token = Path('/var/lib/serverhub-install/acceptance.token')
+try:
+    temporary_token.write_text(headers['Authorization'].removeprefix('Bearer '))
+    temporary_token.chmod(0o600)
+    acceptance_process = subprocess.run([python, '-m', 'serverhub.ops.verify_install',
+        '--url', 'https://127.0.0.1:9080', '--ca-file', str(cert),
+        '--token-file', str(temporary_token), '--probe-model', 'default'],
+        text=True, capture_output=True, check=False, timeout=120)
+    cli_acceptance = json.loads(acceptance_process.stdout)
+    assert acceptance_process.returncode in (0, 2) and cli_acceptance['state'] in ('passed', 'partial'), cli_acceptance
+    assert headers['Authorization'].removeprefix('Bearer ') not in acceptance_process.stdout + acceptance_process.stderr
+finally:
+    temporary_token.unlink(missing_ok=True)
+print('INSTALLED_ACCEPTANCE_EVIDENCE=' + json.dumps({'state': acceptance['state'],
+      'checks': {name: value['status'] for name, value in acceptance_checks.items()},
+      'cli_state': cli_acceptance['state'], 'model_provider': 'HTTP fixture, not actual inference',
+      'managed_configuration_changed': False}), flush=True)
 # Restart again to prove no terminal-held tunnel or inherited TLS process exists.
 subprocess.run(["systemctl", "restart", "serverhub-api"], check=True)
 installer._healthchecks(previous)

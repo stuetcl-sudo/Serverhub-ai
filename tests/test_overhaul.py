@@ -287,6 +287,31 @@ def test_inventory_verification_requires_a_recent_report_not_only_a_heartbeat(co
         assert not verify_inventory(db, "node1", [{"kind": "inventory.fresh"}])["verified"]
 
 
+def test_unused_private_fallback_does_not_override_database_route_diagnostics(client, core_env, monkeypatch):
+    import os
+    import serverhub.diagnostics as diagnostics
+    fallback = core_env / "models.yaml"
+    fallback.write_text("routes:\n  default: legacy-private-provider-reference\n")
+    fallback.chmod(0o600)
+    original = os.access
+    monkeypatch.setattr(diagnostics.os, "access", lambda path, mode: False if Path(path) == fallback else original(path, mode))
+    with SessionLocal() as db:
+        db.add(ModelRoute(name="default", config={"kind": "ollama", "base_url": "http://127.0.0.1:11434", "model": "fixture"},
+                          enabled=True, updated_by="owner"))
+        headers = bearer(db)
+    result = client.get("/api/diagnostics", headers=headers)
+    assert result.status_code == 200
+    checks = {item["id"]: item for item in result.json()["checks"]}
+    assert checks["models"]["status"] == checks["model_file"]["status"] == "ok"
+    assert checks["model_file"]["evidence"]["active"] is False
+    assert fallback.stat().st_mode & 0o777 == 0o600
+    with SessionLocal() as db:
+        db.delete(db.get(ModelRoute, "default"))
+        db.commit()
+    checks = {item["id"]: item for item in client.get("/api/diagnostics", headers=headers).json()["checks"]}
+    assert checks["models"]["status"] == checks["model_file"]["status"] == "error"
+
+
 def test_install_resume_retains_credentials_configuration_and_completed_phases(tmp_path, monkeypatch):
     import subprocess
     import serverhub.ops.installer as native
