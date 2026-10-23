@@ -7,9 +7,11 @@ confirmation and an ephemeral Ubuntu 24.04 runner; this file is not an AI tool.
 import json
 import grp
 import ssl
+import yaml
 import pwd
 import httpx
 from serverhub.ops.repair import repair
+from serverhub.node.broker import verify_broker_audit
 import os
 from pathlib import Path
 import subprocess
@@ -45,15 +47,15 @@ def runner(command, **kwargs):
 installer = Installer(source, public_url="https://serverhub.test", runner=runner, ai_identity=True)
 try:
     installer.apply(
-        install_dependencies=True, owner="ciowner", owner_password="isolated-native-owner-password-42"
+        install_dependencies=True, owner="ciowner", owner_password="isolated-native-owner-password-42", enable_broker=True
     )
     raise AssertionError("Expected deliberate interruption")
 except InstallError:
     assert interrupted
 before = Path("/etc/serverhub/api.env").read_bytes()
 assert json.loads(Path("/var/lib/serverhub-install/state.json").read_text())["state"] == "interrupted"
-assert installer.apply(install_dependencies=True)["state"] == "installed"
-assert installer.apply(install_dependencies=True)["state"] == "installed"
+assert installer.apply(install_dependencies=True, enable_broker=True)["state"] == "installed"
+assert installer.apply(install_dependencies=True, enable_broker=True)["state"] == "installed"
 assert Path("/etc/serverhub/api.env").read_bytes() == before
 assert subprocess.check_output(["systemctl", "show", "serverhub-worker", "--property=User", "--value"], text=True).strip() == "serverhub-ai"
 assert pwd.getpwnam("serverhub-ai").pw_shell.endswith("nologin")
@@ -132,6 +134,7 @@ nodeconfig = {
     "state_dir": "/var/lib/serverhub-node",
     "controller_url": "http://127.0.0.1:9080",
     "allow_loopback_http": True,
+    "broker_socket": "/run/serverhub-broker/control.sock",
     "enrollment_token": enroll.json()["token"],
 }
 config = Path("/etc/serverhub/native-ci-node.json")
@@ -163,7 +166,7 @@ user.raise_for_status()
 profile = client.post(
     "/api/policies/profiles",
     headers=headers,
-    json={"profile": "read_only", "subject_id": user.json()["id"], "host_id": host, "hours": 1},
+    json={"profile": "read_only", "subject_id": user.json()["id"], "host_id": host, "hours": 1, "services": ["serverhub-api.service"]},
 )
 profile.raise_for_status()
 adult = client.post(
@@ -183,6 +186,35 @@ unauthorized = client.post(
     },
 )
 assert unauthorized.status_code == 403
+# The separately authenticated root broker executes a read-only status probe.
+# Critical service diagnostics may be granted; restarts remain protected.
+broker_path = Path("/etc/serverhub/broker.yaml")
+broker_config = yaml.safe_load(broker_path.read_text())
+broker_config["allowed_services"] = ["serverhub-api.service"]
+broker_path.write_text(yaml.safe_dump(broker_config))
+subprocess.run(["systemctl", "restart", "serverhub-broker"], check=True)
+status_job = client.post("/api/jobs", headers=adult_headers, json={"kind": "operation", "host_id": host,
+    "spec": {"operation": "systemd.status", "arguments": {"service": "serverhub-api.service"}}})
+status_job.raise_for_status()
+for _ in range(30):
+    subprocess.run(["runuser", "-u", "serverhub-node", "--", python, "-c",
+        'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],
+        cwd="/", check=True)
+    broker_result = client.get("/api/jobs/" + status_job.json()["id"], headers=adult_headers).json()
+    if broker_result["state"] in ("succeeded", "failed", "waiting_approval"):
+        break
+    time.sleep(1)
+assert broker_result["state"] == "succeeded", broker_result
+assert broker_result["result"]["execution_context"]["effective_uid"] == 0
+assert broker_result["result"]["execution_context"]["peer_uid"] == node.pw_uid
+assert verify_broker_audit("/var/log/serverhub-broker/events.jsonl")["valid"]
+records = [json.loads(line)["record"] for line in Path("/var/log/serverhub-broker/events.jsonl").read_text().splitlines()]
+assert any(record.get("correlation", {}).get("job_id") == status_job.json()["id"] for record in records)
+# The AI runtime cannot connect directly to the privileged socket.
+probe = subprocess.run(["runuser", "-u", "serverhub-ai", "--", python, "-c",
+    'import socket; s=socket.socket(socket.AF_UNIX); s.connect("/run/serverhub-broker/control.sock")'],
+    cwd="/", capture_output=True, text=True)
+assert probe.returncode != 0 and "PermissionError" in probe.stderr
 # A local admission failure must pause without spending a model/job attempt.
 limited = client.put("/api/settings/models/default", headers=headers, json={**model, "context_limit": 1024})
 limited.raise_for_status()
@@ -306,6 +338,8 @@ print(
             "native_install": "passed",
             "dedicated_ai_identity": "serverhub-ai",
             "persistent_authenticated_tls": "passed",
+            "correlated_root_broker_audit": "passed",
+            "ai_direct_broker_access": "denied",
             "interruption_resume": "passed",
             "idempotency": "passed",
             "api_worker": "healthy",

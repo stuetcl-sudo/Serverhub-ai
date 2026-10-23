@@ -236,6 +236,7 @@ class ReleaseManager:
         try:
             self._switch(release)
             self._run(["systemctl", "restart", *self.SERVICES])
+            self._run(["systemctl", "try-restart", "serverhub-broker.service", "serverhub-node.service"])
             from .installer import Installer
             url, ca = Installer(release)._health_configuration()
             self._run([str(release / "venv/bin/serverhub"), "health", "--url", url,
@@ -251,6 +252,7 @@ class ReleaseManager:
     def _rollback(self, journal):
         self._switch(Path(journal["previous"]))
         self._run(["systemctl", "restart", *self.SERVICES])
+        self._run(["systemctl", "try-restart", "serverhub-broker.service", "serverhub-node.service"])
         journal["state"] = "reverted"
         journal["reverted_at"] = self.clock()
         self._write_journal(journal)

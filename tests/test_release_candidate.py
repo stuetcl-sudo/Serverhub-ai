@@ -212,3 +212,25 @@ def test_root_broker_append_protects_and_hashes_real_file():
         path.chmod(0o666)
         with pytest.raises(BrokerDenied, match="protected"):
             append_broker_audit(config, {"phase": "before"})
+
+
+@pytest.mark.parametrize("url,expected", [("https://SERVERHUB.example:443/", "https://serverhub.example"),
+                                        ("https://[::1]:9080/", "https://[::1]:9080")])
+def test_public_origin_uses_browser_canonical_host_and_port(url, expected):
+    assert Settings(public_url=url).public_url == expected
+
+
+def test_critical_service_diagnostics_require_exact_allowlist_but_restarts_stay_protected(monkeypatch):
+    from serverhub.node import broker
+    calls = []
+    def status(service):
+        calls.append(service)
+        return {"service": service, "active": "active"}
+    monkeypatch.setattr(broker, "_systemd_status", status)
+    with pytest.raises(broker.BrokerDenied, match="allowlisted"):
+        broker.execute("systemd.status", {"service": "serverhub-api.service"}, {})
+    config = {"allowed_services": ["serverhub-api.service"]}
+    assert broker.execute("systemd.status", {"service": "serverhub-api.service"}, config)["verified"]
+    with pytest.raises(broker.BrokerDenied, match="protected"):
+        broker.execute("systemd.restart", {"service": "serverhub-api.service"}, config)
+    assert calls == ["serverhub-api.service"]

@@ -205,7 +205,7 @@ def execute(operation: str, arguments: dict, config: dict) -> dict:
         service = _name(arguments.get("service"))
         if not service.endswith(".service") or service not in config.get("allowed_services", []):
             raise BrokerDenied("systemd service not explicitly allowlisted")
-        if PROTECTED_UNITS.match(service):
+        if PROTECTED_UNITS.match(service) and operation == "systemd.restart":
             raise BrokerDenied("control-plane, authentication, database and network services are protected")
         if operation == "systemd.status":
             return {**_systemd_status(service), "verified": True}

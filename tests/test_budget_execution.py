@@ -183,3 +183,43 @@ def test_late_old_worker_cannot_refund_reservation_after_lease_owner_changed(cli
         with pytest.raises(LeaseLost):
             context.record_model_usage(10, 0)
         assert context.job.tokens_used == 500
+
+
+def test_context_compaction_survives_resume_and_retains_full_verification_evidence(client, monkeypatch):
+    cfg = ProviderConfig(kind="ollama", model="qwen2.5:3b", base_url="http://localhost:11434", context_limit=16384)
+    monkeypatch.setattr(orchestrator, "load_routes", lambda: {"default": cfg})
+    requests = []
+    def handle(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1:
+            assert any('"compacted": true' in str(message.get("content", "")) for message in body["messages"])
+            reply = {"content": "", "tool_calls": [{"function": {"name": "task__verify", "arguments": {
+                "checks": [{"kind": "inventory.fresh"}]}}}]}
+        else:
+            reply = {"content": "Freshness independently verified after retained observation compaction"}
+        return httpx.Response(200, json={"message": reply, "prompt_eval_count": 100, "eval_count": 20})
+    monkeypatch.setattr(orchestrator, "ChatProvider", lambda config: ChatProvider(config, transport=httpx.MockTransport(handle)))
+    with SessionLocal() as db:
+        from serverhub.auth import Principal
+        job = submit_job(db, Principal("owner", "owner", "owner"), "autonomous", {"prompt": "Inspect and verify inventory"}, host_id="node1", token_budget=20000)
+        identity = job.id
+        full = {"observation": "disk observation " * 4000}
+        job.tokens_used = 200
+        job.checkpoint = {"ai": {"specialist": "infrastructure", "step": 1,
+            "messages": [{"role": "system", "content": orchestrator.BASE_INSTRUCTIONS},
+                         {"role": "user", "content": "Inspect and verify inventory"},
+                         {"role": "assistant", "tool_calls": [{"id": "large", "type": "function", "function": {
+                             "name": "inventory__read", "arguments": "{}"}}]},
+                         {"role": "tool", "name": "inventory__read", "tool_call_id": "large", "content": json.dumps(full)}],
+            "completed_calls": {"large": full}, "evidence": [{"operation": "inventory.read", "result": full}]}}
+        db.add(InventorySample(host_id="node1", metrics={}))
+        db.commit()
+    assert Worker(isolated=False).run_once()
+    with SessionLocal() as db:
+        job = db.get(Job, identity)
+        assert job.state == "succeeded", job.error
+        assert job.result["verified"] and job.tokens_used == 440
+        assert job.checkpoint["ai"]["completed_calls"]["large"] == full
+        assert job.checkpoint["ai"]["compactions"][0]["compacted_calls"] == ["large"]
+    assert len(requests) == 2

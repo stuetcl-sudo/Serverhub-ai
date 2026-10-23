@@ -54,7 +54,12 @@ class Settings(BaseSettings):
         if (not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment
                 or parsed.path not in {"", "/"} or parsed.scheme not in {"http", "https"}):
             raise ValueError("public_url must be a single HTTP(S) origin without credentials or path")
-        self.public_url = self.public_url.rstrip("/")
+        host = parsed.hostname.lower()
+        if ":" in host:
+            host = "[" + host + "]"
+        port = parsed.port
+        authority = host + (f":{port}" if port and port != {"https": 443, "http": 80}[parsed.scheme] else "")
+        self.public_url = f"{parsed.scheme}://{authority}"
         if bool(self.tls_certfile) != bool(self.tls_keyfile):
             raise ValueError("TLS requires both tls_certfile and tls_keyfile")
         if not self.dev_mode and not self.public_url.startswith("https://"):

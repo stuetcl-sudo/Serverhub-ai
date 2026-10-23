@@ -88,7 +88,9 @@ step limits, policy checks, leases and hard timeouts remain enforced.
 Broker records now include structured arguments, peer UID, actual effective UID/
 GID, unique execution ID, before/after phases and available verification/exit-code
 metadata. Node envelopes correlate command, job, host and initiating operator.
-Correlation fields are diagnostic metadata, never broker authorization. The
+Correlation fields are diagnostic metadata, never broker authorization. Critical
+service status/logs can be independently allowlisted for diagnostics, while
+restarting those services remains forbidden. The
 broker still independently checks its peer UID and root-owned allowlists.
 Reported execution context is node evidence, not proof against a compromised
 node. Actual selected provider/model/route are recorded in job events.
@@ -103,7 +105,9 @@ its tail. Export hashes/logs to an independent append-only system for stronger
 retention; that external sink is not provisioned here. Null exit codes mean the
 adapter has no underlying process exit code, not successful execution.
 
-Upgrade controller, agent and broker from the same candidate before enabling the
+Reviewed upgrades and rollbacks now also `try-restart` active local broker/node
+services after switching the release, leaving disabled services stopped. Upgrade
+controller, agent and broker from the same candidate before enabling the
 new audit correlation envelope. Older brokers reject the additional metadata
 rather than silently accepting a changed protocol.
 

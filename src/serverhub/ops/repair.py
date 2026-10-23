@@ -168,6 +168,7 @@ def repair(source):
         installer._activate(release)
         installer._run(["systemctl", "daemon-reload"])
         installer._run(["systemctl", "restart", "serverhub-api.service", "serverhub-worker.service"])
+        installer._run(["systemctl", "try-restart", "serverhub-broker.service", "serverhub-node.service"])
         installer._healthchecks(release)
         recovery_journal["state"], recovery_journal["verified_at"] = "verified", time.time()
         recovery._write_journal(recovery_journal)
@@ -188,6 +189,7 @@ def repair(source):
             os.chown(path, uid, gid)
         installer._run(["systemctl", "daemon-reload"])
         installer._run(["systemctl", "restart", "serverhub-api.service", "serverhub-worker.service"])
+        installer._run(["systemctl", "try-restart", "serverhub-broker.service", "serverhub-node.service"])
         if recovery_journal:
             recovery_journal["state"], recovery_journal["reverted_at"] = "reverted", time.time()
             recovery._write_journal(recovery_journal)
