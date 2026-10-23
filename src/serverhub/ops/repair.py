@@ -7,9 +7,12 @@ trust-boundary changes from a local source checkout. It is never an AI tool.
 import argparse
 import json
 import os
+import pwd
+import grp
 from pathlib import Path
 import shutil
 import sys
+import subprocess
 import time
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -51,6 +54,25 @@ def protect_model_fallback(path):
     return "readable_validated_fallback"
 
 
+def ensure_staging_account(installer):
+    name, home = "serverhub-staging", "/var/lib/serverhub-stage-runtime"
+    try:
+        entry = pwd.getpwnam(name)
+    except KeyError:
+        installer._run(["useradd", "--system", "--user-group", "--home-dir", home,
+                        "--shell", "/usr/sbin/nologin", name])
+        entry = pwd.getpwnam(name)
+    memberships = {grp.getgrgid(gid).gr_name for gid in os.getgrouplist(name, entry.pw_gid)}
+    if entry.pw_uid == 0 or entry.pw_dir != home or entry.pw_shell not in {"/usr/sbin/nologin", "/sbin/nologin"} or memberships & {"root","sudo","docker","adm"}:
+        raise InstallError("Unexpected staging account privileges/home/shell; inspect before upgrade")
+    if grp.getgrnam(name).gr_gid != entry.pw_gid:
+        raise InstallError("Staging account must use its dedicated primary group")
+    directory=Path(home)
+    directory.mkdir(mode=0o700,exist_ok=True)
+    os.chown(directory,entry.pw_uid,entry.pw_gid)
+    directory.chmod(0o700)
+
+
 def repair(source):
     if os.geteuid() != 0:
         raise InstallError("Run repair-install.sh as root on the controller")
@@ -69,6 +91,13 @@ def repair(source):
         if path.is_file() and not path.is_symlink():
             info = path.stat()
             snapshots[path] = (path.read_bytes(), info.st_mode & 0o777, info.st_uid, info.st_gid)
+    stable_watchdog=Path("/opt/serverhub/recovery/operation_watchdog.py")
+    if stable_watchdog.exists():
+        info=stable_watchdog.stat()
+        snapshots[stable_watchdog]=(stable_watchdog.read_bytes(),info.st_mode&0o777,info.st_uid,info.st_gid)
+    recovery_units=["serverhub-operation-watchdog.service","serverhub-operation-watchdog.timer"]
+    introduced_units=[Path("/etc/systemd/system")/unit for unit in recovery_units
+                      if not (Path("/etc/systemd/system")/unit).exists()]
     release = Path("/opt/serverhub/releases") / (
         "repair-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:6]
     )
@@ -108,6 +137,10 @@ def repair(source):
         for path in release.rglob("*"):
             if not path.is_symlink():
                 path.chmod(path.stat().st_mode | (0o055 if path.is_dir() else 0o044))
+        ensure_staging_account(installer)
+        for unit in recovery_units:
+            installer.write("/etc/systemd/system/"+unit,(source/"packaging/systemd"/unit).read_text())
+        installer._run(["systemctl","daemon-reload"])
         installer.write("/opt/serverhub/recovery/operation_watchdog.py",
                         (source / "src/serverhub/ops/operation_watchdog.py").read_text(), 0o600)
         installer._run(["systemctl", "enable", "--now", "serverhub-release-watchdog.timer", "serverhub-operation-watchdog.timer"])
@@ -181,10 +214,16 @@ def repair(source):
             "backup_id": backup["id"],
             "credentials": "retained",
             "models_configuration": models_state,
-            "schema_rollback": "0004 is additive; previous code can run without dropping the new tables/column",
+            "schema_rollback": "0004/0005 are additive; rollback retains added columns and requires schema-compatible previous code",
         }
     except BaseException:
         installer._activate(previous)
+        if introduced_units:
+            subprocess.run(["systemctl","disable","--now","serverhub-operation-watchdog.timer"],check=False,capture_output=True,timeout=30)
+            for path in introduced_units:
+                path.unlink(missing_ok=True)
+        if stable_watchdog not in snapshots:
+            stable_watchdog.unlink(missing_ok=True)
         for path, (content, mode, uid, gid) in snapshots.items():
             path.write_bytes(content)
             path.chmod(mode)

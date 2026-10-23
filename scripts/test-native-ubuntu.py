@@ -274,11 +274,19 @@ assert checks["worker"]["status"] == "ok", checks["worker"]
 assert checks["database"]["status"] == "ok", checks["database"]
 # Upgrade the same reviewed source to exercise backups, role grants, directory
 # traversal and activation/health in a real native systemd environment.
+# Model an older installation which lacks the new staging account/recovery unit.
+subprocess.run(["systemctl","disable","--now","serverhub-operation-watchdog.timer"],check=True)
+for unit in ("serverhub-operation-watchdog.service","serverhub-operation-watchdog.timer"):
+    Path("/etc/systemd/system",unit).unlink()
+subprocess.run(["systemctl","daemon-reload"],check=True)
+subprocess.run(["userdel","serverhub-staging"],check=True)
 legacy_models = Path("/etc/serverhub/models.yaml")
 legacy_models.write_text("routes:\n  default: obsolete-provider-reference\n")
 legacy_models.chmod(0o600)
 upgraded = repair(source)
 assert upgraded["state"] == "upgraded"
+assert subprocess.run(["id","serverhub-staging"],capture_output=True).returncode==0
+assert subprocess.check_output(["systemctl","is-active","serverhub-operation-watchdog.timer"],text=True).strip()=="active"
 assert upgraded["models_configuration"] == "needs_setup"
 assert legacy_models.stat().st_mode & 0o777 == 0o600
 assert client.get("/api/settings/models", headers=headers).json()["configured"]

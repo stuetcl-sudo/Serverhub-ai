@@ -47,6 +47,7 @@ def bounded_run(argv: list[str], *, timeout: int = 15, limit: int = MAX_OUTPUT) 
                  "DEBIAN_FRONTEND": "noninteractive", "APT_LISTCHANGES_FRONTEND": "none"}, start_new_session=True)
         deadline=time.monotonic()+timeout
         output=bytearray()
+        error_tail=bytearray()
         captured=0
         with selectors.DefaultSelector() as selector:
             selector.register(proc.stdout,selectors.EVENT_READ,True)
@@ -65,6 +66,9 @@ def bounded_run(argv: list[str], *, timeout: int = 15, limit: int = MAX_OUTPUT) 
                         raise CollectionError(f"{Path(argv[0]).name} exceeded output limit")
                     if key.data:
                         output.extend(block)
+                    else:
+                        error_tail.extend(block)
+                        del error_tail[:-8192]
         try:
             proc.wait(timeout=max(.01,deadline-time.monotonic()))
         except subprocess.TimeoutExpired:
@@ -72,6 +76,22 @@ def bounded_run(argv: list[str], *, timeout: int = 15, limit: int = MAX_OUTPUT) 
         if proc.returncode:
             raise CollectionError(f"{Path(argv[0]).name} exited {proc.returncode}; permission or tool failure")
         return output.decode("utf-8","replace")
+    except CollectionError:
+        # A protected operator diagnostic preserves the real package/tool cause.
+        # It is not returned to a model or unauthenticated endpoint.
+        if os.geteuid()==0:
+            try:
+                from .docker_backup import protected
+                directory=protected('/var/lib/serverhub-broker/diagnostics',create=True)
+                from serverhub.audit import redact
+                payload={'executable':Path(argv[0]).name,'returncode':proc.returncode if proc else None,
+                         'stderr':redact(bytes(locals().get('error_tail',b'')).decode('utf-8','replace'))}
+                fd=os.open(directory/'latest.json',os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+                with os.fdopen(fd,'w') as stream:
+                    json.dump(payload,stream)
+            except (OSError,ValueError,RuntimeError):
+                pass
+        raise
     except OSError as exc:
         raise CollectionError(f"{Path(argv[0]).name}: {type(exc).__name__}") from exc
     finally:

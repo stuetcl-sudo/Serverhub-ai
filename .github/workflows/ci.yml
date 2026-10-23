@@ -86,5 +86,6 @@ jobs:
       - name: Native service diagnostics
         if: failure()
         run: |
+          sudo cat /var/lib/serverhub-broker/diagnostics/latest.json || true
           sudo systemctl status serverhub-api serverhub-worker serverhub-broker --no-pager || true
           sudo journalctl -u serverhub-api -u serverhub-worker -u serverhub-broker --no-pager -n 100 || true

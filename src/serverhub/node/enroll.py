@@ -58,7 +58,7 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
         writable.append(str(Path(docker_root)/'volumes'))
     if any(not re.fullmatch(r'/[A-Za-z0-9_./-]+',path) or '..' in Path(path).parts for path in writable):
         raise ValueError('Enrolled writable directories must be absolute without whitespace, traversal or systemd specifiers')
-    (directory/'20-administration.conf').write_text('[Service]\nReadWritePaths='+' '.join(sorted(set(writable)))+'\n'
+    (directory/'20-administration.conf').write_text('[Service]\nReadWritePaths='+' '.join(sorted(set(writable)))+' -/var/log/apt -/var/log/dpkg.log'+'\n'
         'ReadOnlyPaths=/etc/serverhub /opt/serverhub /etc/ssh /etc/systemd/system /etc/sudoers /etc/sudoers.d /etc/pam.d\n')
     protected('/var/lib/serverhub-broker/operations',create=True)
     protected('/var/lib/serverhub-staging',create=True)
