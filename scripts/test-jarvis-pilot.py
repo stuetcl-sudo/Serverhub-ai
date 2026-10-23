@@ -56,7 +56,7 @@ run(['apt-get','update'])
 run(['apt-get','install','-y','python3-pip','bubblewrap'])
 project={'name':'jarvis','repository':str(source),'base_ref':'serverhub-acceptance',
     'allow_dependency_network':True,'max_memory_mb':2048,'max_processes':128,
-    'dependencies':[{'argv':['/usr/bin/python3','-m','pip','install','--break-system-packages','--no-compile','--target','runtime','-r','requirements.txt','pytest==8.3.5'],'network':True,'timeout':600}],
+    'dependencies':[{'argv':['/usr/bin/python3','-m','pip','install','--break-system-packages','--no-compile','--upgrade','--force-reinstall','--target','runtime','-r','requirements.txt','pytest==8.3.5'],'network':True,'timeout':600}],
     'build':[{'argv':['/usr/bin/python3','-m','compileall','-q','app']}],
     'tests':[{'argv':['/usr/bin/env','PYTHONPATH=runtime','DB_PATH=/tmp/jarvis-test.db','SAFE_MODE=true','DRY_RUN=true','WORKER_ENABLED=false','/usr/bin/python3','-m','pytest','-q','tests/test_dashboard_routes.py'],'timeout':180}],
     'checks_path':str(checks),'independent_checks':[{'argv':['/usr/bin/python3','/checks/check.py']}],
@@ -108,13 +108,23 @@ grant=client.post('/api/policies/profiles',headers=headers,json={'profile':'deve
     'host_id':host,'project':'jarvis','hours':1,'allow_dependency_network':True})
 grant.raise_for_status()
 
-def await_job(identity, timeout=1800):
+recovery_evidence={}
+
+def await_job(identity, timeout=1800, restart_after_patch=False):
     deadline=time.monotonic()+timeout
     last_report=0
     while time.monotonic()<deadline:
         run(['runuser','-u','serverhub-node','--',python,'-c',
              'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],cwd='/')
         job=client.get('/api/jobs/'+identity,headers=headers).json()
+        developer=job.get('checkpoint',{}).get('developer') or {}
+        if restart_after_patch and not recovery_evidence and developer.get('patch_count',0)>0 and not developer.get('ready'):
+            before_pid=run(['systemctl','show','serverhub-worker','--property=MainPID','--value'])
+            run(['systemctl','restart','serverhub-worker'])
+            after_pid=run(['systemctl','show','serverhub-worker','--property=MainPID','--value'])
+            assert before_pid!=after_pid and int(after_pid)>0
+            recovery_evidence.update(restarted_after_source_commit=True,pid_changed=True)
+            print('JARVIS_WORKER_INTERRUPTION='+json.dumps(recovery_evidence),flush=True)
         if time.monotonic()-last_report>20:
             print('JARVIS_PROGRESS='+json.dumps({'job_id':identity,'state':job['state'],'progress':job.get('progress'),'used_units':job.get('tokens_used'),'step':(job.get('checkpoint',{}).get('developer') or {}).get('step')}),flush=True)
             last_report=time.monotonic()
@@ -127,12 +137,13 @@ response=client.post('/api/jobs',headers=headers,json={'kind':'development_auton
     'token_budget':100000,'time_limit':1800,'max_attempts':2,'spec':{'project':'jarvis','stage':True,'max_steps':16,
     'prompt':'Repair the controlled local version regression. Record a plan, read app/version.py, and change ONLY VERSION to the expected release 0.23.0 using set_python_constant with name VERSION and value 0.23.0. Then run_checks and finish. Preserve the application and tests; the independent acceptance check verifies the exact version. Do not change requirements or other files.'}})
 response.raise_for_status()
-job=await_job(response.json()['id'])
+job=await_job(response.json()['id'],restart_after_patch=True)
 events=client.get('/api/jobs/'+job['id']+'/events',headers=headers).json()
 print('JARVIS_JOB_EVIDENCE='+json.dumps({'state':job['state'],'error':job.get('error'),'result':job['result'],
     'tokens_used':job['tokens_used'],'events':events[-12:],'upstream_commit':upstream,'injected_local_regression':True,
-    'model_digests':tags}),flush=True)
+    'worker_recovery':recovery_evidence,'attempts':job['attempts'],'model_digests':tags}),flush=True)
 assert job['state']=='succeeded' and job['result']['verified'],job
+assert recovery_evidence.get('pid_changed') and job['attempts']>=2,job
 assert job['result']['staging']['verified'] and job['result']['production_deployed'] is False
 assert (source/'app/version.py').read_text()!=original
 assert run(['git','-c','safe.directory='+str(source),'-C',str(source),'rev-parse','HEAD'])==fixture_commit

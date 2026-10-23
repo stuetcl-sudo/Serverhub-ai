@@ -16,6 +16,15 @@ from .discovery import command
 from serverhub.ops.operation_watchdog import launch_stage, restore, stage_health
 
 
+def secure_release_permissions(release, project_gid):
+    # A tar member named "." can reset the root to the worker's 0700 umask.
+    # Normalize the root too; only this project's group receives read access.
+    for path in [release,*release.rglob('*')]:
+        executable=bool(path.stat().st_mode&0o111)
+        os.chown(path,0,project_gid)
+        path.chmod(0o750 if path.is_dir() or executable else 0o640)
+
+
 def snapshot_candidate(source, artifact_id, snapshot):
     """Anchor each directory and both files with O_NOFOLLOW before root reads."""
     source=Path(source)
@@ -111,9 +120,7 @@ def _deploy(arguments, config, state, identity, artifact):
             raise DockerBackupError('Insufficient staging capacity')
         archive.extractall(release,filter='data')
     artifact.unlink(missing_ok=True)
-    for path in release.rglob('*'):
-        os.chown(path,0,project_gid)
-        path.chmod(0o750 if path.is_dir() or path.stat().st_mode&0o111 else 0o640)
+    secure_release_permissions(release,project_gid)
     # Root chooses this immutable acceptance executable; it runs as a separate
     # nonprivileged identity, outside the AI worker's writable receipt state.
     command('systemd-run','--quiet','--wait','--pipe','--collect','--unit','serverhub-check-'+identity,
