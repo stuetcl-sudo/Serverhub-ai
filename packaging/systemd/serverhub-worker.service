@@ -17,7 +17,10 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
-ProtectKernelTunables=true
+# A locked /proc/sys submount prevents an unprivileged builder from mounting
+# a fresh PID-namespace procfs. UID isolation, empty host capabilities and
+# NoNewPrivileges still deny host sysctl writes; project code sees only bwrap proc.
+ProtectKernelTunables=false
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true

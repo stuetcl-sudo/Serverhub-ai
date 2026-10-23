@@ -152,6 +152,7 @@ def repair(source):
         installer.write("/opt/serverhub/recovery/operation_watchdog.py",
                         (source / "src/serverhub/ops/operation_watchdog.py").read_text(), 0o600)
         installer._run(["systemctl", "enable", "--now", "serverhub-release-watchdog.timer", "serverhub-operation-watchdog.timer"])
+        installer._run(["systemctl","restart","serverhub-operation-watchdog.timer"])
         recovery_journal = {
             "state": "armed",
             "previous": str(previous),

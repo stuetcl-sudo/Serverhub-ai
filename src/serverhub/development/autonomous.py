@@ -4,7 +4,7 @@ import difflib
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .config import load_projects, DevelopmentError
 from .sandbox import SandboxRunner
@@ -106,7 +106,7 @@ def autonomous_development(ctx,spec):
             relative=ReadFile.model_validate(args).path
             safe_relative(relative)
             path=(workspace/relative).resolve()
-            if not path.is_relative_to(workspace.resolve()) or path.suffix not in {'.py','.json','.toml','.txt','.md','.yaml','.yml','.ts','.tsx','.js','.html','.css','.sql'}:
+            if not path.is_relative_to(workspace.resolve()) or (path.suffix not in {'.py','.json','.toml','.txt','.md','.yaml','.yml','.ts','.tsx','.js','.html','.css','.sql','.sh','.ini','.cfg','.conf','.lock'} and path.name not in {'Dockerfile','Makefile'}):
                 raise DevelopmentError('Source path is outside the bounded text read allowlist')
             if path.stat().st_size>65536:
                 raise DevelopmentError('Source file exceeds read bound')
@@ -217,8 +217,9 @@ def autonomous_development(ctx,spec):
                 try:
                     activity[0] = True
                     receipt=tool(call)
-                except DevelopmentError as error:
-                    receipt={'verified':False,'error':str(error),'test_output':redact(state.get('commands',[])[-1:])}
+                except (DevelopmentError,ValidationError,OSError,UnicodeError) as error:
+                    detail='Invalid tool arguments: '+json.dumps([{'field':str(item['loc']),'reason':item['msg']} for item in error.errors(include_input=False)]) if isinstance(error,ValidationError) else str(error)
+                    receipt={'verified':False,'error':str(redact(detail))[:2000],'test_output':redact(state.get('commands',[])[-1:])}
                 state['completed_calls'][call['id']]=redact(receipt)
                 save()
             state['messages'].append({'role':'tool','tool_call_id':call['id'],'name':call['name'],'content':json.dumps(redact(receipt))})
