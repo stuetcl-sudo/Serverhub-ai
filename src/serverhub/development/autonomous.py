@@ -236,7 +236,7 @@ def autonomous_development(ctx,spec):
         from .workspace import source_patch, source_changes
         result['source_patch']=source_patch(workspace,state.get('base_commit'))
         result['base_commit']=state.get('base_commit')
-        result['source_changes']=source_changes(workspace,state.get('base_commit'))
+        result['source_changes']=source_changes(workspace,state.get('base_commit'),project.publication_paths)
         write_manifest(root/'candidates'/(ctx.job.id+'.json'),result)
         if spec.get('stage'):
             if not project.independent_checks:

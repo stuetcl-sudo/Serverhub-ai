@@ -43,7 +43,10 @@ def publish_candidate(project, job, *, transport=None):
             raise DevelopmentError('Only bounded UTF-8 text files may be published')
         if item.get('sha256') != (hashlib.sha256(content.encode()).hexdigest() if content is not None else None):
             raise DevelopmentError('Candidate text was changed or redacted after verification; publication refused')
-        entries.append({'path':path,'mode':'100644','type':'blob',**({'sha':None} if content is None else {'content':content})})
+        mode = item.get('mode', '100644')
+        if mode not in {'100644','100755'}:
+            raise DevelopmentError('Candidate publication mode must be a regular source file')
+        entries.append({'path':path,'mode':mode,'type':'blob',**({'sha':None} if content is None else {'content':content})})
     repo = '/repos/' + match[1] + '/' + match[2]
     branch = 'serverhub/' + job.id
     if not re.fullmatch(r'serverhub/[a-zA-Z0-9_-]{1,80}', branch):

@@ -79,6 +79,14 @@ def collect_diagnostics(db):
         )
 
     try:
+        from .development.config import load_projects, DevelopmentError
+        projects = load_projects()
+        add("projects", "ok", "Registered project configuration validated", count=len(projects))
+    except (DevelopmentError, OSError, ValueError):
+        add("projects", "error", "Registered project configuration is unavailable or invalid",
+            "Validate root-owned /etc/serverhub/projects.yaml; projects must be an array. Do not make trust anchors writable to the worker")
+
+    try:
         from alembic.script import ScriptDirectory
         from .cli import _alembic_config
 

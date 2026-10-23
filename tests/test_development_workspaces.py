@@ -79,3 +79,42 @@ def test_arbitrary_network_build_config_rejected(tmp_path):
         Project(name="example", repository=str(tmp_path), tests=[Command(argv=["true"], network=True)])
     with pytest.raises(ValueError):
         Command(argv=["/root/private-script"])
+
+
+def test_broker_receipt_does_not_duplicate_large_source_and_bounds_logs(tmp_path):
+    import json
+    from serverhub.development.workspace import write_manifest
+    receipt = tmp_path / 'receipt.json'
+    payload = {'verified':True,'candidate':{'sha256':'f'*64},'source_patch':'界'*400000,
+               'source_changes':[{'content':'界'*400000}], 'commands':[{'returncode':0,'output':'x'*64000}]}
+    write_manifest(receipt, payload)
+    recorded = json.loads(receipt.read_text())
+    assert recorded['verified'] and recorded['candidate'] == payload['candidate']
+    assert 'source_patch' not in recorded and 'source_changes' not in recorded
+    assert len(recorded['commands'][0]['output']) == 4000
+    assert len(payload['commands'][0]['output']) == 64000
+
+
+def test_repository_query_credentials_rejected():
+    with pytest.raises(ValueError, match='credential-free'):
+        Project(name='example',repository='https://github.com/example/private.git?token=secret',
+                tests=[Command(argv=['/usr/bin/true'])])
+
+
+def test_publishable_source_preserves_bytes_and_rejects_uncommitted_build_changes(tmp_path):
+    import hashlib
+    from serverhub.development.workspace import source_changes
+    source = repository(tmp_path / 'source')
+    base = git(source, 'rev-parse', 'HEAD').strip()
+    content = b"print('new')\r\n"
+    (source / 'app.py').write_bytes(content)
+    git(source, 'add', 'app.py')
+    git(source, 'commit', '-m', 'Verified source change')
+    changes = source_changes(source, base, ['app.py'])
+    assert changes[0]['content'].encode() == content
+    assert changes[0]['sha256'] == hashlib.sha256(content).hexdigest()
+    (source / 'app.py').write_text("print('changed by build')\n")
+    assert source_changes(source, base, ['app.py']) is None
+    git(source, 'checkout', '--', 'app.py')
+    (source / 'generated.py').write_text("print('not committed')\n")
+    assert source_changes(source, base, ['generated.py']) is None

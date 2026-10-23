@@ -65,7 +65,7 @@ class Project(BaseModel):
         if value.startswith("/"):
             return value
         parsed = urlsplit(value)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or parsed.query:
             raise ValueError("repository must be an absolute local path or credential-free HTTPS URL")
         return value
 
@@ -170,6 +170,7 @@ def normalize_empty_projects(path, writer):
     if raw == {"projects": {}}:
         info = path.stat()
         writer(str(path), "# Root-owned project contracts.\nprojects: []\n", info.st_mode & 0o777)
+        os.chown(path, info.st_uid, info.st_gid)
         return "normalized_legacy_empty_mapping"
     return "retained"
 

@@ -23,7 +23,8 @@ def candidate(monkeypatch):
     return config,job
 
 
-def test_verified_candidate_only_creates_new_branch_and_draft_pr(candidate):
+@pytest.mark.parametrize("existing", [False, True])
+def test_verified_candidate_only_creates_new_branch_and_draft_pr(candidate, existing):
     config,job = candidate
     calls = []
     def handler(request):
@@ -38,11 +39,11 @@ def test_verified_candidate_only_creates_new_branch_and_draft_pr(candidate):
         if path.endswith('/git/commits'):
             return httpx.Response(201,json={'sha':'c'*40})
         if path.endswith('/git/ref/heads/serverhub/test-job'):
-            return httpx.Response(404)
+            return httpx.Response(200,json={'object':{'sha':'c'*40}}) if existing else httpx.Response(404)
         if path.endswith('/git/refs'):
             return httpx.Response(201,json={'ref':'refs/heads/serverhub/test-job'})
         if path.endswith('/pulls'):
-            return httpx.Response(200 if request.method=='GET' else 201,json=[] if request.method=='GET' else
+            return httpx.Response(200 if request.method=='GET' else 201,json=([{'html_url':'https://github.com/example/Jarvis-os/pull/1'}] if existing else []) if request.method=='GET' else
                 {'html_url':'https://github.com/example/Jarvis-os/pull/1'})
         raise AssertionError(str(request.url))
     result = publish_candidate(config,job,transport=httpx.MockTransport(handler))
@@ -50,7 +51,10 @@ def test_verified_candidate_only_creates_new_branch_and_draft_pr(candidate):
     assert not any(method in {'PATCH','PUT','DELETE'} for method,_,_ in calls)
     tree = next(payload for method,path,payload in calls if path.endswith('/git/trees'))
     assert tree['tree'][0]['content'] == job.result['source_changes'][0]['content']
-    assert calls[-1][2]['draft'] is True
+    if existing:
+        assert not any(method=='POST' and path.endswith(('/pulls','/git/refs')) for method,path,_ in calls)
+    else:
+        assert calls[-1][2]['draft'] is True
 
 
 @pytest.mark.parametrize('defect',['outside','workflow','unverified','redacted','missing-token','base-moved','foreign-ref'])

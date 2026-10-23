@@ -2239,7 +2239,7 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
               {job.result && (
                 <>
                   <h4>Result</h4>
-                  {job.state === "succeeded" && job.result.verified && ["development", "development_autonomous"].includes(job.kind) && ["owner", "admin"].includes(user?.role || "") && <button className="button secondary" disabled={busy} onClick={() => action("publish")}>Publish verified candidate as draft PR</button>}
+                  {job.state === "succeeded" && job.result.verified && ["development", "development_autonomous"].includes(job.kind) && ["owner", "administrator"].includes(user?.role || "") && <button className="button secondary" disabled={busy} onClick={() => action("publish")}>Publish verified candidate as draft PR</button>}
                   {job.result.publication?.pull_request && <p><a href={job.result.publication.pull_request} target="_blank" rel="noreferrer">Open candidate draft PR</a></p>}
                   <JsonView value={job.result} />
                 </>

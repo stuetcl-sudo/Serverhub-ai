@@ -296,9 +296,12 @@ legacy_models.chmod(0o600)
 legacy_projects = Path("/etc/serverhub/projects.yaml")
 legacy_projects.write_text("projects: {}\n")
 legacy_projects.chmod(0o644)
+project_gid = pwd.getpwnam("serverhub-ai-worker").pw_gid
+os.chown(legacy_projects, 0, project_gid)
 assert client.get("/api/projects", headers=headers).json() == []
 upgraded = repair(source)
 assert legacy_projects.read_text().endswith("projects: []\n")
+assert legacy_projects.stat().st_gid == project_gid and legacy_projects.stat().st_mode & 0o777 == 0o644
 assert client.get("/api/projects", headers=headers).status_code == 200
 assert upgraded["state"] == "upgraded"
 assert subprocess.run(["id","serverhub-ai-staging"],capture_output=True).returncode==0

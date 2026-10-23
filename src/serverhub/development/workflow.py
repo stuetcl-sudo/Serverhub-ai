@@ -138,7 +138,7 @@ def development_job(ctx: Any, spec: dict) -> dict:
     from .workspace import source_patch, source_changes
     result["source_patch"] = source_patch(workspace, state.get("base_commit"))
     result["base_commit"] = state.get("base_commit")
-    result["source_changes"] = source_changes(workspace, state.get("base_commit"))
+    result["source_changes"] = source_changes(workspace, state.get("base_commit"), project.publication_paths)
     write_manifest(root / "candidates" / f"{ctx.job.id}.json", result)
     if spec.get("stage"):
         from serverhub.node_api import execute_node

@@ -123,6 +123,10 @@ def test_project_errors_are_actionable_and_do_not_echo_yaml(control, monkeypatch
     assert response.status_code == 503
     assert response.json()['detail']['code'] == 'projects_configuration_invalid'
     assert 'secret-password' not in response.text
+    diagnostics = client.get('/api/diagnostics',headers=headers)
+    assert diagnostics.status_code == 200
+    assert next(c for c in diagnostics.json()['checks'] if c['id']=='projects')['status'] == 'error'
+    assert 'secret-password' not in diagnostics.text
 
 
 def test_resume_rechecks_original_subject_and_revocation(control, registered):
@@ -226,3 +230,15 @@ def test_publication_requires_separate_live_project_grant_and_audits(control, re
     for policy in grant.json()['policies']:
         client.patch('/api/policies/' + policy['id'],headers=headers,json={'enabled':False})
     assert client.post('/api/projects/jobs/' + job_id + '/publish',headers=headers).status_code == 403
+
+
+def test_unverified_plain_development_never_reports_success(control, registered, monkeypatch):
+    from serverhub.jobs import HANDLERS, Worker
+    client, headers, _ = control
+    monkeypatch.setitem(HANDLERS, 'development', lambda ctx,spec: {'verified':False,'tests_passed':True,'staging':{'verified':False}})
+    submitted = client.post('/api/jobs',headers=headers,json={'kind':'development','project':registered.name,
+        'spec':{'project':registered.name}})
+    assert submitted.status_code == 202
+    assert Worker(isolated=False).run_once()
+    result = client.get('/api/jobs/' + submitted.json()['id'],headers=headers).json()
+    assert result['state'] == 'partial'
