@@ -1,226 +1,119 @@
-# Production readiness release candidate
+# Production acceptance and actual verification
 
-This candidate integrates both `feature/autonomous-host-agents` (including final
-provider-aware token accounting and durable reservations) and
-`feature/host-audit-workflow`. Neither feature branch is discarded. The target
-for review is `overhaul/stability-autonomy`; this is not a production deployment
-or a claim that every master-task capability is complete.
+PR [#6](https://github.com/stuetcl-sudo/Serverhub-ai/pull/6) preserves the existing
+FastAPI, PostgreSQL, React, systemd, MCP/OAuth, independent broker, audit and
+rollback architecture. Both earlier feature branches remain in its ancestry.
+The base is `overhaul/stability-autonomy`; the consolidated review branch is
+`release/production-readiness`. It has not been merged or deployed to production.
 
-## Installation and migration
+Use [installation](installation.md), [reviewed upgrades](upgrade.md) and
+[delegated administration](delegated-administration.md). Earlier candidate
+evidence is preserved in [the historical report](production-readiness-previous.md);
+its test counts and unfinished-feature statements are historical.
 
-Use [the Ubuntu installation workflow](installation.md). On a fresh controller,
-`./scripts/install-ubuntu.sh --public-url https://YOUR-CONTROLLER --ai-identity`
-selects a dedicated `serverhub-ai` nologin worker account. API, migration and node
-accounts remain separate. A root-owned systemd worker drop-in selects the identity;
-the worker retains its restricted database role, state directory and sandbox.
-No sudo membership, Docker group, broker socket or unrestricted command endpoint
-is granted. The installer journal records the selection; resume with the same
-option. Existing installations must use [the backed-up upgrade procedure](upgrade.md),
-not rerun a fresh install with a different identity. Conversion of an existing
-worker identity is not automated by this candidate.
+## Observed tests
 
-The release reconciles existing additive schema migration 0004. There is no new
-schema migration. Rebuild the wheel and frontend from this branch before upgrade.
-Upgrade backs up PostgreSQL and `/etc/serverhub`, arms the independent release
-watchdog, migrates, activates and verifies. Failed activation restores the previous
-release/configuration. Do not downgrade additive database tables destructively.
-Review trust-boundary changes locally as root; an AI worker cannot approve them.
+The local development runtime became unavailable during this work. Subsequent
+source changes were made through GitHub, and actual execution took place in
+disposable GitHub Actions Ubuntu 24.04 runners. None of these results represents
+a test on the owner's private production host.
 
-## Persistent authenticated access
+| Execution | Observed result and evidence |
+| --- | --- |
+| PostgreSQL 16 API/backend | At `442ccb33a14260c9514940a6e3e17a202e81c0af`: 254 passed, 6 skipped, 1 warning. [Run 39946677391](https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39946677391), backend job 120390915748. |
+| Frontend | At 4ed938f (and repeated at f3cfba3): 31 tests passed, TypeScript/Vite build passed, npm high-severity audit passed with zero findings. These are DOM tests/build, not a new full browser session. |
+| Fresh native install | Actual PostgreSQL/systemd installation, intentional interruption/resume/repeat, dedicated AI identity, healthy API/worker, certificate-verified persistent TLS, static assets, unauthorized API 401, SSH restart 403 and direct worker broker access denial passed. |
+| Reviewed upgrade/recovery | Actual configuration/database backup, additive migration, old-install repair, injected activation failure and independent timer rollback passed on Ubuntu. |
+| Real Ollama read-only job | Actual qwen2.5:3b daemon/model and persistent job passed, not an HTTP fixture. [Run 39945270317](https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39945270317) recorded 2,250 provider-reported tokens, one attempt, inventory.read plus task.verify and verified success. Another real-model run at 4ed938f also passed. |
+| Native host transactions | [Run 39943512380](https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39943512380), native job 120380643727: actual pinned-package upgrade plus failed-acceptance rollback, configuration rollback, healthy stateless Compose update plus unhealthy-candidate rollback passed. |
+| Docker backup/restore | Same native job: cleanly stopped PostgreSQL 16 container, discovered volumes/binds, encrypted backup, SHA/HMAC verification, Compose metadata and image exports, isolated restore into fresh storage and SQL verification of the restored row passed. Original source storage was not overwritten. |
+| Independent operation watchdog | The root systemd timer recovered an intentionally abandoned stopped-container operation. This was timer-driven recovery, not a direct test call to recovery code. |
+| Autonomous Jarvis | Actual pinned upstream source and qwen2.5:3b exercised dependency installation, source-edit attempts, eight upstream dashboard tests and an independent version check. At f3cfba3 the model inspected and repaired the injected local regression, installed dependencies and passed all registered checks. Staging then failed because extraction reset the release root to mode 0700. The fix normalizes the root as well as descendants to the project-only group permissions; actual runtime acceptance and failed-next-stage rollback still require a passing run. |
 
-The default remains loopback HTTP behind an explicitly configured HTTPS reverse
-proxy; see `packaging/config/nginx.conf.example`. This is a native systemd API;
-there is no requirement for a terminal-held SSH tunnel. Existing proxy/firewall/
-SSH configuration is never changed by installation.
+The six backend skips are four root-only fixtures and two opt-in live-model tests.
+Root behavior runs separately in the native job; real-model execution runs
+separately in the actual Ollama workflow. The native installer also uses an HTTP
+Ollama fixture for predictable onboarding failures: that fixture is not counted
+as real model inference. Read-only host audit can be partial when its inventory
+collectors report gaps; partial is not verified success.
 
-A controller may instead serve HTTPS directly. Provision a certificate from your
-trusted public or private PKI with the exact DNS/IP Subject Alternative Name.
-Install the certificate chain and private key in a root-owned directory searchable
-by `serverhub-api`, with the key root:serverhub-api 0640 and directory 0750.
-Copy and adapt `packaging/config/access.env.example` to
-`/etc/serverhub/access.env`, also root:serverhub-api 0640. Use the **test VM's own
-address**, not the production host address. The file selects bind/port, canonical
-public origin, TLS files and an independently certificate-verified health URL.
-For a private PKI, supply its CA certificate through `SERVERHUB_HEALTH_CA`; never
-turn off certificate validation. The example's private addresses are examples,
-not endpoints this release has configured.
+The actual model digest observed for qwen2.5:3b is
+`357c53fb659c5076de1d65ccb0b397446227b71a42be9d1603d46168015c9e4b`.
+Model outputs remain nondeterministic even with the same digest. A 3B model is
+not guaranteed to solve arbitrary development or infrastructure tasks.
 
-After explicit operator review, `sudo systemctl restart serverhub-api` loads the
-optional access environment. The installer enables this systemd service, so it
-survives reboot. Certificate renewal must preserve the group/read permissions and
-restart the API; private-PKI enrollment/renewal is operator-managed. No HTTP
-redirect listener or public Ollama listener is created. A non-loopback production
-HTTP listener is rejected at startup. Reverse-proxy deployments keep loopback
-binding; untrusted forwarded headers remain disabled. Authenticated APIs still
-require user/node identities, and cookie writes still require an allowed Origin.
-Only the UI assets and normal authentication/discovery endpoints are public.
+## Implemented boundaries
 
-Run the certificate-aware health command with the API environment loaded, or
-`serverhub health --url https://CONTROLLER:9080 --ca-file /path/to/ca.pem`.
-Native upgrade and release activation use the protected health URL/CA from the
-API/access environment, rather than assuming loopback plaintext.
+- Dedicated `serverhub-ai` worker opt-in; separate API/node/migration identities
+  and independently authenticated root broker. No AI sudo or Docker socket.
+- Scoped, expiring identity/host/project/environment/argument policies.
+  One maintenance or development grant covers its permitted steps until expiry.
+- Durable queues, priorities, dependencies, parent/child receipts, leases,
+  checkpoints, model reservations, cancellation, emergency stop and bounded repair.
+- Provider-aware approximate input estimates with explicit margins, separate
+  context/job/output limits, provider actual usage, durable unknown-request
+  debits and attempt-safe preflight pause. Compaction does not refund usage.
+- Root-enrolled pinned packages/configuration/stateless Compose operations with
+  pre-change journals, acceptance gates and independently recoverable inverses.
+- Encrypted Docker archives, explicit retention, capacity/mount validation,
+  scheduled operations and isolated restores. Planned downtime provides database
+  consistency; this is not an online snapshot or automatic production cutover.
+- Autonomous registered-repository tools with isolated Git branches, source
+  inspection, edits, fixed dependency/build/test contracts, root-pinned independent
+  checks and staged runtime. Neither model prose nor passing a build alone proves
+  completion. See the observed limitations of the live pilot above.
+- Functional authenticated UI and MCP operations reuse the same job queue,
+  authorization and audit checks; OAuth compatibility remains.
 
-The canonical public origin is always allowed for assets and cookie requests,
-even if a legacy explicit origins list retains the old domain. Foreign Origins
-remain rejected. Missing assets and API routes return 404 rather than SPA HTML.
-Filesystem asset validation and installed-service health checks remain mandatory.
+## Remaining gates and limitations
 
-## Long jobs, recovery and evidence
+1. The private test VM `192.168.122.10`, production-side forwarding endpoint
+   and owner's private Ollama/NTFS disk are inaccessible from this development
+   environment. Disposable Ubuntu evidence does not verify their routing,
+   certificates, real reboot, storage durability, ARM64 hardware or backups.
+2. Actual autonomous Jarvis runtime staging and failed-next-stage rollback have
+   not yet passed the expanded live integration suite. Do not deploy production
+   on the strength of unit/fixture checks.
+3. Stateful package/application migrations, online database snapshots, privileged
+   container restores and automatic production cutover require application-specific
+   reviewed adapters. General arbitrary root shell execution is not exposed.
+4. Hash-linked root audit is append-oriented and protected from AI/database runtime
+   roles. A malicious root can rewrite or truncate an entire local chain.
+   Independent off-host/WORM retention is not provisioned.
+5. Staging has a private network with a separate HTTP probe, no public preview
+   gateway, and fresh per-release data. It does not migrate production data.
+6. Conversion of an existing worker identity to `serverhub-ai` is not automated.
+   Fresh installation supports `--ai-identity`; reviewed upgrade preserves the
+   existing identity.
+7. A release signing key, production enrollment and the owner's application
+   acceptance/restore contracts have not been supplied. Self-generated changes
+   cannot modify policy, audit, broker, recovery or trust anchors silently.
 
-Provider formatting, tool-schema estimates, context limits, cumulative budgets,
-output reservations and durable pre-request debits retain the
-[token-fix guarantees](token-budget-fix.md). Context pressure now replaces bulky
-older tool observations with bounded previews and durable call references. It
-preserves the system instructions, original request, call IDs and response order.
-Full results remain in `ai.completed_calls` and verification evidence, outside the
-model prompt. Compaction never refunds previously billed tokens or invents a
-summary. If immutable instructions/schemas still do not fit, existing actionable
-preflight pause behavior applies. The estimator remains approximate; real provider
-usage is authoritative when valid.
+## Operator deployment procedure
 
-Read-only external integration failures become durable tool observations so the
-model can choose another diagnostic. The same failed operation/arguments may
-execute twice; further identical attempts are suppressed, including after a
-worker restart. Mutating integration failures still stop for explicit recovery;
-a request with an ambiguous write is never blindly replayed. Job/model budgets,
-step limits, policy checks, leases and hard timeouts remain enforced.
+Do not run these commands on production until the release gates are reviewed.
 
-Broker records now include structured arguments, peer UID, actual effective UID/
-GID, unique execution ID, before/after phases and available verification/exit-code
-metadata. Node envelopes correlate command, job, host and initiating operator.
-Correlation fields are diagnostic metadata, never broker authorization. Critical
-service status/logs can be independently allowlisted for diagnostics, while
-restarting those services remains forbidden. The
-broker still independently checks its peer UID and root-owned allowlists.
-Reported execution context is node evidence, not proof against a compromised
-node. Actual selected provider/model/route are recorded in job events.
+1. Check out the reviewed PR commit as an ordinary operator. On a clean Ubuntu
+   24.04 machine run `./scripts/install-ubuntu.sh --public-url https://YOUR-CONTROLLER --ai-identity`.
+   Follow its owner onboarding; provision the exact trusted HTTPS certificate
+   and persistent systemd access described in [installation](installation.md).
+2. For an existing controller, build with
+   `./scripts/install-ubuntu.sh --build-only`, then explicitly run
+   `sudo ./scripts/repair-install.sh` from that checkout. Backups, additive
+   migrations 0004/0005, service repair, watchdog and health checks are included.
+3. Configure/test the private Ollama route in Setup. Plain HTTP requires the
+   exact trusted private endpoint opt-in; never publish Ollama by default.
+4. Locally review and enroll root-owned named operation/project plans, then grant
+   only the required identity, host, project, target, environment and expiry.
+5. Validate `/mnt/storage/ServerHub-Backups` is on the intended mounted disk,
+   escrow the encryption key separately and perform an isolated restore drill.
+6. Verify API and worker health, authenticated assets, a real read-only job,
+   denied unauthorized operations, emergency stop and audit chain on this host.
+7. For schema-compatible release activation, rollback with
+   `sudo ./scripts/upgrade.sh rollback`. Reviewed repair failures restore the
+   previous executable/configuration. Additive migrations are not destructively
+   downgraded; old revision-0003 health checks can report a mismatch after a code
+   rollback. See [upgrade recovery](upgrade.md) for the exact limitation.
 
-New broker audit records are append-oriented, fsynced and hash-linked under a
-locked root-only regular file, defaulting to
-`/var/lib/serverhub-broker/audit/events.jsonl`. Systemd creates the broker state
-directory as root-owned 0700. The native Ubuntu test recorded `/var/log` mode 0775 and `/var/lib` mode
-0755. The default avoids the group-writable `/var/log` ancestor: a protected child alone cannot prevent parent-directory
-replacement. Existing `/var/log/serverhub-broker/events.jsonl` files are retained;
-an operator may copy a reviewed legacy audit file to the new protected location
-before broker activation to preserve one chain. Explicit custom audit paths still
-must satisfy the full ancestor checks. Group/world-readable files, symlinks, incomplete
-trailing records and unsafe ancestors are rejected. Existing legacy records form
-an explicitly unlinked prefix; they are not retroactively authenticated. Use
-`serverhub.node.broker.verify_broker_audit(path)` for a read-only chain check.
-Root/database administrators can still rewrite a complete local chain or remove
-its tail. Export hashes/logs to an independent append-only system for stronger
-retention; that external sink is not provisioned here. Null exit codes mean the
-adapter has no underlying process exit code, not successful execution.
-
-Reviewed upgrades and rollbacks now also `try-restart` active local broker/node
-services after switching the release, leaving disabled services stopped. Upgrade
-controller, agent and broker from the same candidate before enabling the
-new audit correlation envelope. Older brokers reject the additional metadata
-rather than silently accepting a changed protocol.
-
-## Acceptance evidence and remaining gates
-
-Exact test results and environment evidence are recorded in the PR and the final
-verification section below. The reusable Ubuntu CI script exercises real service
-identities, interrupted install/resume/repeat, migration, model setup through an
-explicit HTTP fixture, a persistent delegated read-only job, authorization denial,
-upgrade, injected failure/rollback and persistent certificate-verified HTTPS.
-The fixture is not a real Ollama model.
-
-The configured test VM `192.168.122.10:9080` and old production-side forwarding
-port `192.168.68.135:19080` both timed out from this development environment on
-2026-10-23. Direct, proxy-disabled requests to both addresses additionally failed
-with `ConnectError: [Errno 101] Network is unreachable`. No SSH credentials or
-network path to those hosts are available here.
-Consequently the actually installed revision, failed tunnel's systemd/journal
-state and real private Ollama endpoint cannot be inspected or verified. No
-production changes were made. ServerHub Control MCP ping succeeded, but its
-operation executor explicitly supports policy simulation only; it exposes neither
-remote installation/command execution nor a Docker backup operation.
-
-Outstanding production gates:
-
-- Real `qwen2.5:3b` tool-call job and measured accounting on the operator's Ollama
-  server, including long-context quality after compaction.
-- Private VM connectivity, correct DNS/CA enrollment, certificate renewal and an
-  actual VM reboot/access check. A disposable service restart is not a reboot.
-- Operator-enrolled full host administration. This candidate intentionally retains
-  the compiled operation allowlist; it does **not** implement a sudo-equivalent
-  unrestricted policy or claim the AI can administer arbitrary host actions.
-- General package installation/update, arbitrary configuration changes, existing
-  Compose/image upgrades with application-aware rollback, automated Docker volume
-  backup/restore and the complete Jarvis development pilot remain unfinished.
-  Existing allowlisted restart, initial Compose deployment, isolated development
-  workspace/test/staging mechanisms retain their documented limits.
-- A real full Docker backup has **not** run. The available connector cannot create
-  one, no selected container list or protected destination is configured, and live
-  database volumes require application-consistent dumps or approved quiescence.
-  Controller PostgreSQL/config backups do not substitute for Docker backups.
-- Independent audit retention and off-host backups/restore tests are operator
-  infrastructure requirements; no destination credentials were assumed.
-
-Do not label this candidate fully production-ready until these gates have
-independent evidence. The original master-task message was truncated in section
-6; requirements beyond the received text cannot be assessed here.
-
-
-## Received master-task acceptance status
-
-| Area | Candidate result | Evidence or remaining gate |
-|---|---|---|
-| Branch reconciliation | Preserved both feature histories and combined conflict resolutions | Merge commit has token-fix and host-audit parents; native test retains both workflows |
-| Token accounting | Provider-aware estimates, durable reservations, measured usage and preflight pause/resume | Provider/budget regressions plus native delegated fixture job; real private Ollama unavailable |
-| Long-context recovery | Bounded previews retain original request and durable full tool results | Resumed persisted Ollama-format job test completes with deterministic verification |
-| Frontend assets | Canonical-origin fix, routing 404s and direct TLS authentication checks | Asset/API regressions, TypeScript/Vite build, desktop/mobile browser smoke |
-| Installation | Native install, interruption/resume/repeat and dedicated worker | Disposable Ubuntu 24.04 systemd CI; existing worker-identity migration is not automated |
-| Access | Persistent TLS API or explicitly configured HTTPS proxy, no terminal tunnel required | TLS service restart test and API 401; private VM routing/PKI enrollment and real reboot remain blocked |
-| Authorization | Exact expiring grants, independent broker allowlists and protected mutations retained | Unauthorized SSH restart 403; direct AI socket access denied; critical-unit read requires explicit grant |
-| Full administration | Not implemented as unrestricted/sudo-equivalent host policy | Compiled broker allowlist and forbidden-operation tests reject arbitrary execution; no production enrollment performed |
-| Durable execution | Existing PostgreSQL leases, checkpoints, recovery, budgets and deterministic verification retained | PostgreSQL restart/cancellation/ledger tests and complete native read-only lifecycle |
-| Repair adaptation | Read-only integration errors become observations; identical failures execute at most twice | Durable repeated-tool test; mutating ambiguity remains blocked for reconciliation |
-| Host operations | Inventory and registered status/log/restart/initial Compose operations retained | Live disposable Linux discovery and broker status; general packages/config writes/image updates remain unfinished |
-| Development | Existing isolated registered workflow/patch/test/staging path retained | Existing development regressions; a complete autonomous Jarvis pilot remains unfinished |
-| Audit | Database append protections plus protected correlated/hash-linked broker log | PostgreSQL denial tests and actual native root broker audit chain; independent off-host retention not configured |
-| Backup/rollback | Controller DB/config backup and reviewed upgrade rollback | Native backup/failed-upgrade checks; Docker application backup/restore has not run and is unfinished |
-
-Unavailable environments and missing implementations are separate limitations.
-Passing the scoped regression suite does not certify the unfinished capabilities.
-
-
-## Final verification
-
-Validated source: `77374d7302a0d02bd1d27184c44ddb1bb5004c41`.
-[GitHub CI](https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39920897882)
-passed all four jobs: backend, frontend, dependency audits and native Ubuntu.
-
-- Local disposable PostgreSQL 16.2: **222 passed, 1 skipped**, 19.69 seconds.
-  The skip is the optional real Ollama endpoint. Actual API startup, migrations,
-  separate database roles, Linux discovery (696 native packages), two durable node
-  commands, persisted read-only audit, database audit chain and desktop/mobile
-  browser smoke passed. Restricted-container network/systemd collectors report
-  explicit gaps; distinct real service UIDs are tested separately in Ubuntu CI.
-- Hosted PostgreSQL suite: **219 passed, 4 skipped**, 18.23 seconds. Three root-only
-  fixture checks are skipped on the unprivileged test runner; the fourth is real
-  Ollama. The root fixture checks passed in the isolated local root suite.
-- Frontend: **30 passed**; TypeScript/Vite build passed; no browser JavaScript
-  errors and no horizontal overflow at 390px. Python wheel/sdist build and Ruff
-  checks passed. Dependency audits passed.
-- Native Ubuntu 24.04: documented fresh build/install, injected interruption,
-  resume/repeat with credentials preserved, `serverhub-ai` worker identity,
-  API/worker health, Ollama HTTP **fixture** setup, budget pause at zero attempts
-  followed by verified read-only completion, honest partial host audit,
-  unauthorized SSH restart **403**, actual root broker status/audit and denied
-  direct AI socket access, controller backup, upgrade, injected-failure rollback,
-  certificate-verified TLS service restarts and **independent systemd watchdog
-  rollback after abandoned activation** all passed.
-
-The expanded native broker test first failed at `29c08fb` because the audit path
-traversed Ubuntu's group-writable `/var/log` (0775). The fix at `de01618` moved its
-default to a root-only systemd state directory; the final native run proves the
-correlated root audit and unchanged socket isolation. This failure was fixed;
-its run is retained as evidence, not counted as passing.
-
-Machine-readable results: [local](verification/readiness/local-results.json) and
-[CI](verification/readiness/ci-results.json). They contain fixture metadata and no
-credentials or production configuration. These results do not remove the
-production gates and unfinished features listed above.
+No production command, enrollment, merge or deployment has been performed by
+this engineering session.

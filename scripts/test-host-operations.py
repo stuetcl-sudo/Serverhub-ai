@@ -137,6 +137,35 @@ policy=client.post('/api/policies/profiles',headers=headers,json={'profile':'mai
 policy.raise_for_status()
 
 
+# Persistent emergency stop must survive an actual worker restart and block
+# even previously granted mutations. Queue a harmless future read before arming.
+from datetime import datetime,timedelta,timezone
+scheduled=client.post('/api/jobs',headers=headers,json={'kind':'operation','host_id':host,
+    'run_after':(datetime.now(timezone.utc)+timedelta(seconds=5)).isoformat(),
+    'spec':{'operation':'inventory.read','arguments':{}},'token_budget':0,'cost_budget':0})
+scheduled.raise_for_status()
+client.post('/api/emergency-stop',headers=headers,json={'enabled':True,'reason':'Disposable native acceptance'}).raise_for_status()
+try:
+    denied=client.post('/api/jobs',headers=headers,json={'kind':'operation','host_id':host,
+        'spec':{'operation':'configuration.apply','arguments':{'target':'fixture-config'}},
+        'token_budget':0,'cost_budget':0})
+    assert denied.status_code==403,denied.text
+    run(['systemctl','restart','serverhub-worker'])
+    time.sleep(6)
+    held=client.get('/api/jobs/'+scheduled.json()['id'],headers=headers).json()
+    assert held['state']=='queued' and held['attempts']==0,held
+finally:
+    client.post('/api/emergency-stop',headers=headers,json={'enabled':False,'reason':'Disposable native acceptance finished'}).raise_for_status()
+for _ in range(30):
+    resumed=client.get('/api/jobs/'+scheduled.json()['id'],headers=headers).json()
+    if resumed['state'] in {'succeeded','failed','partial'}:
+        break
+    time.sleep(.5)
+assert resumed['state']=='succeeded' and resumed['attempts']==1,resumed
+output['emergency_stop_persists_across_worker_restart']='passed'
+output['emergency_stop_denies_previously_granted_mutation']='passed'
+
+
 def job(operation,arguments,expected='succeeded'):
     response=client.post('/api/jobs',headers=headers,json={'kind':'operation','host_id':host,
         'spec':{'operation':operation,'arguments':arguments},'time_limit':1800,'token_budget':0,'cost_budget':0})
@@ -200,6 +229,18 @@ try:
     assert json.loads(journal.read_text())['state']=='reverted'
     assert run(['docker','inspect','--format','{{.State.Running}}',container])=='true'
     output['independent_watchdog_abandoned_offline_operation']='passed'
+    from serverhub.node.broker import verify_broker_audit
+    original_audit=Path('/var/lib/serverhub-broker/audit/events.jsonl')
+    assert verify_broker_audit(original_audit)['valid']
+    records=[json.loads(line) for line in original_audit.read_text().splitlines()]
+    assert records and all('record' in record for record in records)
+    records[0]['record']['effective_uid']=12345
+    altered=root/'tampered-audit.jsonl'
+    altered.write_text(''.join(json.dumps(record)+'\n' for record in records))
+    altered.chmod(0o600)
+    assert not verify_broker_audit(altered)['valid']
+    assert verify_broker_audit(original_audit)['valid']
+    output['root_audit_chain_and_tampering_detection']='passed'
     output['source_data_overwritten']=False
     print('HOST_OPERATIONS_EVIDENCE='+json.dumps(output),flush=True)
 finally:

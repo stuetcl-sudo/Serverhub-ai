@@ -1,0 +1,59 @@
+{
+  "format": 1,
+  "repository": "stuetcl-sudo/Serverhub-ai",
+  "pull_request": 6,
+  "branch": "release/production-readiness",
+  "production_modified": false,
+  "backend": {
+    "commit": "442ccb33a14260c9514940a6e3e17a202e81c0af",
+    "run": 39946677391,
+    "job": 120390915748,
+    "passed": 254,
+    "skipped": 6,
+    "warnings": 1,
+    "seconds": 20.72,
+    "environment": "GitHub Actions disposable Ubuntu 24.04 with PostgreSQL 16"
+  },
+  "frontend": {
+    "commit": "4ed938ff83c6da0d3b172e7a8e219bbe9f1fd4ab",
+    "run": 39943512380,
+    "job": 120380441259,
+    "passed": 31,
+    "build": "passed",
+    "npm_audit": "zero findings",
+    "scope": "DOM integration tests and build; no new full browser session"
+  },
+  "native": {
+    "commit": "f3cfba3a0891a1df1e894ba93753fc63c62d0541",
+    "run": 39945270439,
+    "job": 120386435369,
+    "install_upgrade": "passed",
+    "host_operations": "passed",
+    "docker_consistent_restore": "passed",
+    "root_timer_recovery": "passed",
+    "jarvis": "actual source repair, dependencies, eight upstream dashboard tests and independent version check passed; native staging denied by extracted root mode 0700",
+    "entire_job": "failure"
+  },
+  "real_ollama": {
+    "commit": "f3cfba3a0891a1df1e894ba93753fc63c62d0541",
+    "run": 39945270317,
+    "job": 120386285865,
+    "model": "qwen2.5:3b",
+    "digest": "357c53fb659c5076de1d65ccb0b397446227b71a42be9d1603d46168015c9e4b",
+    "state": "succeeded",
+    "verified": true,
+    "attempts": 1,
+    "tokens": 2250,
+    "budget": 20000,
+    "context": 8192,
+    "output_limit": 512,
+    "fixture": false,
+    "seconds": 38.66
+  },
+  "limitations": [
+    "Private owner test VM/Ollama/NTFS/Pi unavailable",
+    "Off-host WORM retention not enrolled",
+    "Stateful update/cutover requires reviewed application-specific adapter",
+    "Jarvis expanded native staging suite pending"
+  ]
+}

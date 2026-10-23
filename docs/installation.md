@@ -77,7 +77,10 @@ same-origin asset requests are accepted. Cookie writes still require the exact
 same loopback Origin. Non-secure cookies are allowed only on an HTTP loopback
 request whose direct peer is also loopback; public access keeps Secure cookies.
 Never expose port 9080 on an untrusted network. For normal multi-node use, configure
-a trusted HTTPS proxy matching the supplied public URL. An nginx example is in
+a trusted HTTPS proxy matching the supplied public URL, or use the native API's
+certificate-verified TLS listener. Follow [persistent authenticated access](persistent-access.md)
+for the systemd access environment and exact key/CA permissions; this survives
+service restarts and does not depend on an SSH terminal. An nginx example is in
 `packaging/config/nginx.conf.example`; an existing proxy is not overwritten.
 
 The first-run wizard guides you through:

@@ -65,7 +65,7 @@ projects=Path('/etc/serverhub/projects.yaml')
 projects.write_text(yaml.safe_dump({'projects':[project]}))
 projects.chmod(0o644)
 plan={'argv':['/usr/bin/python3','-m','uvicorn','app.main_auth:app','--host','127.0.0.1','--port','28098'],
-      'port':28098,'health_path':'/','health_contains':'Jarvis','memory_mb':1024,
+      'port':28098,'health_path':'/api/health','health_contains':'0.23.0','memory_mb':1024,
       'acceptance_script':{'path':str(checks/'check.py'),'sha256':__import__('hashlib').sha256((checks/'check.py').read_bytes()).hexdigest()},
       'environment':{'SAFE_MODE':'true','DRY_RUN':'true','WORKER_ENABLED':'false'}}
 plans=root/'staging.yaml'

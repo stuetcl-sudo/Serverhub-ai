@@ -1,8 +1,10 @@
 # ServerHub AI OS
 
 The [production-readiness candidate](docs/production-readiness.md) reconciles both
-feature branches and documents native TLS access, context compaction, dedicated
-worker identity, audit improvements and the remaining release gates.
+feature branches and documents actual Ubuntu/model execution, delegated native
+administration, encrypted Docker recovery, autonomous development and remaining
+release gates. See [capability enrollment and recovery](docs/delegated-administration.md)
+and [persistent authenticated access](docs/persistent-access.md).
 
 The [token-budget and execution fix](docs/token-budget-fix.md) records the measured
 20k failure, provider-aware accounting, durable reservations and attempt-safe

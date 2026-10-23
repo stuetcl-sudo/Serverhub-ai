@@ -110,7 +110,10 @@ application data, and run application acceptance checks. Process-only containers
 without a healthcheck remain partial; do not equate a running PID with recovery.
 Production cutover is a separately reviewed operation. The safe restore adapter
 does not clone privileged containers or reproduce host networking/capabilities.
-Docker 26+ is required for isolated directory mount subpaths.
+Restores preserve an explicit Config.User or a mapped nonroot runtime UID:GID
+observed before shutdown. Root may enroll restore_users by exact container name
+when an application needs a particular nonroot startup identity. Docker 26+ is
+required for isolated directory mount subpaths.
 
 Scheduled backups use the existing schedules API/UI, a job of kind operation and
 spec {operation: docker.backup.create, arguments: {target: household}}. Scheduling
@@ -161,7 +164,12 @@ The Development page accepts a natural-language task or an explicit patch.
 Autonomous jobs plan, inspect bounded text files, edit/commit an isolated branch,
 run configured checks, observe failures and attempt bounded corrections.
 Repeated checks on the same failing commit are suppressed after two failures;
-source corrections are limited to five, with model/time/token budgets.
+source corrections are limited to five, with model/time/token budgets. Three rounds
+without meaningful source, inspection, plan or check progress end as partial with
+a stronger-model recommendation. The model first sees inspection tools; source
+editing and checks are exposed after inspection, and finish after verified checks.
+A literal Python-constant editor avoids fragile quote matching. Request history
+is compacted by complete assistant/tool groups while full receipts remain durable.
 Natural-language success claims never bypass checks. Checkpoints retain tool
 receipts, source commits, plan and command outcomes.
 
@@ -169,7 +177,9 @@ An owner grants the Development profile once for the exact project/host, expiry
 and optional dependency-network permission. Production deployment is excluded.
 Infrastructure planners can delegate a development subtask, release their host
 execution slot, resume its persisted receipt, and include child usage in the
-parent task budget. Cancellation propagates to descendants.
+parent task budget. Cancellation propagates to descendants. Children of failed, completed or expired
+parents are cancelled before execution and during supervision; parent/child budgets
+and verification receipts remain scoped to the initiating identity.
 
 For runtime staging, root enrolls staging_projects with the same project name:
 
@@ -178,8 +188,8 @@ For runtime staging, root enrolls staging_projects with the same project name:
         argv: [/usr/bin/python3, -m, uvicorn, app.main_auth:app,
                --host, 127.0.0.1, --port, "28098"]
         port: 28098
-        health_path: /
-        health_contains: Jarvis
+        health_path: /api/health
+        health_contains: "0.23.0"
         memory_mb: 1024
         acceptance_script:
           path: /srv/checks/jarvis-stage.py
@@ -187,13 +197,13 @@ For runtime staging, root enrolls staging_projects with the same project name:
         environment: {SAFE_MODE: "true", DRY_RUN: "true", WORKER_ENABLED: "false"}
 
 The candidate must contain its Python dependencies under runtime and must pass
-independent checks. Restores preserve an explicit Config.User or a mapped nonroot
-runtime UID:GID observed before shutdown; root can enroll restore_users by exact
-container name when an application needs a specific nonroot startup identity. The broker verifies its SHA-256, rejects links/special files,
+independent checks. The broker verifies its SHA-256, rejects links/special files,
 makes a root-owned release, runs the pinned owner acceptance script as a separate
 nonprivileged checker, and launches a systemd DynamicUser with private data, a project-specific read-only source group,
-private network, no capabilities and explicit limits. A fixed independent root
-HTTP checker enters only the candidate network namespace. The job succeeds only
+private network, no capabilities and explicit limits. PID 1 starts both the pinned acceptance checker and the fixed HTTP probe as
+separate nonprivileged, capability-free transient units. The probe joins only
+the candidate's private network namespace through NetworkNamespacePath; the
+broker does not switch UID or grant namespace capabilities to model output. The job succeeds only
 after actual HTTP acceptance. Failed staging stops the new unit, relaunches the
 previous unit and checks its previous HTTP contract; an independent timer can
 recover abandoned attempts.
@@ -214,7 +224,12 @@ feature in Jarvis OS.
 
 Ubuntu 24.04 user-namespace restrictions are handled by an unattached,
 root-installed serverhub-build AppArmor label used explicitly by aa-exec for
-Bubblewrap. It permits namespace setup, retains the filesystem/network sandbox
+Bubblewrap. On Ubuntu this explicit label permits creation of the nested user
+namespace; the worker has no host capabilities. ProtectKernelTunables is disabled
+on the worker unit because its locked parent /proc/sys mount prevents bubblewrap
+from mounting a fresh PID-private /proc. The unprivileged worker still cannot
+write host sysctls; project processes receive a fresh isolated /proc, never a
+bind mount exposing worker credentials. It permits namespace setup, retains the filesystem/network sandbox
 and dropped capabilities, and never disables the global kernel restriction.
 A changed existing profile requires explicit local review. Routine package and
 configuration adapters cannot replace AppArmor, Bubblewrap, Python, the package
