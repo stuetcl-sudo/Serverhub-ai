@@ -15,13 +15,15 @@ def uninstall(*, apply=False, root="/", runner=None):
     units = CONTROLLER_UNITS + NODE_UNITS
     paths = ["/etc/systemd/system/" + name for name in units] + ["/opt/serverhub/current", "/opt/serverhub/releases"]
     retained = ["/etc/serverhub", "/var/backups/serverhub", "/var/lib/serverhub-release", "/var/lib/serverhub-recovery",
-                "PostgreSQL database/roles", "dedicated service accounts", "node identity and command journal", "/opt/serverhub/recovery (independent recovery tools)"]
+                "PostgreSQL database/roles", "dedicated service accounts", "node identity and command journal", "/opt/serverhub/recovery-ai (independent recovery tools)"]
     plan = {"action": "uninstall", "apply": apply, "root": str(destination), "remove": paths, "retain": retained}
     if not apply:
         return plan
     if destination != Path("/") or os.geteuid() != 0:
         raise InstallError("uninstall --apply requires root and the actual installation root")
     runner = runner or subprocess.run
+    from .coexistence import require_safe
+    require_safe(units=units, runner=runner)
     existing = [name for name in units if (Path("/etc/systemd/system") / name).is_file()]
     if existing:
         runner(["systemctl", "disable", "--now", *existing], check=True, timeout=180, capture_output=True)

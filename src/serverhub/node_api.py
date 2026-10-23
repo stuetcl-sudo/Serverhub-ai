@@ -27,16 +27,17 @@ NODE_OPERATIONS = frozenset(
     {
         "inventory.refresh",
         "discovery.refresh",
-        "diagnostics.network",
+        "diagnostics.network", "diagnostics.storage",
         "security.scan",
         "systemd.status", "systemd.logs",
         "systemd.restart",
         "docker.restart",
-        "docker.compose.apply",
+        "package.plan", "package.apply", "configuration.plan", "configuration.apply",
+        "development.deploy", "docker.compose.update", "docker.compose.apply", "docker.backup.create", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "docker.restore.apply",
     }
 )
 READ_OPERATIONS = frozenset(
-    {"inventory.refresh", "discovery.refresh", "diagnostics.network", "security.scan", "systemd.status", "systemd.logs"}
+    {"inventory.refresh", "discovery.refresh", "diagnostics.network", "security.scan", "systemd.status", "systemd.logs", "package.plan", "configuration.plan", "docker.backup.list", "docker.backup.verify", "docker.restore.plan"}
 )
 
 
@@ -214,6 +215,13 @@ def commands(node: Host = Depends(current_node), db=Depends(get_db)):
         result.append(
             {
                 "id": command.id,
+                "audit_context": {"command_id": command.id, "job_id": command.job_id, "host_id": node.id,
+                                  "operator_id": db.get(Job, command.job_id).owner_id,
+                                  "project": db.get(Job, command.job_id).project or "",
+                                  "tool": command.operation,
+                                  "model": str(((db.get(Job, command.job_id).checkpoint or {}).get("developer")
+                                                or (db.get(Job, command.job_id).checkpoint or {}).get("ai")
+                                                or {}).get("model","deterministic"))[:200]},
                 "operation": command.operation,
                 "arguments": command.arguments,
                 "idempotency_key": command.idempotency_key,
@@ -265,7 +273,9 @@ def command_result(
         "node:" + node.id,
         "node.command." + body.state,
         command.id,
-        {"operation": command.operation, "job_id": command.job_id},
+        {"operation": command.operation, "job_id": command.job_id, "host_id": node.id,
+         "operator_id": db.get(Job, command.job_id).owner_id, "arguments": command.arguments,
+         "execution_context": body.result.get("execution_context"), "result": body.result},
     )
     db.commit()
     return {"accepted": True, "state": body.state}
@@ -279,7 +289,7 @@ def dispatch_command(
     job_id: str,
     *,
     idempotency_key: str | None = None,
-    timeout: int = 300,
+    timeout: int = 3600,
 ) -> AgentCommand:
     if operation not in NODE_OPERATIONS:
         raise PermissionDenied("Node operation is not in the compiled allowlist")

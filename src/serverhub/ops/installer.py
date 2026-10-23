@@ -25,10 +25,11 @@ class InstallError(RuntimeError):
 
 
 ACCOUNTS = {
-    "serverhub-api": "/var/lib/serverhub-api",
-    "serverhub-worker": "/var/lib/serverhub-worker",
-    "serverhub-node": "/var/lib/serverhub-node",
-    "serverhub-migrate": "/var/lib/serverhub-migrate",
+    "serverhub-ai-api": "/var/lib/serverhub-ai-api",
+    "serverhub-ai-worker": "/var/lib/serverhub-ai-worker",
+    "serverhub-ai-node": "/var/lib/serverhub-ai-node",
+    "serverhub-ai-staging": "/var/lib/serverhub-ai-stage-runtime",
+    "serverhub-ai-migrate": "/var/lib/serverhub-ai-migrate",
 }
 TRUST_FILES = [
     "packaging/postgresql-grants.sql",
@@ -47,22 +48,28 @@ TRUST_FILES = [
     "src/serverhub/ai/providers.py",
     "src/serverhub/node/watchdog.py",
     "src/serverhub/ops/installer.py",
+    "src/serverhub/ops/coexistence.py",
+    "src/serverhub/ops/runtime_permissions.py",
+    "src/serverhub/ops/migrate_units.py",
+    "src/serverhub/ops/unit_recovery.py",
     "src/serverhub/ops/release.py",
     "src/serverhub/ops/backup.py",
 ]
 CONTROLLER_UNITS = [
-    "serverhub-api.service",
-    "serverhub-worker.service",
-    "serverhub-backup.service",
-    "serverhub-backup.timer",
-    "serverhub-release-watchdog.service",
-    "serverhub-release-watchdog.timer",
+    "serverhub-ai-api.service",
+    "serverhub-ai-worker.service",
+    "serverhub-ai-backup.service",
+    "serverhub-ai-backup.timer",
+    "serverhub-ai-release-watchdog.service",
+    "serverhub-ai-release-watchdog.timer",
 ]
 NODE_UNITS = [
-    "serverhub-node.service",
-    "serverhub-broker.service",
-    "serverhub-recovery.service",
-    "serverhub-recovery.timer",
+    "serverhub-ai-node.service",
+    "serverhub-ai-broker.service",
+    "serverhub-ai-recovery.service",
+    "serverhub-ai-recovery.timer",
+    "serverhub-ai-operation-watchdog.service",
+    "serverhub-ai-operation-watchdog.timer",
 ]
 
 
@@ -132,10 +139,12 @@ class Installer:
         role="controller",
         public_url="https://serverhub.local",
         runner=None,
+        ai_identity=False,
     ):
         self.source = Path(source).resolve()
         self.root = Path(root).absolute()
         self.role = role
+        self.ai_identity = bool(ai_identity)
         self.public_url = public_url.rstrip("/")
         self.runner = runner or subprocess.run
         if not self.public_url.startswith("https://") or any(char in self.public_url for char in "\n\r'\" "):
@@ -200,6 +209,7 @@ class Installer:
             "role": self.role,
             "root": str(self.root),
             "public_url": self.public_url,
+            "ai_identity": self.ai_identity,
             "actions": [
                 "validate Ubuntu/Debian and Python 3.12",
                 "create dedicated nologin service accounts",
@@ -244,8 +254,16 @@ class Installer:
     def _configuration(
         self, api_password, worker_password, migrate_password, *, node_uid, node_gid=None, staged=False
     ):
+        if self.role == "controller":
+            from .sandbox_setup import configure
+            configure(self,staged=staged)
         for unit in self.units():
             self.write("/etc/systemd/system/" + unit, (self.source / "packaging/systemd" / unit).read_text())
+        if self.ai_identity and self.role == "controller":
+            self.write("/etc/systemd/system/serverhub-ai-worker.service.d/10-ai-identity.conf",
+                       "[Service]\nUser=serverhub-ai\nGroup=serverhub-ai-worker\n")
+        self.write("/opt/serverhub/recovery-ai/operation_watchdog.py",
+                   (self.source / "src/serverhub/ops/operation_watchdog.py").read_text(), 0o600)
         self.write("/etc/serverhub/trust-boundaries.sha256", self.trust_digest() + "\n")
         # Python modules share one interpreter and can monkey-patch each other.
         # Anchor the whole package, rather than trusting a manifest's claim that
@@ -273,7 +291,7 @@ class Installer:
             for name, password in (("api", api_password), ("worker", worker_password)):
                 content = (
                     common
-                    + f"SERVERHUB_DATABASE_URL=postgresql+psycopg://serverhub_{name}:{password}@127.0.0.1/serverhub\nSERVERHUB_STATE_DIR=/var/lib/serverhub-{name}\n"
+                    + f"SERVERHUB_DATABASE_URL=postgresql+psycopg://serverhub_{name}:{password}@127.0.0.1/serverhub\nSERVERHUB_STATE_DIR=/var/lib/serverhub-ai-{name}\n"
                 )
                 if name == "api":
                     content += (
@@ -305,12 +323,12 @@ class Installer:
             )
         self.write(
             "/etc/serverhub/node.yaml",
-            f"controller_url: {self.public_url}\nname: {platform.node() or 'serverhub'}\nstate_dir: /var/lib/serverhub-node\ninterval: 60\nbroker_socket: /run/serverhub-broker/control.sock\n# Add a one-time enrollment_token from the owner UI before enabling this node.\n",
+            f"controller_url: {self.public_url}\nname: {platform.node() or 'serverhub'}\nstate_dir: /var/lib/serverhub-ai-node\ninterval: 60\nbroker_socket: /run/serverhub-ai-broker/control.sock\n# Add a one-time enrollment_token from the owner UI before enabling this node.\n",
             0o640,
         )
         self.write(
             "/etc/serverhub/broker.yaml",
-            f"socket: /run/serverhub-broker/control.sock\nallowed_uids: [{node_uid}]\nsocket_gid: {node_gid if node_gid is not None else node_uid}\nallowed_services: []\nallowed_containers: []\ncompose_projects: {{}}\nnetwork_targets: {{}}\nallowed_scan_images: []\nrecovery_directory: /var/lib/serverhub-recovery\n",
+            f"socket: /run/serverhub-ai-broker/control.sock\nallowed_uids: [{node_uid}]\nsocket_gid: {node_gid if node_gid is not None else node_uid}\nallowed_services: []\nallowed_containers: []\ncompose_projects: {{}}\nnetwork_targets: {{}}\nallowed_scan_images: []\nrecovery_directory: /var/lib/serverhub-recovery\n",
             0o600,
         )
         self.write(
@@ -329,6 +347,11 @@ class Installer:
         }
 
     def _run(self, command, *, env=None, stdin=None, timeout=600, cwd="/"):
+        if Path(command[0]).name == "apt-get":
+            # Ubuntu's apt needrestart hook can otherwise restart unrelated
+            # Control daemons. Scope suspension to this subprocess, never edit
+            # host needrestart configuration or mask foreign units.
+            env = dict(os.environ if env is None else env, NEEDRESTART_SUSPEND="1")
         try:
             return self.runner(
                 command,
@@ -359,30 +382,50 @@ class Installer:
         temporary.symlink_to(release)
         os.replace(temporary, current)
 
+    def _health_configuration(self):
+        # Root-only deployment config, independent of the caller's environment.
+        from .repair import read_environment
+        options = {}
+        for filename in ("api.env", "access.env"):
+            path = self.path("/etc/serverhub/" + filename)
+            if path.exists():
+                options.update(read_environment(path))
+        return options.get("SERVERHUB_HEALTH_URL", "http://127.0.0.1:9080"), options.get("SERVERHUB_HEALTH_CA")
+
     def _healthchecks(self, release):
         import httpx
         from serverhub.diagnostics import verify_frontend_http
 
+        import ssl
+        url, ca = self._health_configuration()
+        verification = ssl.create_default_context(cafile=ca) if ca else True
         for attempt in range(30):
             try:
-                with httpx.Client(base_url="http://127.0.0.1:9080", timeout=5, trust_env=False) as client:
+                with httpx.Client(base_url=url, verify=verification, timeout=5, trust_env=False) as client:
                     response = client.get("/health")
                     response.raise_for_status()
                     verify_frontend_http(client)
                 self._run(
-                    ["systemctl", "is-active", "--quiet", "serverhub-api.service", "serverhub-worker.service"]
+                    ["systemctl", "is-active", "--quiet", "serverhub-ai-api.service", "serverhub-ai-worker.service"]
                 )
                 return
             except (httpx.HTTPError, InstallError, ValueError):
                 if attempt == 29:
                     raise InstallError(
-                        "API, worker or frontend health failed. Run sudo serverhub doctor with api.env loaded and inspect journalctl -u serverhub-api -u serverhub-worker. Fix the diagnostic and rerun this command"
+                        "API, worker or frontend health failed. Run sudo serverhub doctor with api.env loaded and inspect journalctl -u serverhub-ai-api -u serverhub-ai-worker. Fix the diagnostic and rerun this command"
                     ) from None
                 time.sleep(1)
 
     def apply(self, *, install_dependencies=False, owner="owner", owner_password=None, enable_broker=False):
         if self.root != Path("/") or os.geteuid() != 0:
             raise InstallError("--apply requires root and root=/; use --stage for isolated validation")
+        from .coexistence import require_safe, write_claim, claim
+        try:
+            require_safe(root=self.root, units=self.units(), runner=self.runner)
+            if claim(self.root) is None:
+                write_claim(self.root)
+        except (RuntimeError, ValueError) as error:
+            raise InstallError(str(error)) from error
         directory = self.path("/var/lib/serverhub-install")
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory.chmod(0o700)
@@ -397,6 +440,8 @@ class Installer:
         journal = self.path("/var/lib/serverhub-install/state.json")
         if journal.exists():
             state = json.loads(journal.read_text())
+            if bool(state.get("ai_identity", False)) != self.ai_identity:
+                raise InstallError("Resume must use the original --ai-identity option; changing service identity requires a reviewed migration")
             if (state["role"], state["public_url"], state["trust_digest"]) != (
                 self.role,
                 self.public_url,
@@ -412,6 +457,7 @@ class Installer:
                 )
             state = {
                 "format": 1,
+                "ai_identity": self.ai_identity,
                 "role": self.role,
                 "public_url": self.public_url,
                 "trust_digest": self.trust_digest(),
@@ -445,7 +491,7 @@ class Installer:
                     "Unsupported OS/architecture/Python. Controller requires Ubuntu 24.04 x86_64 and Python 3.12; run --check"
                 )
             if install_dependencies and "dependencies" not in state["completed"]:
-                packages = ["python3-venv", "ca-certificates", "iproute2", "procps", "util-linux"]
+                packages = ["python3-venv", "python3-pip", "ca-certificates", "iproute2", "procps", "util-linux", "bubblewrap", "git", "apparmor"]
                 if self.role == "controller":
                     packages += ["postgresql-16", "postgresql-client-16"]
                 phase(
@@ -465,8 +511,11 @@ class Installer:
 
             def accounts():
                 selected = (
-                    ACCOUNTS if self.role == "controller" else {"serverhub-node": ACCOUNTS["serverhub-node"]}
+                    ACCOUNTS if self.role == "controller" else {"serverhub-ai-node": ACCOUNTS["serverhub-ai-node"]}
                 )
+                selected = dict(selected)
+                if self.ai_identity and self.role == "controller":
+                    selected["serverhub-ai"] = "/var/lib/serverhub-ai"
                 for name, directory in selected.items():
                     try:
                         entry = pwd.getpwnam(name)
@@ -500,6 +549,9 @@ class Installer:
                     target.mkdir(parents=True, mode=0o700, exist_ok=True)
                     os.chown(target, entry.pw_uid, entry.pw_gid)
                     target.chmod(0o700)
+                if self.ai_identity and self.role == "controller":
+                    os.chown(self.path("/var/lib/serverhub-ai-worker"), pwd.getpwnam("serverhub-ai").pw_uid,
+                             grp.getgrnam("serverhub-ai-worker").gr_gid)
                 for directory, mode in (
                     ("/opt/serverhub", 0o755),
                     ("/var/backups/serverhub", 0o700),
@@ -516,14 +568,15 @@ class Installer:
             release = self.path("/opt/serverhub/releases/" + state["release_id"])
 
             def artifacts():
-                release.mkdir(parents=True, mode=0o755, exist_ok=True)
+                release.mkdir(parents=True, mode=0o700, exist_ok=True)
                 release.parent.chmod(0o755)
-                release.chmod(0o755)
+                release.chmod(0o700)
                 wheels = sorted((self.source / "dist").glob("*.whl"))
                 if len(wheels) != 1:
                     raise InstallError("dist must contain exactly one application wheel")
-                for runtime in (release, self.path("/opt/serverhub/recovery")):
-                    runtime.mkdir(mode=0o755, exist_ok=True)
+                for runtime in (release, self.path("/opt/serverhub/recovery-ai")):
+                    runtime.mkdir(mode=0o700, exist_ok=True)
+                    runtime.chmod(0o700)
                     self._run([sys.executable, "-m", "venv", str(runtime / "venv")])
                     self._run(
                         [
@@ -543,34 +596,28 @@ class Installer:
                     from serverhub.diagnostics import verify_frontend_files
 
                     verify_frontend_files(release / "web")
-                # Code contains no credentials: normalize read/traversal modes for
-                # both runtimes even when the invoking root uses umask 0077.
-                for runtime in (release, self.path("/opt/serverhub/recovery")):
-                    runtime.chmod(0o755)
-                    for target in runtime.rglob("*"):
-                        if target.is_symlink():
-                            continue
-                        if target.is_dir():
-                            target.chmod(target.stat().st_mode | 0o055)
-                        elif target.is_file():
-                            target.chmod(target.stat().st_mode | 0o044)
+                from .runtime_permissions import seal_runtime
+                for runtime in (release, self.path('/opt/serverhub/recovery-ai')):
+                    seal_runtime(runtime)
                 (release / "installed.json").write_text(
                     json.dumps(
                         {
                             "manifest": {
                                 "release_id": state["release_id"],
-                                "schema_revision": "0004_runtime",
+                                "schema_revision": "0005_priority",
                                 "trust_boundary_digest": self.trust_digest(),
                             }
                         }
                     )
                 )
 
+                (release / "installed.json").chmod(0o644)
+
             phase("artifacts", artifacts)
             credentials = state["credentials"]
 
             def configure():
-                node = pwd.getpwnam("serverhub-node")
+                node = pwd.getpwnam("serverhub-ai-node")
                 self._configuration(
                     credentials["api"],
                     credentials["worker"],
@@ -583,7 +630,7 @@ class Installer:
                         f"/etc/serverhub/{name}.env" if name != "node" else "/etc/serverhub/node.yaml"
                     )
                     if target.exists():
-                        os.chown(target, 0, grp.getgrnam("serverhub-" + name).gr_gid)
+                        os.chown(target, 0, grp.getgrnam("serverhub-ai-" + name).gr_gid)
                         target.chmod(0o640)
                 # These contain environment references, never secret values. Every
                 # service can read, but none can replace or write, operator config.
@@ -599,7 +646,7 @@ class Installer:
                 SERVERHUB_DATABASE_URL=f"postgresql+psycopg://serverhub_migrate:{credentials['migrate']}@127.0.0.1/serverhub",
                 SERVERHUB_PUBLIC_URL=self.public_url,
                 SERVERHUB_ALLOWED_ORIGINS=json.dumps([self.public_url]),
-                SERVERHUB_STATE_DIR="/var/lib/serverhub-migrate",
+                SERVERHUB_STATE_DIR="/var/lib/serverhub-ai-migrate",
                 SERVERHUB_RELEASE_DIR=str(release),
             )
             environment.pop("PYTHONPATH", None)
@@ -661,7 +708,7 @@ class Installer:
                         [
                             "runuser",
                             "-u",
-                            "serverhub-migrate",
+                            "serverhub-ai-migrate",
                             "--",
                             str(release / "venv/bin/serverhub"),
                             "migrate",
@@ -693,7 +740,7 @@ class Installer:
                         [
                             "runuser",
                             "-u",
-                            "serverhub-migrate",
+                            "serverhub-ai-migrate",
                             "--",
                             str(release / "venv/bin/serverhub"),
                             "create-user",
@@ -724,16 +771,16 @@ class Installer:
                         "systemctl",
                         "enable",
                         "--now",
-                        "serverhub-api.service",
-                        "serverhub-worker.service",
-                        "serverhub-backup.timer",
-                        "serverhub-release-watchdog.timer",
+                        "serverhub-ai-api.service",
+                        "serverhub-ai-worker.service",
+                        "serverhub-ai-backup.timer",
+                        "serverhub-ai-release-watchdog.timer",
                     ]
                 )
                 self._healthchecks(release)
-            self._run(["systemctl", "enable", "--now", "serverhub-recovery.timer"])
+            self._run(["systemctl", "enable", "--now", "serverhub-ai-recovery.timer", "serverhub-ai-operation-watchdog.timer"])
             if enable_broker:
-                self._run(["systemctl", "enable", "--now", "serverhub-broker.service"])
+                self._run(["systemctl", "enable", "--now", "serverhub-ai-broker.service"])
             state["state"] = "installed"
             state.pop("last_error", None)
             persist()
@@ -761,10 +808,10 @@ class Installer:
                         [
                             "systemctl",
                             "stop",
-                            "serverhub-api.service",
-                            "serverhub-worker.service",
-                            "serverhub-backup.timer",
-                            "serverhub-release-watchdog.timer",
+                            "serverhub-ai-api.service",
+                            "serverhub-ai-worker.service",
+                            "serverhub-ai-backup.timer",
+                            "serverhub-ai-release-watchdog.timer",
                         ]
                     )
                 except InstallError:
@@ -775,6 +822,7 @@ class Installer:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--preflight", action="store_true", help="Read-only coexistence conflict inspection before building or installing")
     action.add_argument("--check", action="store_true")
     action.add_argument("--plan", action="store_true")
     action.add_argument("--stage", action="store_true")
@@ -785,12 +833,16 @@ def main(argv=None):
     parser.add_argument("--public-url", default="https://serverhub.local")
     parser.add_argument("--install-dependencies", action="store_true")
     parser.add_argument("--enable-broker", action="store_true")
+    parser.add_argument("--ai-identity", action="store_true", help="Run worker as dedicated serverhub-ai; no sudo/Docker/broker privileges are granted")
     parser.add_argument("--owner", default="owner")
     parser.add_argument("--owner-password-stdin", action="store_true")
     args = parser.parse_args(argv)
     try:
-        installer = Installer(args.source, root=args.root, role=args.role, public_url=args.public_url)
-        if args.check:
+        installer = Installer(args.source, root=args.root, role=args.role, public_url=args.public_url, ai_identity=args.ai_identity)
+        if args.preflight:
+            from .coexistence import require_safe
+            report = require_safe(root=installer.root, units=installer.units(), live=installer.root == Path('/'))
+        elif args.check:
             report = check_compatibility(args.role, args.source)
         elif args.plan:
             report = installer.plan()
@@ -808,7 +860,7 @@ def main(argv=None):
             )
         print(json.dumps(report, indent=2))
         return 0
-    except (InstallError, OSError, ValueError) as error:
+    except (InstallError, OSError, ValueError, RuntimeError) as error:
         parser.exit(1, f"Installation failed: {error}\n")
 
 

@@ -55,13 +55,13 @@ export function ModelSetup() {
 
 export function ProfileSetup() {
   const [hosts, setHosts] = useState<Json[]>([]), [users, setUsers] = useState<Json[]>([]);
-  const [profile, setProfile] = useState("read_only"), [message, setMessage] = useState(""), [error, setError] = useState(""), [busy, setBusy] = useState(false);
+  const [allowStaging, setAllowStaging] = useState(false), [profile, setProfile] = useState("read_only"), [message, setMessage] = useState(""), [error, setError] = useState(""), [busy, setBusy] = useState(false);
   useEffect(() => { Promise.all([api<Json[]>("/hosts"), api<Json[]>("/users")]).then(([h,u]) => { setHosts(h); setUsers(u); }).catch(e => setError(e.message)); }, []);
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget); setBusy(true); setError("");
     const names = (key: string) => String(form.get(key) || "").split(",").map(v => v.trim()).filter(Boolean);
     try {
-      const result = await post("/policies/profiles", { profile, subject_id: form.get("subject_id"), host_id: form.get("host_id"), hours: Number(form.get("hours")), project: form.get("project") || null, services: names("services"), containers: names("containers"), network_targets: names("network_targets"), allow_dependency_network: form.get("allow_dependency_network") === "on" });
+      const result = await post("/policies/profiles", { profile, subject_id: form.get("subject_id"), host_id: form.get("host_id") || null, allow_staging: allowStaging, allow_publication: form.get("allow_publication") === "on", hours: Number(form.get("hours")), project: form.get("project") || null, services: names("services"), containers: names("containers"), network_targets: names("network_targets"), storage_targets: names("storage_targets"), backup_targets: names("backup_targets"), package_targets: names("package_targets"), configuration_targets: names("configuration_targets"), compose_targets: names("compose_targets"), allow_dependency_network: form.get("allow_dependency_network") === "on" });
       setMessage(result.message);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
@@ -70,13 +70,14 @@ export function ProfileSetup() {
     <form onSubmit={submit}><div className="form-grid">
       <label>Autonomy profile<select value={profile} onChange={e => setProfile(e.target.value)}><option value="read_only">Read-only autonomy</option><option value="maintenance">Maintenance autonomy</option><option value="development">Development autonomy</option></select></label>
       <label>Authenticated account<select name="subject_id" required><option value="">Select account</option>{users.filter(u => u.enabled !== false).map(u => <option key={u.id} value={u.id}>{u.username} ({u.role})</option>)}</select></label>
-      <label>Target host<select name="host_id" required><option value="">Select enrolled host</option>{hosts.filter(h => !h.revoked).map(h => <option key={h.id} value={h.id}>{h.name}</option>)}</select></label>
+      <label>Target host<select name="host_id" required={profile !== "development" || allowStaging}><option value="">{profile === "development" ? "Controller-only development" : "Select enrolled host"}</option>{hosts.filter(h => !h.revoked).map(h => <option key={h.id} value={h.id}>{h.name}</option>)}</select></label>
       <label>Expires after (hours)<input name="hours" type="number" min="1" max="8784" defaultValue="24" required /></label>
-      <label>Allowed service names<input name="services" placeholder="example.service, other.service" /></label>
-      <label>Allowed fixed network target names<input name="network_targets" placeholder="internet, gateway" /></label>
-      {profile === "maintenance" && <label>Allowed container names<input name="containers" placeholder="homepage, uptime-kuma" /></label>}
-      {profile === "development" && <><label>Registered project<input name="project" required /></label><label className="check-label"><input name="allow_dependency_network" type="checkbox" />Allow dependency installation network in its isolated workspace</label></>}
-    </div><button className="button primary" disabled={busy || !hosts.length}>Grant expiring profile</button></form>
+      {profile !== "development" && <><label>Allowed service names<input name="services" placeholder="example.service, other.service" /></label>
+      <label>Approved storage target names<input name="storage_targets" placeholder="data (broker allowlist required)" /></label>
+      <label>Allowed fixed network target names<input name="network_targets" placeholder="internet, gateway" /></label></>}
+      {profile === "maintenance" && <><label>Allowed container names<input name="containers" placeholder="homepage, uptime-kuma" /></label><label>Enrolled backup plans<input name="backup_targets" /></label><label>Enrolled package plans<input name="package_targets" /></label><label>Enrolled configuration plans<input name="configuration_targets" /></label><label>Enrolled Compose update plans<input name="compose_targets" /></label></>}
+      {profile === "development" && <><label className="check-label"><input type="checkbox" checked={allowStaging} onChange={e => setAllowStaging(e.target.checked)} />Allow isolated staging on the selected host (separate broker enrollment required)</label><label>Registered project<input name="project" required /></label><label className="check-label"><input name="allow_publication" type="checkbox" />Allow draft PR publication (root-registered GitHub repository, paths and API credential required)</label><label className="check-label"><input name="allow_dependency_network" type="checkbox" />Allow dependency installation network in its isolated workspace</label></>}
+    </div><button className="button primary" disabled={busy || (!hosts.length && profile !== "development")}>Grant expiring profile</button></form>
     <p className="muted">If a job is already approval-blocked, grant only its intended scope here, then resume that same job. Saved steps are retained.</p>
   </section>;
 }

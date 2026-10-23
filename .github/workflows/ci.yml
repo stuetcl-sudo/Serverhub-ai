@@ -69,18 +69,64 @@ jobs:
   native-ubuntu:
     runs-on: ubuntu-24.04
     needs: frontend
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Prepare preinstalled PostgreSQL in the disposable runner
+        run: sudo systemctl start postgresql.service
+      - name: Secure shared image directories on this disposable CI VM only
+        run: sudo chown root:root /opt /var/log && sudo chmod 0755 /opt /var/log
       - name: Build through the documented fresh-Ubuntu workflow
         run: ./scripts/install-ubuntu.sh --build-only
       - name: Native install, interruption, resume, model setup, delegated job and upgrade
+        id: native_install
         run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-native-ubuntu.py
+      - name: Actual package transactions and database-consistent Docker restore
+        run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-host-operations.py
+      - name: Real qwen autonomous Jarvis source repair and native staging rollback
+        if: always() && steps.native_install.outcome == 'success'
+        run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-jarvis-pilot.py
+      - name: Confirm Control fixtures survived all host and staging operations
+        if: always() && steps.native_install.outcome == 'success'
+        run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true python3 scripts/coexistence-fixture.py
       - name: Native service diagnostics
         if: failure()
         run: |
-          sudo systemctl status serverhub-api serverhub-worker --no-pager || true
-          sudo journalctl -u serverhub-api -u serverhub-worker --no-pager -n 100 || true
+          sudo cat /var/lib/serverhub-broker/diagnostics/latest.json || true
+          sudo journalctl -k --grep='apparmor="DENIED"' --no-pager -n 10 || true
+          sudo systemctl show serverhub-ai-broker -p CapabilityBoundingSet -p NoNewPrivileges -p User -p Group -p SystemCallFilter
+          sudo systemctl status serverhub-ai-api serverhub-ai-worker serverhub-ai-broker serverhub-ai-operation-watchdog.timer serverhub-ai-operation-watchdog.service --no-pager || true
+          sudo journalctl -u serverhub-ai-api -u serverhub-ai-worker -u serverhub-ai-broker -u serverhub-ai-operation-watchdog.service --no-pager -n 100 || true
+  legacy-unit-migration:
+    strategy:
+      fail-fast: false
+      matrix:
+        legacy: ['1905abcc244767cc58a2dbbf950e033be940c6ed', '7da8bead09c01f9f174c70b937af7cb18ce7cbd8']
+    runs-on: ubuntu-24.04
+    needs: frontend
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Start the disposable image PostgreSQL for legacy read-only preflight
+        run: sudo systemctl start postgresql.service
+      - name: Secure shared image directories on this disposable CI VM only
+        run: sudo chown root:root /opt /var/log && sudo chmod 0755 /opt /var/log
+      - name: Build reviewed candidate without changing the installed namespace
+        run: ./scripts/install-ubuntu.sh --build-only
+      - name: Prepare exact previous release artifacts
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/serverhub-legacy" ${{ matrix.legacy }}
+          cp -a frontend/dist "$RUNNER_TEMP/serverhub-legacy/frontend/dist"
+          .build-venv/bin/python -m build "$RUNNER_TEMP/serverhub-legacy"
+      - name: Actual old installation, failed migration recovery and successful retry
+        run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-unit-migration.py "$RUNNER_TEMP/serverhub-legacy"
+      - name: Migration recovery diagnostics
+        if: failure()
+        run: |
+          sudo systemctl status serverhub-ai-api serverhub-ai-worker serverhub-ai-namespace-recovery.timer serverhub-api serverhub-worker --no-pager || true
+          sudo journalctl -u serverhub-ai-api -u serverhub-ai-worker -u serverhub-ai-namespace-recovery --no-pager -n 80 || true

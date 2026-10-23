@@ -4,6 +4,6 @@ Description=Check armed independent configuration rollback journals
 OnBootSec=15
 OnUnitActiveSec=5
 AccuracySec=1
-Unit=serverhub-recovery.service
+Unit=serverhub-ai-recovery.service
 [Install]
 WantedBy=timers.target

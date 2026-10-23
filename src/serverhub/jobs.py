@@ -22,7 +22,18 @@ from .settings import get_settings
 
 HANDLERS: dict[str, object] = {}
 TERMINAL = {"succeeded", "partial", "failed", "cancelled"}
-RUNNABLE = {"queued", "retry"}
+RUNNABLE = {"queued", "retry", "waiting_children"}
+
+
+def parent_stopped(db,job):
+    if not job.parent_id:
+        return False
+    parent=db.get(Job,job.parent_id)
+    if parent:
+        db.refresh(parent)
+    return not parent or parent.owner_id!=job.owner_id or parent.state in TERMINAL or bool(
+        parent.started_at and (utcnow()-parent.started_at).total_seconds()>=parent.time_limit)
+
 
 
 class RetryableError(Exception):
@@ -33,7 +44,18 @@ class BudgetExceeded(Exception):
     pass
 
 
+class PreflightRejected(BudgetExceeded):
+    """No request or tool work in this execution attempt; pause without retry burn."""
+    def __init__(self, message, diagnostics=None):
+        super().__init__(message)
+        self.diagnostics = diagnostics or {}
+
+
 class JobCancelled(Exception):
+    pass
+
+
+class WaitingChildren(Exception):
     pass
 
 
@@ -70,7 +92,28 @@ def _event(db, job: Job, message: str, data=None, level="info"):
 def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | None = None,
                project: str | None = None, parent_id: str | None = None, depends_on: list | None = None,
                idempotency_key: str | None = None, run_after=None, max_attempts: int = 3,
-               time_limit: int = 3600, token_budget: int = 20000, cost_budget: float = 1.0) -> Job:
+               time_limit: int = 3600, token_budget: int = 20000, cost_budget: float = 1.0, priority: int = 0) -> Job:
+    if kind in {"development", "development_autonomous"}:
+        from .development.config import configured_projects
+        if not isinstance(spec, dict) or not isinstance(spec.get("project"), str):
+            raise ValueError("Development jobs require a registered project")
+        if project is None:
+            project = spec["project"]
+        if project != spec["project"] or project not in configured_projects():
+            raise ValueError("Authenticated job project and registered specification must match")
+        if spec.get("stage") is True and not host_id:
+            raise ValueError("Isolated staging requires an explicitly selected enrolled host; controller-only checks do not need one")
+    elif kind == "autonomous" and host_id is None:
+        from .policy import visible_host_ids
+        choices = visible_host_ids(db, principal)
+        if len(choices) == 1:
+            host_id = choices[0]
+        else:
+            raise ValueError("Select an enrolled host before inspecting infrastructure: no unambiguous authorized host is available")
+    if kind in {"autonomous", "development", "development_autonomous"} and host_id:
+        selected_host = db.get(Host, host_id)
+        if not selected_host or selected_host.revoked:
+            raise ValueError("Select an enrolled, non-revoked host")
     authorize(db, principal, "job.submit", host_id, project)
     if kind not in HANDLERS:
         raise ValueError(f"Unknown job kind: {kind}")
@@ -79,6 +122,8 @@ def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | N
     if not (1 <= max_attempts <= 10 and 1 <= time_limit <= 86400 and 0 <= token_budget <= 2_000_000
             and math.isfinite(cost_budget) and 0 <= cost_budget <= 1000):
         raise ValueError("job execution limits outside supported bounds")
+    if isinstance(priority, bool) or not isinstance(priority, int) or not -100 <= priority <= 100:
+        raise ValueError("priority must be -100..100")
     dependencies = depends_on or []
     for dependency in dependencies + ([parent_id] if parent_id else []):
         linked = db.get(Job, dependency)
@@ -106,7 +151,7 @@ def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | N
             authorize(db, principal, step.get("operation", ""), host_id, project, step.get("arguments", {}),
                       bool(step.get("production", False)))
     job = Job(owner_id=principal.id, kind=kind, spec=spec, host_id=host_id, project=project,
-              parent_id=parent_id, depends_on=dependencies, idempotency_key=idempotency_key,
+              parent_id=parent_id, depends_on=dependencies, idempotency_key=idempotency_key, priority=priority,
               run_after=run_after or utcnow(), max_attempts=max_attempts, time_limit=time_limit,
               token_budget=token_budget, cost_budget=cost_budget)
     db.add(job)
@@ -127,6 +172,8 @@ class JobContext:
         self.db.refresh(self.job)
         if self.job.worker_id != self.worker_id or (self.job.lease_until and self.job.lease_until <= utcnow()):
             raise LeaseLost("Job lease expired or was claimed by another worker")
+        if parent_stopped(self.db,self.job):
+            raise JobCancelled("Parent task finished or its execution deadline expired")
         if self.job.state in {"cancel_requested", "cancelled"}:
             raise JobCancelled("Job cancelled")
         if self.job.state in {"pause_requested", "paused"}:
@@ -165,6 +212,56 @@ class JobContext:
         if progress is not None:
             self.job.progress = max(0.0, min(float(progress), 1.0))
         self.db.commit()
+
+    def _model_accounting_job(self):
+        # Usage settlement is allowed after cancellation/timeout, but never by
+        # an old worker after ownership changed. Serialize with lease recovery.
+        self.db.refresh(self.job, with_for_update=True)
+        if self.job.worker_id != self.worker_id or self.job.state not in {"running", "pause_requested", "cancel_requested"}:
+            raise LeaseLost("Model accounting lease belongs to another worker")
+
+    def reconcile_model_reservation(self):
+        self._model_accounting_job()
+        checkpoint = dict(self.job.checkpoint or {})
+        reservation = checkpoint.pop("model_request_reservation", None)
+        if reservation is not None:
+            # Already charged before dispatch. Unknown outcome must never be
+            # refunded by a restarted worker. Clear atomically, charge once.
+            self.job.checkpoint = checkpoint
+            _event(self.db, self.job, "Retained uncertain model reservation after restart", {
+                "reserved_units": reservation["reserved_units"], "reserved_cost": reservation["reserved_cost"]})
+        self.db.commit()
+
+    def reserve_model_request(self, units, cost):
+        self._model_accounting_job()
+        self.check_cancelled()
+        if isinstance(units, bool) or not isinstance(units, int) or units < 0 or not math.isfinite(cost) or cost < 0:
+            raise ValueError("Invalid model reservation")
+        if self.job.tokens_used + units > self.job.token_budget or self.job.cost_used + cost > self.job.cost_budget:
+            raise BudgetExceeded("Model reservation exceeds remaining job budget")
+        checkpoint = dict(self.job.checkpoint or {})
+        if checkpoint.get("model_request_reservation"):
+            raise RuntimeError("Previous model reservation must be settled first")
+        checkpoint["model_request_reservation"] = {"base_units": self.job.tokens_used,
+            "base_cost": self.job.cost_used, "reserved_units": units, "reserved_cost": cost}
+        self.job.tokens_used += units
+        self.job.cost_used += cost
+        self.job.checkpoint = checkpoint
+        self.db.commit()  # reservation and debit precede any external request
+
+    def record_model_usage(self, total_units, total_cost):
+        self._model_accounting_job()
+        checkpoint = dict(self.job.checkpoint or {})
+        reservation = checkpoint.get("model_request_reservation")
+        base_units = reservation["base_units"] if reservation else self.job.tokens_used
+        base_cost = reservation["base_cost"] if reservation else self.job.cost_used
+        if (isinstance(total_units, bool) or not isinstance(total_units, int) or total_units < base_units
+                or not math.isfinite(total_cost) or total_cost < base_cost):
+            raise ValueError("Model settlement cannot refund earlier requests")
+        self.job.tokens_used, self.job.cost_used = total_units, total_cost
+        checkpoint.pop("model_request_reservation", None)
+        self.job.checkpoint = checkpoint
+        self.db.commit()  # actual usage/refund and ledger clear are one transaction
 
     def usage(self, tokens: int, cost: float):
         if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0 or not math.isfinite(cost) or cost < 0:
@@ -215,10 +312,14 @@ def _classify(exc):
         return "waiting_approval", "policy", False
     if isinstance(exc, JobCancelled):
         return "cancelled", "cancelled", False
+    if isinstance(exc, WaitingChildren):
+        return "waiting_children", "dependency_wait", False
     if isinstance(exc, JobPaused):
         return "paused", "paused", False
     if isinstance(exc, LeaseLost):
         return "failed", "lease_lost", False
+    if isinstance(exc, PreflightRejected):
+        return "paused", "preflight", False
     if isinstance(exc, BudgetExceeded):
         return "failed", "budget", False
     if isinstance(exc, TimeoutError):
@@ -248,7 +349,7 @@ def execute_job(job_id: str, worker_id: str):
             ctx.check_cancelled()
             job.result = redact(result if isinstance(result, dict) else {"value": result})
             job.progress = 1.0
-            unverified = job.result.get("completed") is False or (job.kind == "autonomous" and not job.result.get("verified"))
+            unverified = job.result.get("completed") is False or (job.kind in {"autonomous", "development", "development_autonomous"} and not job.result.get("verified"))
             job.state = "partial" if unverified else "succeeded"
             job.finished_at = utcnow()
             job.error = None
@@ -265,6 +366,10 @@ def execute_job(job_id: str, worker_id: str):
             if retryable and job.attempts >= job.max_attempts:
                 state = "failed"
             job.state = state
+            if isinstance(exc, PreflightRejected):
+                job.attempts = max(0, job.attempts - 1)
+                job.result = {"completed": False, "preflight": exc.diagnostics,
+                              "verification": "No provider request or tool execution in this attempt. Correct the configuration/scope and resume, or submit a separately authorized larger-budget job."}
             job.failure_class = failure_class
             job.error = redact(str(exc))[:4000]
             if isinstance(exc, PermissionDenied):
@@ -339,16 +444,33 @@ class Worker:
                 db.commit()
                 return None
             candidates = db.scalars(select(Job).where(Job.state.in_(RUNNABLE), Job.run_after <= utcnow())
-                                    .order_by(Job.run_after, Job.created_at).limit(100)
+                                    .order_by(Job.priority.desc(), Job.run_after, Job.created_at).limit(100)
                                     .with_for_update(skip_locked=True)).all()
             chosen = None
             for job in candidates:
+                if parent_stopped(db,job):
+                    job.state,job.failure_class,job.error="cancelled","parent_stopped","Parent task finished or its execution deadline expired"
+                    job.finished_at=utcnow()
+                    _event(db,job,job.error)
+                    continue
                 if job.host_id:
                     host_running = db.scalar(select(func.count()).select_from(Job).where(
                         Job.host_id == job.host_id, Job.state.in_(["running", "pause_requested", "cancel_requested"])))
                     if host_running >= settings.max_host_jobs:
                         continue
+                if job.started_at and (utcnow()-job.started_at).total_seconds() >= job.time_limit:
+                    job.state, job.failure_class, job.error = "failed", "timeout", "Task deadline exceeded while awaiting dependencies"
+                    job.finished_at = utcnow()
+                    _event(db, job, job.error)
+                    continue
                 dependencies = [db.get(Job, dep) for dep in job.depends_on]
+                # A delegated child failure is an observation for the parent planner,
+                # while an ordinary failed prerequisite still blocks execution.
+                if job.state == "waiting_children":
+                    pending_children = [dep for dep in dependencies if dep and dep.parent_id == job.id]
+                    if any(dep.state not in TERMINAL for dep in pending_children):
+                        continue
+                    dependencies = [dep for dep in dependencies if dep not in pending_children]
                 if any(dep is None or dep.state in {"failed", "partial", "cancelled"} for dep in dependencies):
                     job.state = "failed"
                     job.failure_class = "dependency"
@@ -361,8 +483,10 @@ class Worker:
                 chosen = job
                 break
             if chosen:
+                continuation = chosen.state == "waiting_children"
                 chosen.state = "running"
-                chosen.attempts += 1
+                if not continuation:
+                    chosen.attempts += 1
                 chosen.started_at = chosen.started_at or utcnow()
                 chosen.worker_id = self.worker_id
                 chosen.lease_until = utcnow() + timedelta(seconds=settings.lease_seconds)
@@ -385,6 +509,8 @@ class Worker:
                     interrupted = ("failed", "lease_lost")
                 elif job.state == "cancel_requested" or self.stopping:
                     interrupted = ("cancelled" if not self.stopping else "retry", "cancelled" if not self.stopping else "worker_shutdown")
+                elif parent_stopped(db,job):
+                    interrupted = ("cancelled", "parent_stopped")
                 elif job.state == "pause_requested":
                     interrupted = ("paused", "paused")
                 elif job.started_at and (utcnow() - job.started_at).total_seconds() >= job.time_limit:

@@ -141,6 +141,7 @@ describe("control center integration", () => {
     });
     render(<App />);
     await screen.findByLabelText("Describe your task");
+    await within(screen.getByLabelText("Target host")).findByRole("option", { name: /Linux node A/ });
     await userEvent.selectOptions(
       screen.getByLabelText("Target host"),
       "host-a",
@@ -205,6 +206,7 @@ describe("control center integration", () => {
       within(dialog).getByLabelText("Role"),
       "adult",
     );
+    await within(within(dialog).getByLabelText("Host")).findByRole("option", { name: /Linux node A/ });
     await userEvent.selectOptions(
       within(dialog).getByLabelText("Host"),
       "host-a",
@@ -312,6 +314,7 @@ describe("control center integration", () => {
     mockBackend();
     render(<App />);
     await screen.findByRole("navigation");
+    await waitFor(() => expect(FakeEventSource.instances[0]?.listeners.has("expired")).toBe(true));
     FakeEventSource.instances[0].emit("expired");
     expect(
       await screen.findByRole("button", { name: "Sign in" }),
@@ -415,8 +418,9 @@ it("submits configured development workflow without arbitrary command arguments"
   await userEvent.click(
     await screen.findByRole("button", { name: "Run project workflow" }),
   );
+  await userEvent.selectOptions(screen.getByLabelText(/Enrolled staging host ID/), "host-a");
   await userEvent.click(
-    screen.getByLabelText("Include configured staging checks"),
+    screen.getByLabelText(/Deploy to enrolled isolated staging/),
   );
   await userEvent.click(
     screen.getByRole("button", { name: "Submit workflow" }),
@@ -427,6 +431,7 @@ it("submits configured development workflow without arbitrary command arguments"
   );
   expect(JSON.parse(String(call?.[1]?.body))).toEqual({
     kind: "development",
+    host_id: "host-a",
     project: "jarvis",
     spec: { project: "jarvis", stage: true },
   });
@@ -468,4 +473,54 @@ it("renders persisted fractional job progress as a completed percentage", async 
   render(<App />);
   expect(await screen.findByText("100%")).toBeInTheDocument();
   expect(screen.queryByText("1%")).not.toBeInTheDocument();
+});
+
+
+it("loads scoped structural history when the host Changes tab is selected", async () => {
+  window.location.hash = "#hosts";
+  const fetch = mockBackend({
+    "/api/hosts/host-a/inventory": host.inventory,
+    "/api/hosts/host-a/inventory/history": [{ id: 1, collection_errors: 0, diff: { sections: {
+      containers: { status: "compared", removed: ["retired-container"], counts: { removed: 1 } }
+    } } }],
+  });
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: /Linux node A/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Changes" }));
+  expect(await screen.findByText("removed: retired-container")).toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledWith("/api/hosts/host-a/inventory/history", expect.any(Object));
+});
+
+it("launches a persistent read-only host audit without a model budget", async () => {
+  window.location.hash = "#hosts";
+  const fetch = mockBackend({ "POST /api/jobs": { id: "audit-1", state: "queued" } });
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: /Linux node A/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Run read-only audit" }));
+  await waitFor(() => expect(fetch.mock.calls.some(([path, options]) => path === "/api/jobs" && options?.method === "POST")).toBe(true));
+  const call = fetch.mock.calls.find(([path, options]) => path === "/api/jobs" && options?.method === "POST")!;
+  expect(JSON.parse(String(call[1]?.body))).toEqual({ kind: "operation", host_id: "host-a", spec: { operation: "host.audit", arguments: {} }, token_budget: 0, cost_budget: 0 });
+});
+
+it("submits a scoped autonomous project task and staging host without executable arguments", async () => {
+  window.location.hash = "#projects";
+  const result = { id: "auto-dev", kind: "development_autonomous", state: "queued", attempts: 0, max_attempts: 3, result: {} };
+  const f = mockBackend({
+    "/api/projects": [{ name: "jarvis", base_ref: "main", build_steps: 1, test_steps: 1, independent_checks: 1, staging_checks: 0, production_deployment: false }],
+    "POST /api/jobs": result,
+    "/api/jobs/auto-dev": result,
+    "/api/jobs/auto-dev/events": [],
+  });
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "Run project workflow" }));
+  await userEvent.type(screen.getByLabelText(/Autonomous development task/), "Repair the application version");
+  await userEvent.selectOptions(screen.getByLabelText(/Enrolled staging host ID/), "host-a");
+  await userEvent.click(screen.getByLabelText(/Deploy to enrolled isolated staging/));
+  await userEvent.click(screen.getByRole("button", { name: "Submit workflow" }));
+  await screen.findByText("Job execution");
+  const call = f.mock.calls.find(([path, options]) => path === "/api/jobs" && options?.method === "POST");
+  expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+    kind: "development_autonomous", host_id: "host-a", project: "jarvis",
+    spec: { project: "jarvis", prompt: "Repair the application version", stage: true },
+  });
 });

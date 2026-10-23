@@ -9,12 +9,15 @@ Ubuntu Server 24.04 x86_64 VM with at least 2 GB RAM and normal sudo access.
 Check out the reviewed source revision. During review of this overhaul:
 
 ```sh
-git clone --branch overhaul/stability-autonomy https://github.com/stuetcl-sudo/Serverhub-ai.git serverhub-ai-os
+git clone --branch release/production-readiness https://github.com/stuetcl-sudo/Serverhub-ai.git serverhub-ai-os
 cd serverhub-ai-os
-./scripts/install-ubuntu.sh --public-url https://serverhub.example.net --owner dennis
+./scripts/install-ubuntu.sh --public-url https://serverhub.example.net --owner dennis --ai-identity
 ```
 
-After this branch is merged, clone the reviewed `main` or a release ref instead.
+Pin the reviewed commit with git checkout before running the workflow. This is the
+unmerged release candidate; consult [delegated administration](delegated-administration.md)
+and current CI evidence before any production enrollment. After review/merge,
+use the reviewed main branch or signed release ref instead.
 Run the wrapper as your normal user. It validates Ubuntu/Python, installs apt
 prerequisites, downloads an official SHA256-pinned Node.js 22.23.4 build into
 `.build-tools`, installs hashed Python runtime dependencies in `.build-venv`, builds
@@ -23,8 +26,8 @@ replace the system's Node or install the controller in Docker. TLS access to apt
 PyPI, npm and nodejs.org is required; use reviewed caches for an offline environment.
 The build tools are pinned; apt security updates are intentionally not frozen.
 
-The installer creates dedicated `serverhub-api`, `serverhub-worker`,
-`serverhub-node`, and `serverhub-migrate` accounts; a separate `serverhub` database
+The installer creates dedicated `serverhub-ai-api`, `serverhub-ai-worker`,
+`serverhub-ai-node`, `serverhub-ai-staging`, and `serverhub-ai-migrate` accounts; a separate `serverhub` database
 and roles; root-owned release files; hardened systemd units; protected configuration;
 and initial owner credentials. It does not edit existing SSH, firewall, VPN, Docker
 workloads or reverse-proxy configuration. PostgreSQL package installation starts a
@@ -52,7 +55,7 @@ Do not delete the journal or environment files to bypass a failure. For a failur
 
 ```sh
 sudo cat /var/lib/serverhub-install/last-command-error.log
-sudo journalctl -u serverhub-api -u serverhub-worker -n 100 --no-pager
+sudo journalctl -u serverhub-ai-api -u serverhub-ai-worker -n 100 --no-pager
 ```
 
 Command stderr is protected because it may contain sensitive connection details.
@@ -74,7 +77,10 @@ same-origin asset requests are accepted. Cookie writes still require the exact
 same loopback Origin. Non-secure cookies are allowed only on an HTTP loopback
 request whose direct peer is also loopback; public access keeps Secure cookies.
 Never expose port 9080 on an untrusted network. For normal multi-node use, configure
-a trusted HTTPS proxy matching the supplied public URL. An nginx example is in
+a trusted HTTPS proxy matching the supplied public URL, or use the native API's
+certificate-verified TLS listener. Follow [persistent authenticated access](persistent-access.md)
+for the systemd access environment and exact key/CA permissions; this survives
+service restarts and does not depend on an SSH terminal. An nginx example is in
 `packaging/config/nginx.conf.example`; an existing proxy is not overwritten.
 
 The first-run wizard guides you through:
@@ -125,8 +131,8 @@ sudo env PYTHONPATH="$PWD/src" .build-venv/bin/python -m serverhub.ops.installer
 
 The controller's public HTTPS certificate must be trusted by that node. Set `name`
 and the one-use `enrollment_token` in `/etc/serverhub/node.yaml` locally as root;
-keep root ownership, group `serverhub-node`, mode 0640. A private CA can be supplied
-with `ca_bundle`. Then start `serverhub-node.service`. The resulting individual
+keep root ownership, group `serverhub-ai-node`, mode 0640. A private CA can be supplied
+with `ca_bundle`. Then start `serverhub-ai-node.service`. The resulting individual
 identity and durable command journal are private to the node account. Remove the
 consumed token from the configuration. Revocation requires a new owner enrollment.
 
@@ -137,6 +143,11 @@ fixed target allowlists. A controller grant cannot create or bypass a broker
 allowlist. No worker account receives sudo, root SSH or Docker socket access.
 
 ## Self-diagnostics
+
+For an existing installation, use [the one-command installed verifier](installed-verification.md)
+to check authenticated API/assets/worker health and optionally run a live model
+probe and fixed read-only inventory job. It never runs the destructive fresh-CI
+installation scripts on your VM.
 
 **Setup & diagnostics** checks database/migration revisions, fresh worker heartbeats,
 model configuration and timestamped readiness evidence, API-readable assets,
@@ -154,3 +165,5 @@ sudo sh -c 'set -a; . /etc/serverhub/api.env; set +a; \
 It reports actionable findings and never repairs or broadens permissions. The
 controller cannot inspect another service's mount namespace directly; systemd path
 checks and node broker evidence state their scope explicitly.
+
+See [Control coexistence and legacy unit migration](control-coexistence.md) before installing alongside ServerHub Control or upgrading generic `serverhub-*.service` AI OS units. New AI OS services use `serverhub-ai-*`; never stop or replace Control units.

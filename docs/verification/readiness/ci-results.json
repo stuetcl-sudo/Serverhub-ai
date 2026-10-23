@@ -1,0 +1,38 @@
+{
+  "commit": "77374d7302a0d02bd1d27184c44ddb1bb5004c41",
+  "run": "https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39920897882",
+  "backend": {
+    "passed": 219,
+    "skipped": 4,
+    "warning": "Starlette/httpx testclient deprecation",
+    "skip_reasons": [
+      "3 root-only fixture checks on unprivileged hosted test runner",
+      "optional real Ollama endpoint not configured"
+    ]
+  },
+  "frontend": {
+    "passed": 30,
+    "build": "TypeScript/Vite passed"
+  },
+  "dependencies": "pip-audit and npm audit passed",
+  "native_ubuntu_24_04": {
+    "native_install": "passed",
+    "dedicated_ai_identity": "serverhub-ai",
+    "persistent_authenticated_tls": "passed",
+    "correlated_root_broker_audit": "passed",
+    "ai_direct_broker_access": "denied",
+    "interruption_resume": "passed",
+    "idempotency": "passed",
+    "api_worker": "healthy",
+    "model_setup": "mock Ollama API verified",
+    "preflight_pause_refund_resume": "passed",
+    "read_only_autonomous_job": "succeeded",
+    "read_only_host_audit": "partial",
+    "unauthorized_restart": 403,
+    "upgrade": "upgraded",
+    "failed_upgrade_rollback": "passed",
+    "independent_watchdog_rollback": "passed",
+    "database_backup_id": "20261023T075638Z-82084df3e9a3"
+  },
+  "production_deployment": false
+}

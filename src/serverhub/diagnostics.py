@@ -79,6 +79,14 @@ def collect_diagnostics(db):
         )
 
     try:
+        from .development.config import load_projects, DevelopmentError
+        projects = load_projects()
+        add("projects", "ok", "Registered project configuration validated", count=len(projects))
+    except (DevelopmentError, OSError, ValueError):
+        add("projects", "error", "Registered project configuration is unavailable or invalid",
+            "Validate root-owned /etc/serverhub/projects.yaml; projects must be an array. Do not make trust anchors writable to the worker")
+
+    try:
         from alembic.script import ScriptDirectory
         from .cli import _alembic_config
 
@@ -98,7 +106,7 @@ def collect_diagnostics(db):
             "database",
             "error",
             "Database connectivity or migration lookup failed",
-            "Check API database credentials and run serverhub migrate from the installed release as serverhub-migrate",
+            "Check API database credentials and run serverhub migrate from the installed release as serverhub-ai-migrate",
         )
     try:
         workers = db.scalars(
@@ -110,7 +118,7 @@ def collect_diagnostics(db):
             "worker",
             "ok" if workers else "error",
             f"{len(workers)} worker heartbeat(s) in the last 60 seconds",
-            "Inspect journalctl -u serverhub-worker; check sandbox paths, worker.env permissions and database grants",
+            "Inspect journalctl -u serverhub-ai-worker; check sandbox paths, worker.env permissions and database grants",
             workers=[{"id": r.worker_id, "job_id": r.job_id} for r in workers],
         )
     except Exception:
@@ -121,12 +129,15 @@ def collect_diagnostics(db):
             "Worker heartbeat table unavailable",
             "Apply migration 0004_runtime and PostgreSQL grants",
         )
+    database_routes = False
     try:
         from .ai.providers import load_routes
         from .models import ModelRoute
 
         routes = load_routes()
-        readiness = {row.name: row.readiness for row in db.scalars(select(ModelRoute)).all()}
+        saved_routes = db.scalars(select(ModelRoute)).all()
+        database_routes = bool(saved_routes)
+        readiness = {row.name: row.readiness for row in saved_routes}
         add(
             "models",
             "ok" if "default" in routes else "error",
@@ -154,6 +165,10 @@ def collect_diagnostics(db):
                     "",
                     directory=str(target),
                 )
+            elif database_routes:
+                add(label, "ok", "Database routes are authoritative; unused fallback remains private",
+                    "Do not broaden permissions on a legacy file that may contain credentials",
+                    active=False)
             elif target.exists():
                 metadata = target.stat()
                 readable = os.access(target, os.R_OK)
@@ -180,7 +195,18 @@ def collect_diagnostics(db):
                 str(exc)[:300],
                 "Check directory traversal and asset modes with namei -l; rebuild assets if missing",
             )
-    for name in ("serverhub-api.service", "serverhub-worker.service"):
+    import subprocess
+    try:
+        probe = subprocess.run(["systemctl", "is-active", "serverhub-ai-broker.service"],
+                               text=True, capture_output=True, timeout=5, cwd="/")
+        add("ai_broker", "ok" if probe.returncode == 0 else "warning",
+            "AI broker active" if probe.returncode == 0 else "AI broker inactive; controller-only development still works",
+            "Host diagnostics and runtime staging require the separate serverhub-ai-broker.service. After reviewed installation/enrollment use sudo systemctl enable --now serverhub-ai-broker.service. Never substitute legacy serverhub-broker.service.",
+            required_for=["native host tools", "runtime staging"], required_for_controller_checks=False)
+    except (OSError, subprocess.SubprocessError):
+        add("ai_broker", "warning", "AI broker state unavailable in this environment",
+            "Check serverhub-ai-broker.service on the AI OS host; the Control broker is unrelated")
+    for name in ("serverhub-ai-api.service", "serverhub-ai-worker.service"):
         target = Path("/etc/systemd/system") / name
         try:
             content = target.read_text()

@@ -95,6 +95,7 @@ class Job(Base):
     kind: Mapped[str] = mapped_column(String(60))
     spec: Mapped[dict] = mapped_column(JSON, default=dict)
     state: Mapped[str] = mapped_column(String(30), default="queued", index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     result: Mapped[dict] = mapped_column(JSON, default=dict)
     checkpoint: Mapped[dict] = mapped_column(JSON, default=dict)

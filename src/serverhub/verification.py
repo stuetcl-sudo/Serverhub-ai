@@ -56,3 +56,27 @@ def verify_inventory(db, host_id, checks):
         "scope": "Only the named deterministic checks; not proof of an arbitrary natural-language goal",
         "source": "recent authenticated node report",
     }
+
+
+def verify_task(ctx, checks):
+    """Combine current observations with this task's own verified child receipts."""
+    from .models import Job
+    from uuid import UUID
+    inventory_checks=[check for check in checks if check.get('kind')!='job.verified']
+    results=verify_inventory(ctx.db,ctx.job.host_id,inventory_checks)['checks'] if inventory_checks else []
+    for check in checks:
+        if check.get('kind')!='job.verified':
+            continue
+        child=None
+        try:
+            identity=str(UUID(check.get('target') or ''))
+            child=ctx.db.get(Job,identity)
+        except (ValueError,TypeError):
+            pass
+        passed=bool(child and child.parent_id==ctx.job.id and child.owner_id==ctx.job.owner_id
+                    and child.host_id==ctx.job.host_id and child.state=='succeeded'
+                    and (child.result or {}).get('verified') is True)
+        results.append({**check,'passed':passed})
+    return {'verified':bool(results) and all(item['passed'] for item in results),'checks':results,
+            'scope':'Only named current observations and acceptance-verified direct child tasks; not arbitrary prose',
+            'source':'Authenticated observations or durable child acceptance receipts'}

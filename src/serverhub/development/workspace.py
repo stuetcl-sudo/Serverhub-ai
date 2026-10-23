@@ -117,7 +117,7 @@ class WorkspaceManager:
             raise
         return destination
 
-    def apply_patch(self, workspace: Path, patch: str) -> dict:
+    def apply_patch(self, workspace: Path, patch: str, *, message="Apply authorized ServerHub development change") -> dict:
         if not patch or len(patch.encode()) > 2 * 1024 * 1024:
             raise DevelopmentError("patch must contain 1 byte to 2 MiB")
         if "GIT binary patch" in patch or re.search(r"^(?:new file mode|new mode) (?:120000|160000)", patch, re.M):
@@ -138,7 +138,7 @@ class WorkspaceManager:
         git(workspace, "apply", "--check", "--whitespace=error-all", "--", input=patch)
         git(workspace, "apply", "--index", "--whitespace=error-all", "--", input=patch)
         assert_safe_tree(workspace)
-        git(workspace, "commit", "-m", "Apply authorized ServerHub development change")
+        git(workspace, "commit", "-m", message)
         return {"commit": git(workspace, "rev-parse", "HEAD").strip(),
                 "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(), "changed_paths": paths}
 
@@ -198,7 +198,15 @@ class WorkspaceManager:
 
 
 def write_manifest(path: Path, payload: dict) -> None:
-    encoded = json.dumps(payload, sort_keys=True, indent=2).encode()
+    # The root broker needs the verified receipt, not a duplicate source diff.
+    # Large diffs could otherwise exceed its 1 MiB receipt limit after JSON escaping.
+    receipt = {key: value for key, value in payload.items() if key not in {"source_patch", "source_changes"}}
+    if "commands" in receipt:
+        receipt["commands"] = [{**command, "output": str(command.get("output", ""))[-4000:]}
+                               for command in receipt["commands"]]
+    encoded = json.dumps(receipt, sort_keys=True, indent=2).encode()
+    if len(encoded) > 1024**2:
+        raise DevelopmentError("candidate receipt exceeds the broker's 1 MiB limit")
     descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix="manifest-")
     try:
         with os.fdopen(descriptor, "wb") as output:
@@ -209,3 +217,45 @@ def write_manifest(path: Path, payload: dict) -> None:
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def source_patch(workspace, base_commit):
+    if not base_commit or not COMMIT.fullmatch(base_commit):
+        return None
+    try:
+        patch = git(workspace, "diff", "--no-ext-diff", "--no-textconv", base_commit, "HEAD", timeout=30)
+        return patch if len(patch.encode()) <= 500000 else None
+    except DevelopmentError:
+        return None
+
+
+def source_changes(workspace: Path, base_commit: str | None, publication_paths=()) -> list | None:
+    """Bounded tracked UTF-8 changes; no arbitrary file-reading API is exposed."""
+    if not base_commit or not re.fullmatch(r"[a-f0-9]{40,64}", base_commit):
+        return None
+    if git(workspace, "diff", "--no-ext-diff", "--name-only", "HEAD").strip():
+        return None  # builds must not alter the tracked source after its commit
+    if publication_paths and git(workspace, "ls-files", "--others", "--exclude-standard", "--", *publication_paths).strip():
+        return None  # do not omit generated, uncommitted source from a verified PR
+    paths = git(workspace, "diff", "--name-only", "--no-renames", "-z", base_commit, "HEAD").split("\0")
+    changed, total = [], 0
+    for name in filter(None, paths):
+        safe_relative(name)
+        path = workspace / name
+        if path.exists():
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 200000:
+                return None
+            try:
+                content = path.read_bytes().decode("utf-8")
+            except UnicodeError:
+                return None
+            if "\0" in content:
+                return None
+            total += len(content.encode())
+        else:
+            content = None
+        changed.append({"path": name, "content": content, "mode": "100755" if path.exists() and path.stat().st_mode & 0o111 else "100644",
+                        "sha256": hashlib.sha256(content.encode()).hexdigest() if content is not None else None})
+        if total > 500000 or len(changed) > 100:
+            return None
+    return changed

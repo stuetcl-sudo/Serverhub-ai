@@ -1,0 +1,27 @@
+# Copy into protected /etc/serverhub/projects.yaml only after local root review.
+# Source, app/test dependencies and commands match the disposable main pilot.
+# Neither Jarvis production nor its .venv/storage/secrets are mounted.
+projects:
+  - name: jarvis-os
+    repository: https://github.com/stuetcl-sudo/Jarvis-os.git
+    base_ref: main
+    allow_dependency_network: true
+    dependencies:
+      - argv: [/usr/bin/python3, -m, pip, install, --break-system-packages, --no-compile, --upgrade, --force-reinstall, --target, runtime, -r, requirements.txt, 'pytest==8.3.5']
+        network: true
+        timeout: 600
+    build:
+      - argv: [/usr/bin/python3, -m, compileall, -q, app]
+    tests:
+      - argv: [/usr/bin/env, PYTHONPATH=runtime, DB_PATH=/tmp/jarvis-test.db, SAFE_MODE=true, DRY_RUN=true, WORKER_ENABLED=false, /usr/bin/python3, -m, pytest, -q, tests/test_dashboard_routes.py]
+        timeout: 180
+    checks_path: /etc/serverhub/project-checks/jarvis-os
+    independent_checks:
+      - argv: [/usr/bin/python3, /checks/jarvis-check.py]
+    artifact_paths: [app, runtime, requirements.txt]
+    max_artifact_bytes: 536870912
+    max_memory_mb: 2048
+    max_processes: 128
+    # Optional publisher, separate credential provisioning and grant required:
+    # publication_token_env: SERVERHUB_GITHUB_JARVIS
+    # publication_paths: [app]

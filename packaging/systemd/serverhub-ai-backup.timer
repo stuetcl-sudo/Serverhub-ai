@@ -4,6 +4,6 @@ Description=Daily protected ServerHub backups
 OnCalendar=*-*-* 03:15:00
 Persistent=true
 RandomizedDelaySec=300
-Unit=serverhub-backup.service
+Unit=serverhub-ai-backup.service
 [Install]
 WantedBy=timers.target

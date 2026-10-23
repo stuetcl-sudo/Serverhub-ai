@@ -257,7 +257,7 @@ def test_migration_config_never_requires_the_callers_working_directory(tmp_path,
 
 def test_sandbox_masks_optional_paths_without_requiring_them():
     source = Path(__file__).resolve().parents[1]
-    for filename in ("serverhub-api.service", "serverhub-worker.service", "serverhub-node.service"):
+    for filename in ("serverhub-ai-api.service", "serverhub-ai-worker.service", "serverhub-ai-node.service"):
         content = (source / "packaging/systemd" / filename).read_text()
         paths = (
             next(line for line in content.splitlines() if line.startswith("InaccessiblePaths="))
@@ -287,6 +287,31 @@ def test_inventory_verification_requires_a_recent_report_not_only_a_heartbeat(co
         assert not verify_inventory(db, "node1", [{"kind": "inventory.fresh"}])["verified"]
 
 
+def test_unused_private_fallback_does_not_override_database_route_diagnostics(client, core_env, monkeypatch):
+    import os
+    import serverhub.diagnostics as diagnostics
+    fallback = core_env / "models.yaml"
+    fallback.write_text("routes:\n  default: legacy-private-provider-reference\n")
+    fallback.chmod(0o600)
+    original = os.access
+    monkeypatch.setattr(diagnostics.os, "access", lambda path, mode: False if Path(path) == fallback else original(path, mode))
+    with SessionLocal() as db:
+        db.add(ModelRoute(name="default", config={"kind": "ollama", "base_url": "http://127.0.0.1:11434", "model": "fixture"},
+                          enabled=True, updated_by="owner"))
+        headers = bearer(db)
+    result = client.get("/api/diagnostics", headers=headers)
+    assert result.status_code == 200
+    checks = {item["id"]: item for item in result.json()["checks"]}
+    assert checks["models"]["status"] == checks["model_file"]["status"] == "ok"
+    assert checks["model_file"]["evidence"]["active"] is False
+    assert fallback.stat().st_mode & 0o777 == 0o600
+    with SessionLocal() as db:
+        db.delete(db.get(ModelRoute, "default"))
+        db.commit()
+    checks = {item["id"]: item for item in client.get("/api/diagnostics", headers=headers).json()["checks"]}
+    assert checks["models"]["status"] == checks["model_file"]["status"] == "error"
+
+
 def test_install_resume_retains_credentials_configuration_and_completed_phases(tmp_path, monkeypatch):
     import subprocess
     import serverhub.ops.installer as native
@@ -309,6 +334,11 @@ def test_install_resume_retains_credentials_configuration_and_completed_phases(t
     monkeypatch.setattr(
         native, "check_compatibility", lambda *args: {"compatible": True, "ready_for_apply": True}
     )
+    # This fixture never applies to the host: accounts/chown/commands are mocked.
+    # Exercise real mode sealing on its caller-owned temporary runtime trees.
+    import serverhub.ops.runtime_permissions as permissions
+    seal = permissions.seal_runtime
+    monkeypatch.setattr(permissions, 'seal_runtime', lambda runtime: seal(runtime, require_root=False))
     monkeypatch.setattr(native.os, "chown", lambda *args: None)
     monkeypatch.setattr(native.os, "getgrouplist", lambda *args: [])
     monkeypatch.setattr(
@@ -403,6 +433,8 @@ def test_upgrade_of_existing_0003_schema_adds_runtime_without_erasing_grants(tmp
         )
         db.commit()
     with get_engine().begin() as connection:
+        connection.execute(text("DROP INDEX ix_jobs_priority"))
+        connection.execute(text("ALTER TABLE jobs DROP COLUMN priority"))
         connection.execute(text("DROP TABLE model_routes"))
         connection.execute(text("DROP TABLE worker_heartbeats"))
         connection.execute(text("ALTER TABLE policies DROP COLUMN environment"))
@@ -410,7 +442,7 @@ def test_upgrade_of_existing_0003_schema_adds_runtime_without_erasing_grants(tmp
     command.upgrade(_alembic_config(), "head")
     command.upgrade(_alembic_config(), "head")
     with get_engine().connect() as connection:
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0004_runtime"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0005_priority"
         assert (
             connection.execute(text("SELECT environment FROM policies WHERE id='legacy-policy'")).scalar()
             == "any"
@@ -420,6 +452,7 @@ def test_upgrade_of_existing_0003_schema_adds_runtime_without_erasing_grants(tmp
             in connection.execute(text("SELECT operations FROM policies WHERE id='legacy-policy'")).scalar()
         )
         connection.execute(text("SELECT name FROM model_routes"))
+        connection.execute(text("SELECT priority FROM jobs"))
     get_engine().dispose()
     get_settings.cache_clear()
 

@@ -1,5 +1,23 @@
 # ServerHub AI OS
 
+The [production-readiness candidate](docs/production-readiness.md) reconciles both
+feature branches and documents actual Ubuntu/model execution, delegated native
+administration, encrypted Docker recovery, autonomous development and remaining
+release gates. See [capability enrollment and recovery](docs/delegated-administration.md)
+and [persistent authenticated access](docs/persistent-access.md).
+
+The [token-budget and execution fix](docs/token-budget-fix.md) records the measured
+20k failure, provider-aware accounting, durable reservations and attempt-safe
+preflight pause/resume behavior.
+
+A [persistent read-only host audit](docs/host-audit.md) now collects fresh node
+evidence and generates capacity/security/update/zone plans without a model or
+production changes. See [its verification report](docs/host-audit-report.md).
+
+The first [issue #2 increment](docs/host-autonomy.md) fixes model token accounting
+and adds bounded read-only discovery history. See [its verification report](docs/issue-2-report.md)
+for implemented scope, tests and remaining multi-agent/optimization work.
+
 The stability/autonomy overhaul adds resumable native installation, owner-managed
 Ollama discovery/tool testing, expiring autonomy profiles, actionable diagnostics
 and verified/partial job outcomes. Start with [the native Ubuntu workflow](docs/installation.md)

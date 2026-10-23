@@ -16,7 +16,7 @@ Run root maintenance commands with the protected database URL loaded from the
 service environment (do not paste credentials into command lines):
 
 ```sh
-sudo systemctl start serverhub-backup.service
+sudo systemctl start serverhub-ai-backup.service
 sudo ./scripts/backup.sh list
 sudo ./scripts/backup.sh verify --id BACKUP_ID
 ```
@@ -70,6 +70,8 @@ sudo ./scripts/uninstall.sh --apply
 ```
 
 Uninstall disables/removes only known ServerHub units and executable releases.
-It retains the stable `/opt/serverhub/recovery` recovery runtime, PostgreSQL data/roles, service accounts, node identity/journal,
+It retains the stable `/opt/serverhub/recovery-ai` recovery runtime, PostgreSQL data/roles, service accounts, node identity/journal,
 configuration, backups and rollback evidence. Remove retained sensitive data only
 under a separately reviewed disposal procedure.
+
+See [Control coexistence and legacy unit migration](control-coexistence.md) before installing alongside ServerHub Control or upgrading generic `serverhub-*.service` AI OS units. New AI OS services use `serverhub-ai-*`; never stop or replace Control units.

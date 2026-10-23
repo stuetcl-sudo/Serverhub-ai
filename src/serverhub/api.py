@@ -70,6 +70,7 @@ class PolicyUpdate(StrictModel):
 
 
 class NewJob(StrictModel):
+    priority: int = Field(default=0, ge=-100, le=100)
     kind: str = Field(min_length=1, max_length=60)
     spec: dict
     host_id: str | None = None
@@ -229,11 +230,24 @@ def host_inventory(host_id: str, principal: Authenticated, db=Depends(get_db)):
     return host.inventory
 
 
+@router.get("/hosts/{host_id}/inventory/history")
+def host_inventory_history(host_id: str, principal: Authenticated, limit: int = 30, db=Depends(get_db)):
+    _host_scope(db, principal, host_id)
+    samples = db.scalars(select(InventorySample).where(InventorySample.host_id == host_id)
+                        .order_by(InventorySample.id.desc()).limit(min(max(limit, 1), 100))).all()
+    return [{"id": row.id, "received_at": row.created_at, "observed_at": row.metrics.get("observed_at"),
+             "diff": row.metrics.get("inventory_diff", {}), "collection_errors": row.metrics.get("collection_errors", 0)} for row in samples]
+
+
 @router.get("/hosts/{host_id}/metrics")
 def host_metrics(host_id: str, principal: Authenticated, limit: int = 120, db=Depends(get_db)):
     _host_scope(db, principal, host_id)
-    return [to_dict(row) for row in db.scalars(select(InventorySample).where(InventorySample.host_id == host_id)
-                                              .order_by(InventorySample.id.desc()).limit(min(max(limit, 1), 1000))).all()]
+    samples = db.scalars(select(InventorySample).where(InventorySample.host_id == host_id)
+                         .order_by(InventorySample.id.desc()).limit(min(max(limit, 1), 1000))).all()
+    # Keep chart responses small; structural state is retained in the database,
+    # while the scoped history endpoint exposes bounded change summaries.
+    return [{**to_dict(row), "metrics": {key: value for key, value in row.metrics.items()
+                                        if key not in {"inventory_state", "inventory_diff"}}} for row in samples]
 
 
 @router.get("/topology")
@@ -315,10 +329,35 @@ def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], princi
         job.state = "cancel_requested" if job.state in {"running", "pause_requested"} else "cancelled"
         if job.state == "cancelled":
             job.finished_at = utcnow()
+        descendants = [job.id]
+        visited = {job.id}
+        while descendants:
+            children = db.scalars(select(Job).where(Job.parent_id.in_(descendants), Job.owner_id == job.owner_id)).all()
+            descendants = []
+            for child in children:
+                if child.id in visited:
+                    continue
+                visited.add(child.id)
+                descendants.append(child.id)
+                if child.state not in TERMINAL:
+                    child.state = "cancel_requested" if child.state in {"running", "pause_requested"} else "cancelled"
+                    if child.state == "cancelled":
+                        child.finished_at = utcnow()
+                    db.add(JobEvent(job_id=child.id, message="Parent task cancelled", data={"actor": principal.id, "parent": job.id}))
+                    append_audit(db, principal.id, "job.cancel", child.id, {"parent": job.id})
     elif action == "resume":
         if job.state not in {"paused", "waiting_approval"}:
             raise HTTPException(409, "Only paused or policy-blocked jobs can resume")
         authorize(db, principal, "job.submit", job.host_id, job.project)
+        denial = (job.result or {}).get("denial")
+        if job.state == "waiting_approval" and isinstance(denial, dict) and denial.get("operation"):
+            from .auth import Principal
+            owner = db.get(User, job.owner_id)
+            if not owner:
+                raise HTTPException(409, "Job initiating account no longer exists")
+            authorize(db, Principal(id=owner.id, username=owner.username, role=owner.role), denial["operation"],
+                      job.host_id, job.project, denial.get("arguments", {}),
+                      denial.get("environment") == "production")
         job.state = "queued"
         job.run_after = utcnow()
     append_audit(db, principal.id, "job." + action, job.id)

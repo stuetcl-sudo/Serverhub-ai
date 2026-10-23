@@ -1,18 +1,22 @@
 # Controlled native upgrades
 
+After a successful upgrade, run [installed verification](installed-verification.md).
+It checks the running service through the authenticated API, preserves warning
+and collection-gap evidence, and can exercise a fixed read-only persistent job.
+
 ## Stability/autonomy overhaul and legacy installations
 
-For an installation with no resume journal, or a reviewed change to protected code, use the explicit local-root workflow below. This is not callable by an AI worker. It intentionally accepts reviewed trust-boundary changes; signing a normal autonomous release must never silently replace its trust anchors.
+For a namespaced installation with `/var/lib/serverhub-install/ownership.json`, use the explicit local-root workflow below after reviewing protected-code changes. Legacy generic-unit installations must first use [the verified namespace migration](control-coexistence.md); unclaimed/partial installations without the required legacy journal need manual review and are not silently adopted. This is not callable by an AI worker. It intentionally accepts reviewed trust-boundary changes; signing a normal autonomous release must never silently replace its trust anchors.
 
 ```sh
-# Check out the reviewed overhaul branch/ref as your normal user.
+# Check out the reviewed release/production-readiness branch/ref as your normal user.
 ./scripts/install-ubuntu.sh --build-only
 sudo ./scripts/repair-install.sh
 ```
 
-This preserves database passwords, sessions, enrolled identities and operator configuration. An invalid/obsolete model fallback remains root-only and does not block the upgrade; configure a validated database route through Setup afterwards. Only a schema-validated non-secret fallback is made readable to service users. It creates and checks a protected PostgreSQL/configuration backup, prepares a new native runtime, stops API/worker during migration, applies additive migration `0004_runtime`, reapplies explicit grants, updates reviewed systemd units and code anchors, switches the release, and checks API/worker/frontend health. The existing recovery runtime remains independent.
+This preserves database passwords, sessions, enrolled identities and operator configuration. An invalid/obsolete model fallback remains root-only and does not block the upgrade; configure a validated database route through Setup afterwards. Only a schema-validated non-secret fallback is made readable to service users. It creates and checks a protected PostgreSQL/configuration backup, prepares a new native runtime, stops API/worker during migration, applies additive migrations `0004_runtime` and `0005_priority`, reapplies explicit grants, updates reviewed systemd units and code anchors, switches the release, and checks API/worker/frontend health. The reviewed upgrade also updates the separate `recovery-ai` maintenance runtime; normal signed releases do not change it.
 
-An independent 300-second release watchdog is armed before service interruption. A normal failure restores the previous release and saved configuration/units, restarts services, and retains backups. An abruptly killed repair can be reverted by the watchdog to the previous code; its configuration snapshot remains in the protected backup for administrator restoration. No automatic destructive database downgrade occurs. The old pre-overhaul health endpoint expects revision 0003 exactly, so it may report a migration mismatch after code rollback to 0003 while additive schema 0004 remains. Complete the reviewed upgrade or perform a separately reviewed recovery; do not edit `alembic_version` to hide this mismatch.
+An independent 300-second release watchdog is armed before service interruption. A normal failure restores the previous release and saved configuration/units, restarts services, and retains backups. An abruptly killed repair can be reverted by the watchdog to the previous code; its configuration snapshot remains in the protected backup for administrator restoration. No automatic destructive database downgrade occurs. The old pre-overhaul health endpoint expects revision 0003 exactly, so it may report a migration mismatch after code rollback to 0003 while additive schema 0004/0005 remains. Complete the reviewed upgrade or perform a separately reviewed recovery; do not edit `alembic_version` to hide this mismatch.
 
 Migration 0004 adds `model_routes`, `worker_heartbeats` and `policies.environment` (existing grants retain `any` environment). The worker may read model routes and publish heartbeat rows, but cannot change provider endpoints, policies, users, audit history or backup state. No policy grants or model endpoints are silently created. Configure these in Setup after upgrading.
 
@@ -21,7 +25,7 @@ A failed first install created by the new journaled installer should be resumed 
 ## Normal signed releases
 
 
-The independent maintenance runtime is installed at `/opt/serverhub/recovery/venv` and is not switched during normal upgrades. Recovery timers use it instead of candidate code.
+The independent maintenance runtime is installed at `/opt/serverhub/recovery-ai/venv` and is not switched during normal upgrades. Recovery timers use it instead of candidate code.
 
 The worker cannot modify installed code, systemd definitions, policy/audit tables,
 backup archives, recovery journals, trust digests, or signing keys. Native release
@@ -60,7 +64,7 @@ ancestors, then:
 sudo ./scripts/upgrade.sh verify --bundle /opt/serverhub-upgrade/bundle
 sudo ./scripts/upgrade.sh prepare --bundle /opt/serverhub-upgrade/bundle
 sudo sh -c '. /etc/serverhub/recovery.env; export SERVERHUB_DATABASE_URL; \
-  /opt/serverhub/recovery/venv/bin/python -m serverhub.ops.release activate \
+  /opt/serverhub/recovery-ai/venv/bin/python -m serverhub.ops.release activate \
   --release OWNER_VERIFIED_RELEASE_ID'
 ```
 
@@ -110,3 +114,27 @@ The validation JSON must report `state: passed` and contain check evidence. The
 owner must review that evidence and the source; possession of a JSON report is
 not itself independent approval. The tool packages deterministic web/migration
 archives and signs the manifest. No key is generated or stored in the repository.
+
+See [Control coexistence and legacy unit migration](control-coexistence.md) before installing alongside ServerHub Control or upgrading generic `serverhub-*.service` AI OS units. New AI OS services use `serverhub-ai-*`; never stop or replace Control units.
+
+
+### Issue #7 identity namespace boundary
+
+Releases through `7da8bea` used `serverhub-worker` and related Linux identities,
+even with AI-prefixed systemd units. Do **not** rerun apply/repair to adopt those
+identities. Follow [the explicit migration and rollback procedure](control-coexistence.md).
+The new ownership claim is namespace 3; old namespace-2 claims are rejected by
+ordinary upgrade. Database names, PostgreSQL roles and passwords are preserved.
+The standalone migration timer restores the old claim, config, units and original
+homes after an interrupted/unverified conversion. After verified migration,
+select only identity-compatible releases for ordinary code rollback; do not
+restore generic Control-conflicting services or legacy identity defaults.
+
+### Development/MCP follow-up
+
+The exact legacy empty project mapping is normalized to an array during backed-up
+repair. Malformed nonempty configuration fails safely instead of being replaced.
+No new SQL revision is needed. Existing host-specific development grants are not
+broadened: review/regrant a controller-only project profile, adding staging,
+network or draft PR publication only when wanted. See [the exact reviewed upgrade
+and rollback procedure](development-mcp.md#reviewed-production-procedure--not-executed).

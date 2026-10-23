@@ -1,6 +1,7 @@
 """Native command line. No arbitrary command/SQL execution is exposed to AI tools."""
 import argparse
 import getpass
+import ipaddress
 import json
 import sys
 from pathlib import Path
@@ -42,6 +43,8 @@ def main(argv=None):
     serve = sub.add_parser("serve", help="Run the unprivileged HTTP controller")
     serve.add_argument("--host", default=None)
     serve.add_argument("--port", type=int, default=None)
+    serve.add_argument("--tls-cert", type=Path)
+    serve.add_argument("--tls-key", type=Path)
     worker = sub.add_parser("worker", help="Run the durable PostgreSQL job executor")
     worker.add_argument("--once", action="store_true")
     worker.add_argument("--inline", action="store_true", help="Development only: disable per-job process isolation")
@@ -53,7 +56,8 @@ def main(argv=None):
     user.add_argument("--password-stdin", action="store_true")
     user.add_argument("--if-absent", action="store_true", help="Resume bootstrap without resetting existing credentials")
     health = sub.add_parser("health", help="Read the controller health endpoint")
-    health.add_argument("--url", default="http://127.0.0.1:9080")
+    health.add_argument("--url", default=None)
+    health.add_argument("--ca-file", type=Path)
     sub.add_parser("doctor", help="Read-only local diagnostics (use API database environment)")
     args = parser.parse_args(argv)
     settings = get_settings()
@@ -65,8 +69,22 @@ def main(argv=None):
         return 0 if report["healthy"] else 1
     if args.command == "serve":
         import uvicorn
-        uvicorn.run("serverhub.main:app", host=args.host or settings.api_bind, port=args.port or settings.api_port,
-                    proxy_headers=False, access_log=True)
+        host = args.host or settings.api_bind
+        cert, key = args.tls_cert or settings.tls_certfile, args.tls_key or settings.tls_keyfile
+        try:
+            local = host == "localhost" or ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            local = False
+        if bool(cert) != bool(key):
+            parser.error("TLS requires both --tls-cert and --tls-key (or matching environment settings)")
+        if not settings.dev_mode and not local and not cert:
+            parser.error("Non-loopback production listeners require TLS. Use loopback behind an HTTPS proxy or configure TLS certificate and key")
+        for file in (cert, key):
+            if file and (not file.is_file() or not os.access(file, os.R_OK)):
+                parser.error("TLS files must exist and be readable by the API service identity")
+        uvicorn.run("serverhub.main:app", host=host, port=args.port or settings.api_port,
+                    proxy_headers=False, access_log=True,
+                    ssl_certfile=str(cert) if cert else None, ssl_keyfile=str(key) if key else None)
     elif args.command == "worker":
         from .jobs import Worker, load_plugins
         if args.inline and not settings.dev_mode:
@@ -99,7 +117,11 @@ def main(argv=None):
             print(json.dumps({"id": account.id, "username": account.username, "role": account.role}))
     elif args.command == "health":
         import httpx
-        response = httpx.get(args.url.rstrip("/") + "/health", timeout=5, follow_redirects=False)
+        import ssl
+        ca = args.ca_file or settings.health_ca
+        verification = ssl.create_default_context(cafile=str(ca)) if ca else True
+        response = httpx.get((args.url or settings.health_url).rstrip("/") + "/health", timeout=5,
+                             follow_redirects=False, verify=verification, trust_env=False)
         print(response.text)
         response.raise_for_status()
     return 0

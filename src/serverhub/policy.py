@@ -35,8 +35,8 @@ STANDARD_OPS = {"inventory.read", "network.diagnose", "diagnostics.network", "dn
 
 def is_read(operation: str) -> bool:
     return operation.endswith(READ_SUFFIXES) or operation in {
-        "inventory.read", "inventory.refresh", "discovery.refresh", "diagnostics.network",
-        "systemd.logs", "task.verify", "homeassistant.states", "homeassistant.health", "adguard.status"}
+        "inventory.read", "inventory.refresh", "discovery.refresh", "diagnostics.network", "host.audit", "diagnostics.storage",
+        "systemd.logs", "task.verify", "docker.backup.verify", "docker.restore.plan", "package.plan", "configuration.plan", "homeassistant.states", "homeassistant.health", "adguard.status"}
 
 
 def operation_matches(pattern: str, operation: str) -> bool:
@@ -138,7 +138,7 @@ def _authorize(db, principal, operation: str, host_id: str | None = None, projec
 def operation_environment(operation, arguments=None, production=False):
     if production or operation in {"release.production", "development.release", "production.deploy", "network.apply", "firewall.apply"}:
         return "production"
-    if operation == "development.stage" or (arguments or {}).get("stage") is True:
+    if operation in {"development.stage", "development.deploy"} or (arguments or {}).get("stage") is True:
         return "staging"
     if operation.startswith("development."):
         return "development"
@@ -158,7 +158,7 @@ def authorize(db, principal, operation: str, host_id=None, project=None, argumen
 
 def visible_host_ids(db, principal) -> list[str]:
     result = []
-    for host in db.scalars(select(Host)).all():
+    for host in db.scalars(select(Host).where(Host.revoked.is_(False))).all():
         try:
             authorize(db, principal, "inventory.read", host.id)
             result.append(host.id)

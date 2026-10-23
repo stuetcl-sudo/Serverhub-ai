@@ -30,6 +30,9 @@ def _checkpoint(ctx: Any, state: dict) -> None:
     result = dict(ctx.job.result or {})
     result["_development"] = state
     ctx.job.result = result
+    checkpoint = dict(ctx.job.checkpoint or {})
+    checkpoint["developer" if "developer" in checkpoint else "development"] = state
+    ctx.job.checkpoint = checkpoint
     ctx.db.commit()
     ctx.heartbeat()
 
@@ -68,6 +71,8 @@ def development_job(ctx: Any, spec: dict) -> dict:
     name = spec.get("project")
     if not isinstance(name, str):
         raise DevelopmentError("a configured project is required")
+    if ctx.job.project != name:
+        raise DevelopmentError("job project does not match its registered project scope")
     projects = load_projects()
     if name not in projects:
         raise DevelopmentError("project is not configured by the owner")
@@ -81,7 +86,7 @@ def development_job(ctx: Any, spec: dict) -> dict:
     if patch is not None and not isinstance(patch, str):
         raise DevelopmentError("patch must be a unified diff string")
     digest = hashlib.sha256((patch or "").encode()).hexdigest()
-    state = dict((ctx.job.result or {}).get("_development", {}))
+    state = dict((ctx.job.checkpoint or {}).get("development") or (ctx.job.result or {}).get("_development", {}))
     if state and (state.get("project") != name or state.get("patch_sha256") != digest):
         raise DevelopmentError("persisted development request identity differs from this request")
     state.update({"project": name, "patch_sha256": digest})
@@ -90,6 +95,7 @@ def development_job(ctx: Any, spec: dict) -> dict:
     root = Path(get_settings().state_dir) / "development"
     manager = WorkspaceManager(root / "workspaces")
     workspace = manager.prepare(project, ctx.job.id, base_commit=spec.get("base_commit"))
+    state.setdefault("base_commit", git(workspace, "rev-parse", "HEAD").strip())
     state["workspace"] = str(workspace)
     _checkpoint(ctx, state)
     runner = SandboxRunner(project)
@@ -106,16 +112,17 @@ def development_job(ctx: Any, spec: dict) -> dict:
         state["patch_commit"] = result["commit"]
         state["changed_paths"] = result["changed_paths"]
         _checkpoint(ctx, state)
+    ctx.log("Development sandbox Python/pip readiness", availability)
     _run_commands(ctx, project, workspace, runner, project.dependencies, "dependencies", state)
     _run_commands(ctx, project, workspace, runner, project.build, "build", state)
     _run_commands(ctx, project, workspace, runner, project.tests, "tests", state)
     _run_commands(ctx, project, workspace, runner, project.independent_checks, "independent", state)
     if spec.get("stage"):
         _require(ctx, name, "development.stage")
-        if not project.staging_checks:
-            raise DevelopmentError("staging was requested but no owner-configured staging healthchecks exist")
+        if not project.independent_checks:
+            raise DevelopmentError("Independent owner checks are mandatory for automated staging")
         _run_commands(ctx, project, workspace, runner, project.staging_checks, "staging", state)
-    _require(ctx, name, "development.stage", arguments={"artifact": True})
+    _require(ctx, name, "development.artifact", arguments={"artifact": True})
     archive = manager.archive(workspace, project, destination=root / "candidates" / f"{ctx.job.id}.tar")
     result = {
         "project": name, "branch": f"serverhub/{ctx.job.id}",
@@ -124,11 +131,20 @@ def development_job(ctx: Any, spec: dict) -> dict:
         "build_passed": bool(project.build), "tests_passed": True,
         "independent_checks_passed": bool(project.independent_checks),
         "staging_checks_passed": bool(spec.get("stage")),
-        "production_deployed": False,
+        "production_deployed": False, "verified": True,
         "requires": ["owner-reviewed immutable release adapter", "exact artifact digest release policy"],
         "commands": state.get("commands", []),
     }
+    from .workspace import source_patch, source_changes
+    result["source_patch"] = source_patch(workspace, state.get("base_commit"))
+    result["base_commit"] = state.get("base_commit")
+    result["source_changes"] = source_changes(workspace, state.get("base_commit"), project.publication_paths)
     write_manifest(root / "candidates" / f"{ctx.job.id}.json", result)
+    if spec.get("stage"):
+        from serverhub.node_api import execute_node
+        result["staging"] = execute_node(ctx, "development.deploy", {"target": name, "artifact_id": ctx.job.id},
+                                        idempotency_key=ctx.job.id + ":staging")
+        result["verified"] = result["staging"].get("verified") is True
     state["candidate"] = archive
     _checkpoint(ctx, state)
     ctx.log("Development candidate verified and archived", {"sha256": archive["sha256"], "commit": archive["commit"]})

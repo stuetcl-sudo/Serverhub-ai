@@ -4,7 +4,7 @@
 | --- | --- |
 | Health503 | Database connection, migration identity and exact Alembic head. A reachable but outdated schema is unhealthy. |
 | Empty dashboard | Enroll a node, confirm its first report, check the signed-in user's host read policy. No synthetic hosts are seeded. |
-| Node offline | TLS certificate trust, public URL, unique identity, revocation and `journalctl -u serverhub-node`. Never disable certificate validation. |
+| Node offline | TLS certificate trust, public URL, unique identity, revocation and `journalctl -u serverhub-ai-node`. Never disable certificate validation. |
 | Broker denied | Configured peer UID/group, root-owned config ancestors, exact service/container/project/diagnostic target allowlist. Agent and worker must not join the Docker group. |
 | Job waiting_approval | Check actor, role ceiling, host/project, target arguments, expiry and production flag. After a concrete policy is added, explicitly resume. |
 | Job paused | Pause request or emergency stop. Review whether an external operation was already dispatched before resuming. |
@@ -27,7 +27,7 @@ Collect bounded, redacted logs. Do not paste secrets, full environment variables
 | --- | --- |
 | Interrupted installer | Rerun the same reviewed-source command; keep `/var/lib/serverhub-install/state.json` and environment files. |
 | Inaccessible migration cwd | New installer runs migrations from the installed absolute release with source import paths removed. Legacy installs use the backed-up repair workflow. |
-| Worker exits before Python | Inspect `journalctl -u serverhub-worker`; new units mask optional absent sockets with `-` and preserve strict filesystem isolation. |
+| Worker exits before Python | Inspect `journalctl -u serverhub-ai-worker`; new units mask optional absent sockets with `-` and preserve strict filesystem isolation. |
 | Assets 403 on loopback | Use the same localhost origin/port through the tunnel. Foreign Origins remain rejected; verify assets and directory traversal in diagnostics. |
 | Empty model routes | Setup → AI provider → discover/test/save `default`. A file merely existing no longer means a model is configured. |
 | Permission denied reading models | Inspect leaf and ancestors with `namei -l`; worker must read non-secret root-owned fallback config. Prefer owner-managed DB routes; never expose secret environment files. |

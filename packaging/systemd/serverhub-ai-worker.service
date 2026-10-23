@@ -1,0 +1,36 @@
+[Unit]
+Description=ServerHub AI OS persistent job worker
+After=network-online.target postgresql.service serverhub-ai-api.service
+Wants=network-online.target
+[Service]
+Type=simple
+User=serverhub-ai-worker
+Group=serverhub-ai-worker
+WorkingDirectory=/opt/serverhub/current
+EnvironmentFile=/etc/serverhub/worker.env
+ExecStart=/opt/serverhub/current/venv/bin/serverhub worker
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+# A locked /proc/sys submount prevents an unprivileged builder from mounting
+# a fresh PID-namespace procfs. UID isolation, empty host capabilities and
+# NoNewPrivileges still deny host sysctl writes; project code sees only bwrap proc.
+ProtectKernelTunables=false
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+ReadWritePaths=/var/lib/serverhub-ai-worker
+InaccessiblePaths=-/etc/serverhub/api.env -/etc/serverhub/recovery.env -/etc/serverhub/broker.yaml -/var/backups/serverhub -/var/lib/serverhub-recovery -/var/lib/serverhub-release -/var/run/docker.sock -/run/serverhub-ai-broker -/var/lib/serverhub-ai-node
+MemoryMax=4G
+TasksMax=256
+[Install]
+WantedBy=multi-user.target

@@ -4,20 +4,20 @@
 
 | Component | Identity | Writable data | Protected capabilities |
 |---|---|---|---|
-| Controller API | serverhub-api | /var/lib/serverhub-api, explicitly granted DB tables | Authenticated owner policy/user management |
-| Job worker | serverhub-worker | /var/lib/serverhub-worker, job/observational DB tables | No root/sudo/Docker socket; policy SELECT only |
-| Node agent | serverhub-node | /var/lib/serverhub-node | Individual HTTPS identity; peer-authenticated broker access |
-| Local broker | root, node socket group | /run/serverhub-broker, protected broker audit | Compiled operation allowlist intersected with root-owned exact targets |
+| Controller API | serverhub-ai-api | /var/lib/serverhub-ai-api, explicitly granted DB tables | Authenticated owner policy/user management |
+| Job worker | serverhub-ai-worker | /var/lib/serverhub-ai-worker, job/observational DB tables | No root/sudo/Docker socket; policy SELECT only |
+| Node agent | serverhub-ai-node | /var/lib/serverhub-ai-node | Individual HTTPS identity; peer-authenticated broker access |
+| Local broker | root, node socket group | /run/serverhub-ai-broker, protected broker audit | Compiled operation allowlist intersected with root-owned exact targets |
 | Backup service | root | /var/backups/serverhub, curated status file | Database/config checkpoints; AI cannot delete archives |
 | Recovery timers | root | protected journals and root-approved targets | Independent configuration/release rollback |
-| Migration/bootstrap | serverhub-migrate, offline use | DB schema owned by this identity | Never supplied to normal worker/API |
+| Migration/bootstrap | serverhub-ai-migrate, offline use | DB schema owned by this identity | Never supplied to normal worker/API |
 
 ## Read operational state
 
 ```sh
-sudo systemctl status serverhub-api serverhub-worker serverhub-node
-sudo journalctl -u serverhub-worker -n 100 --no-pager
-sudo systemctl list-timers 'serverhub-*'
+sudo systemctl status serverhub-ai-api serverhub-ai-worker serverhub-ai-node
+sudo journalctl -u serverhub-ai-worker -n 100 --no-pager
+sudo systemctl list-timers 'serverhub-ai-*'
 sudo /opt/serverhub/current/venv/bin/serverhub health
 ```
 
@@ -71,5 +71,5 @@ application-specific integration checks where configured.
 Owner emergency stop rejects subsequent mutating operations at the controller.
 It cannot undo a root broker operation already in progress; local operation timeouts
 and independent recovery remain relevant. If controller trust is in question,
-stop `serverhub-worker.service` locally. Timers, protected backups and root operator
+stop `serverhub-ai-worker.service` locally. Timers, protected backups and root operator
 access remain independent. Use the backup/recovery guide before a release change.

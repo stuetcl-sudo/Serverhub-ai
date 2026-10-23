@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,6 +30,10 @@ class Settings(BaseSettings):
     enable_openapi: bool = True
     api_bind: str = "127.0.0.1"
     api_port: int = 9080
+    tls_certfile: Path | None = None
+    tls_keyfile: Path | None = None
+    health_url: str = "http://127.0.0.1:9080"
+    health_ca: Path | None = None
 
     @property
     def integrations_config_path(self) -> Path:
@@ -45,6 +50,18 @@ class Settings(BaseSettings):
     def validate_deployment(self):
         if self.database_url.startswith("sqlite") and not self.dev_mode:
             raise ValueError("SQLite is isolated-development only; production requires PostgreSQL")
+        parsed = urlsplit(self.public_url)
+        if (not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or parsed.path not in {"", "/"} or parsed.scheme not in {"http", "https"}):
+            raise ValueError("public_url must be a single HTTP(S) origin without credentials or path")
+        host = parsed.hostname.lower()
+        if ":" in host:
+            host = "[" + host + "]"
+        port = parsed.port
+        authority = host + (f":{port}" if port and port != {"https": 443, "http": 80}[parsed.scheme] else "")
+        self.public_url = f"{parsed.scheme}://{authority}"
+        if bool(self.tls_certfile) != bool(self.tls_keyfile):
+            raise ValueError("TLS requires both tls_certfile and tls_keyfile")
         if not self.dev_mode and not self.public_url.startswith("https://"):
             raise ValueError("production public_url must use HTTPS")
         return self

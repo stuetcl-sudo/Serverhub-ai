@@ -50,7 +50,7 @@ def safe_extract(archive: Path, destination: Path):
 
 
 class ReleaseManager:
-    SERVICES = ("serverhub-api.service", "serverhub-worker.service")
+    SERVICES = ("serverhub-ai-api.service", "serverhub-ai-worker.service")
 
     def __init__(self, install_root="/opt/serverhub", state_root="/var/lib/serverhub-release", *,
                  public_key="/etc/serverhub/trusted-release-key.pem", trust_digest="/etc/serverhub/trust-boundaries.sha256",
@@ -66,6 +66,12 @@ class ReleaseManager:
         self.clock = clock or time.time
 
     def _protect(self):
+        if self.require_root and self.install_root == Path('/opt/serverhub'):
+            from .coexistence import claim, require_safe
+            from .installer import CONTROLLER_UNITS, NODE_UNITS
+            if claim() is None:
+                raise ReleaseError('Namespace ownership missing; use reviewed unit migration before upgrade/rollback')
+            require_safe(units=CONTROLLER_UNITS + NODE_UNITS, live=False)
         if self.require_root and os.geteuid() != 0:
             raise ReleaseError("release operations require the independent root maintenance account")
         for path in (self.install_root, self.state_root):
@@ -169,7 +175,7 @@ class ReleaseManager:
         release = self.install_root / "releases" / manifest["release_id"]
         if release.exists():
             raise ReleaseError("release directory already exists")
-        release.mkdir(parents=True, mode=0o755)
+        release.mkdir(parents=True, mode=0o700)
         try:
             self._run(["python3", "-m", "venv", str(release / "venv")])
             argv = [str(release / "venv/bin/pip"), "install", "--require-hashes", "-r", str(bundle / "requirements.lock")]
@@ -192,7 +198,10 @@ class ReleaseManager:
             if not (release / "web/index.html").is_file():
                 raise ReleaseError("web archive must contain index.html at its root")
             installed = {"manifest": manifest, "manifest_sha256": hashlib.sha256(canonical(manifest)).hexdigest(), "prepared_at": self.clock()}
+            from .runtime_permissions import seal_runtime
+            seal_runtime(release, require_root=self.require_root)
             (release / "installed.json").write_text(json.dumps(installed, indent=2) + "\n")
+            (release / "installed.json").chmod(0o644)
             return {"release_id": manifest["release_id"], "state": "prepared", "path": str(release)}
         except BaseException:
             shutil.rmtree(release, ignore_errors=True)
@@ -236,7 +245,11 @@ class ReleaseManager:
         try:
             self._switch(release)
             self._run(["systemctl", "restart", *self.SERVICES])
-            self._run([str(release / "venv/bin/serverhub"), "health", "--url", "http://127.0.0.1:9080"], timeout=60)
+            self._run(["systemctl", "try-restart", "serverhub-ai-broker.service", "serverhub-ai-node.service"])
+            from .installer import Installer
+            url, ca = Installer(release)._health_configuration()
+            self._run([str(release / "venv/bin/serverhub"), "health", "--url", url,
+                       *(["--ca-file", ca] if ca else [])], timeout=60)
             journal["state"] = "verified"
             journal["verified_at"] = self.clock()
             self._write_journal(journal)
@@ -248,6 +261,7 @@ class ReleaseManager:
     def _rollback(self, journal):
         self._switch(Path(journal["previous"]))
         self._run(["systemctl", "restart", *self.SERVICES])
+        self._run(["systemctl", "try-restart", "serverhub-ai-broker.service", "serverhub-ai-node.service"])
         journal["state"] = "reverted"
         journal["reverted_at"] = self.clock()
         self._write_journal(journal)

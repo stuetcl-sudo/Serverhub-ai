@@ -41,7 +41,15 @@ class SandboxRunner:
     def arguments(self, workspace: Path, command: Command) -> list[str]:
         if workspace.is_symlink() or not workspace.is_dir():
             raise DevelopmentError("workspace is missing or is a symlink")
-        args = [self.binary, "--unshare-all", "--die-with-parent", "--new-session",
+        prefix=[]
+        profile=Path("/etc/apparmor.d/serverhub-ai-build")
+        restriction=Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+        if profile.exists() and restriction.exists() and restriction.read_text().strip()=="1":
+            aa_exec=shutil.which("aa-exec",path="/usr/bin:/bin")
+            if not aa_exec:
+                raise DevelopmentError("AppArmor development label requires aa-exec; reinstall the native prerequisites")
+            prefix=[aa_exec,"-p","serverhub-ai-build","--"]
+        args = [*prefix,self.binary, "--unshare-all", "--die-with-parent", "--new-session",
                 "--cap-drop", "ALL", "--ro-bind", "/usr", "/usr",
                 "--symlink", "usr/bin", "/bin", "--symlink", "usr/sbin", "/sbin",
                 "--symlink", "usr/lib", "/lib"]
@@ -111,6 +119,10 @@ class SandboxRunner:
             return CommandResult(list(command.argv), process.returncode or 0, content, timed_out)
 
     def preflight(self, workspace: Path) -> dict:
-        result = self.run(workspace, Command(argv=["/usr/bin/true"], timeout=10))
+        result = self.run(workspace, Command(argv=["/usr/bin/python3", "-I", "-c",
+            "import importlib.util,json,ssl,sys; "
+            "tools={k:importlib.util.find_spec(k) is not None for k in ('pip','venv')}; "
+            "print(json.dumps({'python':sys.version.split()[0],'tools':tools,'sandbox':True})); "
+            "sys.exit(0 if all(tools.values()) else 78)"], timeout=10))
         return {"available": result.returncode == 0, "returncode": result.returncode,
-                "detail": result.output, "unsandboxed_fallback": False}
+                "detail": result.output, "remediation": "Install python3-pip, python3-venv, bubblewrap and the AI AppArmor profile through reviewed native repair; never use a production virtualenv", "unsandboxed_fallback": False}

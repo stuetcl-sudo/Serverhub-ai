@@ -12,6 +12,7 @@ import os
 import signal
 import sqlite3
 import time
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,7 @@ from .broker import ALLOWED_OPERATIONS, BrokerDenied, call_broker
 from .discovery import discover
 
 LOG = logging.getLogger("serverhub.node")
-READ_OPERATIONS = {"inventory.refresh", "discovery.refresh", "systemd.status", "systemd.logs", "diagnostics.network", "security.scan"}
+READ_OPERATIONS = {"inventory.refresh", "discovery.refresh", "systemd.status", "systemd.logs", "diagnostics.network", "diagnostics.storage", "security.scan", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "package.plan", "configuration.plan"}
 
 
 class AgentError(RuntimeError):
@@ -109,7 +110,7 @@ class NodeAgent:
     def __init__(self, config: dict, *, transport: httpx.BaseTransport | None = None):
         self.config = config
         self.controller = validate_controller_url(config.get("controller_url", ""), allow_loopback_http=config.get("allow_loopback_http", False))
-        self.state = Path(config.get("state_dir", "/var/lib/serverhub-node"))
+        self.state = Path(config.get("state_dir", "/var/lib/serverhub-ai-node"))
         if not self.state.is_absolute() or self.state.is_symlink():
             raise AgentError("state directory must be absolute and not a symlink")
         self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -127,6 +128,8 @@ class NodeAgent:
                                    transport=transport, follow_redirects=False, trust_env=False)
         self.journal = CommandJournal(self.state/"commands.db")
         self.stopping = False
+        self.last_inventory = 0.0
+        self.last_event_poll = 0.0
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict | list:
         headers = {"Authorization": f"Bearer {self.identity['token']}"} if self.identity.get("token") else {}
@@ -187,7 +190,20 @@ class NodeAgent:
                 broker = self.config.get("broker_socket")
                 if not broker:
                     raise AgentError("privileged operation requires the separately configured broker")
-                result = call_broker(broker, operation, arguments)
+                stopped = threading.Event()
+                def keep_alive():
+                    while not stopped.wait(15):
+                        try:
+                            self._request("POST", "/api/nodes/heartbeat", {})
+                        except (httpx.HTTPError, AgentError):
+                            pass
+                heartbeat = threading.Thread(target=keep_alive, daemon=True)
+                heartbeat.start()
+                try:
+                    result = call_broker(broker, operation, arguments, audit_context=cmd.get("audit_context"), timeout=3600 if operation.startswith(("docker.backup.", "docker.restore.")) else 180)
+                finally:
+                    stopped.set()
+                    heartbeat.join(timeout=1)
             state = "succeeded"
         except (AgentError, BrokerDenied, OSError, ValueError) as exc:
             state, result = "failed", {"error": str(exc)[:256], "failure_class": "execution", "retry_safe": operation in READ_OPERATIONS}
@@ -196,7 +212,21 @@ class NodeAgent:
 
     def run_once(self) -> None:
         self.enroll()
-        self._request("POST", "/api/nodes/report", {"inventory": self.inventory(), "agent_version": "1.0.0"})
+        now = time.monotonic()
+        interval = min(max(float(self.config.get("interval", 60)), 30), 3600)
+        refresh = not self.last_inventory or now - self.last_inventory >= interval
+        # No worker Docker socket. The root broker exposes a no-argument event
+        # hint, at most every 15s; full collections are debounced to >=30s.
+        if not refresh and self.config.get("broker_socket") and now - self.last_event_poll >= 15:
+            self.last_event_poll = now
+            try:
+                changed = call_broker(self.config["broker_socket"], "inventory.events", {}).get("changed", False)
+                refresh = bool(changed) and now - self.last_inventory >= 30
+            except (BrokerDenied, OSError, ValueError):
+                pass  # Older/offline broker: periodic full reconciliation remains.
+        if refresh:
+            self._request("POST", "/api/nodes/report", {"inventory": self.inventory(), "agent_version": "1.0.0"})
+            self.last_inventory = time.monotonic()
         commands = self._request("GET", "/api/nodes/commands")
         if not isinstance(commands, list):
             raise AgentError("invalid controller command list")
@@ -220,7 +250,7 @@ class NodeAgent:
                 failures += 1
                 # URLs, tokens, payloads and exception tracebacks are deliberately excluded.
                 LOG.warning("node controller unavailable or identity rejected; retry pending (%s)", failures)
-            delay = min(interval * max(1, 2 ** min(failures, 5)), 300)
+            delay = min(min(interval, 15) * max(1, 2 ** min(failures, 5)), 300)
             deadline = time.monotonic()+delay
             while not self.stopping and time.monotonic() < deadline:
                 time.sleep(min(1, max(0, deadline-time.monotonic())))

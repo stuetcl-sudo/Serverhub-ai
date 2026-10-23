@@ -54,3 +54,15 @@ it("shows actionable diagnostics from the backend", async () => {
   expect(await screen.findByText("No heartbeat")).toBeInTheDocument();
   expect(screen.getByText("Inspect worker unit")).toBeInTheDocument();
 });
+it("grants controller-only development without enrolling a host or enabling staging", async () => {
+  const fetch = backend({ "/api/hosts": [] }); render(<ProfileSetup />);
+  await screen.findByText("Dennis (owner)");
+  fireEvent.change(screen.getByLabelText("Autonomy profile"), { target: { value: "development" } });
+  fireEvent.change(screen.getByLabelText("Authenticated account"), { target: { value: "u1" } });
+  fireEvent.change(screen.getByLabelText("Registered project"), { target: { value: "jarvis-os" } });
+  expect(screen.queryByLabelText("Allowed service names")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByText("Grant expiring profile"));
+  await screen.findByText("Scoped profile active");
+  const write = fetch.mock.calls.find(([url]) => url.endsWith("/policies/profiles"))!;
+  expect(JSON.parse(String(write[1]?.body))).toMatchObject({ profile: "development", project: "jarvis-os", host_id: null, allow_staging: false, hours: 24 });
+});

@@ -1,3 +1,6 @@
+import { DockerOperations } from "./DockerOperations";
+import { HostAuditReport } from "./HostAuditReport";
+import { InventoryHistory } from "./InventoryHistory";
 import {
   createContext,
   useCallback,
@@ -275,6 +278,7 @@ export function Status({ value }: { value: unknown }) {
     "pending",
     "paused",
     "waiting_approval",
+    "waiting_children",
     "approval_required",
     "degraded",
     "retrying",
@@ -1063,7 +1067,7 @@ function Overview({ navigate }: { navigate: (p: string) => void }) {
     jobs = rows(j.data),
     findings = rows(f.data);
   const active = jobs.filter((x) =>
-    ["queued", "running", "retrying", "leased"].includes(x.state),
+    ["queued", "running", "retrying", "leased", "waiting_children"].includes(x.state),
   );
   const open = findings.filter(
     (x) => !["resolved", "dismissed"].includes(x.status),
@@ -1480,6 +1484,7 @@ function HostDetail({ host }: { host: Json }) {
   const r = useResource<Json>(`/hosts/${host.id}/inventory`),
     notice = useContext(ToastContext),
     [tab, setTab] = useState("inventory");
+  const history = useResource<Json[]>(`/hosts/${host.id}/inventory/history`);
   const data = r.data?.inventory || r.data || inventory(host);
   async function refresh() {
     try {
@@ -1493,6 +1498,13 @@ function HostDetail({ host }: { host: Json }) {
       notice((e as Error).message, true);
     }
   }
+  async function audit() {
+    try {
+      const job = await post("/jobs", { kind: "operation", host_id: host.id,
+        spec: { operation: "host.audit", arguments: {} }, token_budget: 0, cost_budget: 0 });
+      notice(`Read-only audit queued: ${job.id}. Follow it in Jobs & activity.`);
+    } catch (e) { notice((e as Error).message, true); }
+  }
   return (
     <div className="modal-content">
       <div className="detail-meta">
@@ -1500,6 +1512,7 @@ function HostDetail({ host }: { host: Json }) {
         <span>Last seen {date(host.last_seen)}</span>
         <span className="mono">{host.id}</span>
       </div>
+      <button className="button secondary" onClick={audit}>Run read-only audit</button>
       <div className="tabs">
         <button
           className={tab === "inventory" ? "active" : ""}
@@ -1513,26 +1526,42 @@ function HostDetail({ host }: { host: Json }) {
         >
           Identity
         </button>
+        <button
+          className={tab === "changes" ? "active" : ""}
+          onClick={() => setTab("changes")}
+        >
+          Changes
+        </button>
         <button className="text-button" onClick={refresh}>
           <RefreshCw size={14} /> Refresh inventory
         </button>
       </div>
-      <Load loading={r.loading} error={r.error} onRetry={r.reload}>
-        <JsonView
-          value={
-            tab === "inventory"
-              ? data
-              : {
-                  id: host.id,
-                  name: host.name,
-                  group: host.group_name,
-                  agent_version: host.agent_version,
-                  revoked: host.revoked,
-                  last_seen: host.last_seen,
-                }
-          }
-        />
-      </Load>
+      {tab === "changes" ? (
+        <Load
+          loading={history.loading}
+          error={history.error}
+          onRetry={history.reload}
+        >
+          <InventoryHistory entries={history.data || []} />
+        </Load>
+      ) : (
+        <Load loading={r.loading} error={r.error} onRetry={r.reload}>
+          <JsonView
+            value={
+              tab === "inventory"
+                ? data
+                : {
+                    id: host.id,
+                    name: host.name,
+                    group: host.group_name,
+                    agent_version: host.agent_version,
+                    revoked: host.revoked,
+                    last_seen: host.last_seen,
+                  }
+            }
+          />
+        </Load>
+      )}
     </div>
   );
 }
@@ -2074,12 +2103,13 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const r = useResource<Json>(`/jobs/${id}`),
     events = useResource<Json[]>(`/jobs/${id}/events`),
     notice = useContext(ToastContext),
+    user = useContext(UserContext),
     [busy, setBusy] = useState(false);
   const job = r.data;
   async function action(name: string) {
     setBusy(true);
     try {
-      await post(`/jobs/${id}/${name}`);
+      await post(name === "publish" ? `/projects/jobs/${id}/publish` : `/jobs/${id}/${name}`);
       notice(`Job ${name} requested.`);
       await r.reload();
       await events.reload();
@@ -2172,6 +2202,7 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
                 />
               )}
               {job.result?.denial && <section className="callout"><div><h4>Permission required</h4><p><strong>{job.result.denial.operation}</strong> · host {job.result.denial.host_id || "none"} · {job.result.denial.environment}</p><p>{job.result.denial.reason}</p><p>{job.result.denial.remediation}</p><a href="#policies" onClick={onClose}>Open scoped autonomy profiles</a></div></section>}
+              {job.result?.mode === "read_only_dry_run" && <HostAuditReport report={job.result} />}
               <h4>Tool-call history</h4>
               {(job.checkpoint?.ai?.evidence || []).map((entry: Json, index: number) => <details key={index}><summary>{index + 1}. {entry.operation}</summary><JsonView value={entry.result} /></details>)}
               <h4>Execution events</h4>
@@ -2208,6 +2239,8 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
               {job.result && (
                 <>
                   <h4>Result</h4>
+                  {job.state === "succeeded" && job.result.verified && ["development", "development_autonomous"].includes(job.kind) && ["owner", "administrator"].includes(user?.role || "") && <button className="button secondary" disabled={busy} onClick={() => action("publish")}>Publish verified candidate as draft PR</button>}
+                  {job.result.publication?.pull_request && <p><a href={job.result.publication.pull_request} target="_blank" rel="noreferrer">Open candidate draft PR</a></p>}
                   <JsonView value={job.result} />
                 </>
               )}
@@ -3203,6 +3236,7 @@ function Backups() {
   ];
   return (
     <>
+      <DockerOperations />
       <div className="toolbar">
         <div className="scope-note">
           <Shield size={17} />
@@ -3588,9 +3622,12 @@ function Integrations() {
 }
 function Projects() {
   const r = useResource<Json[]>("/projects"),
+    hosts = useResource<Json[]>("/hosts"),
     notice = useContext(ToastContext);
   const [project, setProject] = useState<Json | null>(null),
     [patchText, setPatchText] = useState(""),
+    [promptText, setPromptText] = useState(""),
+    [targetHost, setTargetHost] = useState(""),
     [stage, setStage] = useState(false),
     [busy, setBusy] = useState(false),
     [job, setJob] = useState<string | null>(null);
@@ -3600,11 +3637,12 @@ function Projects() {
     setBusy(true);
     try {
       const result = await post("/jobs", {
-        kind: "development",
+        kind: promptText.trim() ? "development_autonomous" : "development",
+        ...(targetHost.trim() ? { host_id: targetHost.trim() } : {}),
         project: project.name,
         spec: {
           project: project.name,
-          ...(patchText.trim() ? { patch: patchText } : {}),
+          ...(promptText.trim() ? { prompt: promptText } : patchText.trim() ? { patch: patchText } : {}),
           stage,
         },
       });
@@ -3691,7 +3729,18 @@ function Projects() {
         >
           <form className="modal-content form-grid" onSubmit={submit}>
             <label>
-              Proposed patch (optional)
+              Autonomous development task (optional)
+              <textarea value={promptText} onChange={(event) => setPromptText(event.target.value)} rows={4} maxLength={16000} placeholder="Describe the requested change. The model inspects, edits, tests and verifies in the registered sandbox." />
+            </label>
+            <label>
+              Enrolled staging host ID (required for runtime deployment)
+              <select value={targetHost} onChange={(event) => setTargetHost(event.target.value)} required={stage}>
+                <option value="">Controller sandbox only</option>
+                {rows(hosts.data).filter(h => !h.revoked).map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Proposed patch (optional; ignored when an autonomous task is supplied)
               <textarea
                 className="mono"
                 value={patchText}
@@ -3707,10 +3756,10 @@ function Projects() {
                 checked={stage}
                 onChange={(event) => setStage(event.target.checked)}
               />
-              Include configured staging checks
+              Deploy to enrolled isolated staging (autonomous task) or run configured staging checks
             </label>
             <p className="muted">
-              The worker creates an isolated Git workspace and checks the active
+              Grant the Development profile once for this project and account under Approval policies. Controller-only checks need no host or privileged broker. The worker creates an isolated Git workspace and checks the active
               project policy. Production deployment is a separate release
               operation.
             </p>

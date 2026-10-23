@@ -48,6 +48,16 @@ class Project(BaseModel):
     allow_dependency_network: bool = False
     max_memory_mb: int = Field(default=2048, ge=128, le=16384)
     max_processes: int = Field(default=64, ge=4, le=256)
+    publication_token_env: str | None = Field(default=None, pattern=r"^SERVERHUB_GITHUB_[A-Z0-9_]{1,80}$")
+    publication_paths: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("publication_paths")
+    @classmethod
+    def publication_prefixes(cls, paths):
+        for path in paths:
+            if not re.fullmatch(r"[A-Za-z0-9_./-]{1,200}", path) or path.startswith("/") or any(p in {"..", ".", ".git", ".github", ".env", ""} for p in path.split("/")):
+                raise ValueError("publication paths must be explicit safe source prefixes")
+        return paths
 
     @field_validator("repository")
     @classmethod
@@ -55,7 +65,7 @@ class Project(BaseModel):
         if value.startswith("/"):
             return value
         parsed = urlsplit(value)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or parsed.query:
             raise ValueError("repository must be an absolute local path or credential-free HTTPS URL")
         return value
 
@@ -109,15 +119,25 @@ def load_projects(path: str | Path | None = None, *, enforce_permissions: bool =
         require_protected_file(chosen)
     if chosen.stat().st_size > 1024 * 1024:
         raise DevelopmentError("project configuration exceeds 1 MiB")
-    raw: Any = yaml.safe_load(chosen.read_text()) or {}
+    try:
+        raw: Any = yaml.safe_load(chosen.read_text()) or {}
+    except (yaml.YAMLError, UnicodeError):
+        raise DevelopmentError("Project configuration is not valid YAML; no values were disclosed") from None
     if not isinstance(raw, dict) or set(raw) - {"projects"}:
         raise DevelopmentError("project configuration must contain only projects")
     entries = raw.get("projects", [])
+    # Older installers wrote an empty mapping. Interpret only this exact empty
+    # shape as no projects; nonempty mappings remain invalid, never guessed.
+    if entries == {}:
+        entries = []
     if not isinstance(entries, list):
         raise DevelopmentError("projects must be an array")
     projects: dict[str, Project] = {}
     for entry in entries:
-        project = Project.model_validate(entry)
+        try:
+            project = Project.model_validate(entry)
+        except ValueError:
+            raise DevelopmentError("Invalid project definition; check the protected project schema (values omitted)") from None
         if project.name in projects:
             raise DevelopmentError("duplicate project name")
         if enforce_permissions and project.checks_path:
@@ -139,3 +159,28 @@ def project_descriptors(path: str | Path | None = None) -> list[dict]:
          "production_deployment": False}
         for project in load_projects(path).values()
     ]
+
+
+def normalize_empty_projects(path, writer):
+    """Reviewed installer/repair only: normalize the exact legacy empty shape."""
+    path = Path(path)
+    require_protected_file(path)
+    load_projects(path)  # reject malformed documents before any write
+    raw = yaml.safe_load(path.read_text())
+    if raw == {"projects": {}}:
+        info = path.stat()
+        writer(str(path), "# Root-owned project contracts.\nprojects: []\n", info.st_mode & 0o777)
+        os.chown(path, info.st_uid, info.st_gid)
+        return "normalized_legacy_empty_mapping"
+    return "retained"
+
+
+def configured_projects():
+    """Safe public API/MCP error; never echo parser values or commands/secrets."""
+    from fastapi import HTTPException
+    try:
+        return load_projects()
+    except (DevelopmentError, OSError, ValueError):
+        raise HTTPException(503, {"code": "projects_configuration_invalid",
+            "message": "Registered project configuration is unavailable or invalid",
+            "remediation": "An administrator must validate /etc/serverhub/projects.yaml; projects must be an array. Existing jobs/configuration were not changed."}) from None

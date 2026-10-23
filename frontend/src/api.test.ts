@@ -86,3 +86,11 @@ it("rejects a gateway HTML success response rather than presenting a fabricated 
     message: "Controller returned an invalid JSON response",
   });
 });
+it("shows safe structured configuration remediation", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: {
+    code: "projects_configuration_invalid", message: "Registered project configuration is unavailable or invalid",
+    remediation: "Ask an administrator to validate projects.yaml"
+  }}), { status: 503 })));
+  await expect(api("/projects")).rejects.toMatchObject({ status: 503,
+    message: "Registered project configuration is unavailable or invalid. Ask an administrator to validate projects.yaml" });
+});
