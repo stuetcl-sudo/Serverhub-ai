@@ -185,10 +185,11 @@ def grant_profile(body: ProfileGrant, actor: Principal = Depends(current_princip
         if body.containers:
             operations.append((["docker.restart"], {"container_names": body.containers}, "maintenance"))
     if body.profile == "development":
+        operations.append((["development.deploy"], {"target": [body.project]}, "staging"))
         operations.append(
             (
                 [
-                    "development.workspace",
+                    "development.workspace", "development.read",
                     "development.patch",
                     "development.dependencies",
                     "development.test",

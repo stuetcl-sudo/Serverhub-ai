@@ -33,7 +33,7 @@ NODE_OPERATIONS = frozenset(
         "systemd.restart",
         "docker.restart",
         "package.plan", "package.apply", "configuration.plan", "configuration.apply",
-        "docker.compose.update", "docker.compose.apply", "docker.backup.create", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "docker.restore.apply",
+        "development.deploy", "docker.compose.update", "docker.compose.apply", "docker.backup.create", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "docker.restore.apply",
     }
 )
 READ_OPERATIONS = frozenset(

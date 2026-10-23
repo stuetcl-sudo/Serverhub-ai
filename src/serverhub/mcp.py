@@ -483,7 +483,7 @@ TOOLS = [
             {
                 "kind": {
                     "type": "string",
-                    "enum": ["inventory", "operation", "workflow", "autonomous", "monitoring", "development"],
+                    "enum": ["inventory", "operation", "workflow", "autonomous", "monitoring", "development", "development_autonomous"],
                 },
                 "host_id": HOST,
                 "project": {"type": "string", "maxLength": 200},

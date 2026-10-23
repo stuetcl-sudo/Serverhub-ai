@@ -25,7 +25,11 @@ root.mkdir(mode=0o700)
 output={}
 
 def run(argv, **kwargs):
-    return subprocess.run(argv,check=True,text=True,capture_output=True,**kwargs).stdout.strip()
+    try:
+        return subprocess.run(argv,check=True,text=True,capture_output=True,**kwargs).stdout.strip()
+    except subprocess.CalledProcessError as error:
+        print('DISPOSABLE_FIXTURE_FAILURE='+json.dumps({'executable':argv[0],'stderr':error.stderr[-4000:]}),flush=True)
+        raise
 
 
 def sha(path):
@@ -40,6 +44,8 @@ for version in ('1','2','3'):
     target=package/'usr/share/shub-disposable-fixture'
     target.mkdir(parents=True)
     (target/'version').write_text(version)
+    for item in [package,*package.rglob('*')]:
+        item.chmod(0o755 if item.is_dir() else 0o644)
     run(['dpkg-deb','--build',str(package),str(root/f'package-{version}.deb')])
 run(['dpkg','--install',str(root/'package-1.deb')])
 Path('/etc/shub-disposable.conf').write_text('healthy\n')

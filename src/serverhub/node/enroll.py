@@ -15,7 +15,7 @@ from .broker import load_config
 def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
     if os.geteuid()!=0:
         raise ValueError('Explicit local root enrollment required')
-    allowed={'docker_backup_plans','package_plans','configuration_plans','compose_updates'}
+    allowed={'docker_backup_plans','package_plans','configuration_plans','compose_updates','staging_projects'}
     if not isinstance(plans,dict) or set(plans)-allowed:
         raise ValueError('Only documented named plan families may be enrolled')
     if not apply:
@@ -51,6 +51,7 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
     (directory/'20-administration.conf').write_text('[Service]\nReadWritePaths=/usr /etc /var/lib/dpkg /var/lib/apt /var/cache/apt\n'
         'ReadOnlyPaths=/etc/serverhub /opt/serverhub /etc/ssh /etc/systemd/system /etc/sudoers /etc/sudoers.d /etc/pam.d\n')
     protected('/var/lib/serverhub-broker/operations',create=True)
+    protected('/var/lib/serverhub-staging',create=True)
     subprocess.run(['systemctl','daemon-reload'],check=True)
     subprocess.run(['systemctl','restart','serverhub-broker'],check=True)
     return {'state':'enrolled','families':{key:list(value) for key,value in plans.items()}}

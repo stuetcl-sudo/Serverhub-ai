@@ -30,6 +30,10 @@ def _checkpoint(ctx: Any, state: dict) -> None:
     result = dict(ctx.job.result or {})
     result["_development"] = state
     ctx.job.result = result
+    if "developer" in (ctx.job.checkpoint or {}):
+        checkpoint = dict(ctx.job.checkpoint)
+        checkpoint["developer"] = state
+        ctx.job.checkpoint = checkpoint
     ctx.db.commit()
     ctx.heartbeat()
 
@@ -124,7 +128,7 @@ def development_job(ctx: Any, spec: dict) -> dict:
         "build_passed": bool(project.build), "tests_passed": True,
         "independent_checks_passed": bool(project.independent_checks),
         "staging_checks_passed": bool(spec.get("stage")),
-        "production_deployed": False,
+        "production_deployed": False, "verified": True,
         "requires": ["owner-reviewed immutable release adapter", "exact artifact digest release policy"],
         "commands": state.get("commands", []),
     }

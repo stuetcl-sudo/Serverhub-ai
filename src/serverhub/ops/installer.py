@@ -28,6 +28,7 @@ ACCOUNTS = {
     "serverhub-api": "/var/lib/serverhub-api",
     "serverhub-worker": "/var/lib/serverhub-worker",
     "serverhub-node": "/var/lib/serverhub-node",
+    "serverhub-staging": "/var/lib/serverhub-stage-runtime",
     "serverhub-migrate": "/var/lib/serverhub-migrate",
 }
 TRUST_FILES = [
@@ -471,7 +472,7 @@ class Installer:
                     "Unsupported OS/architecture/Python. Controller requires Ubuntu 24.04 x86_64 and Python 3.12; run --check"
                 )
             if install_dependencies and "dependencies" not in state["completed"]:
-                packages = ["python3-venv", "ca-certificates", "iproute2", "procps", "util-linux"]
+                packages = ["python3-venv", "ca-certificates", "iproute2", "procps", "util-linux", "bubblewrap", "git"]
                 if self.role == "controller":
                     packages += ["postgresql-16", "postgresql-client-16"]
                 phase(

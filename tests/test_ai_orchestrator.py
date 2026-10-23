@@ -15,6 +15,8 @@ class DB:
         self.memories.append(record)
     def commit(self):
         pass
+    def scalar(self, query):
+        return 0
 
 
 class Context:

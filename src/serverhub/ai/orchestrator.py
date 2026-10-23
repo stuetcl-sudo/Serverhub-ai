@@ -9,8 +9,9 @@ import json
 import hashlib
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, func
 
+from serverhub.database import utcnow
 from serverhub.audit import redact
 from serverhub.integrations.registry import OPERATIONS, IntegrationError, execute, operation_schemas
 from serverhub.host_audit import AuditArguments
@@ -75,6 +76,7 @@ class Specialist(Arguments):
 
 
 class Development(Arguments):
+    prompt: str | None = Field(default=None, max_length=16000)
     project: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     patch: str | None = Field(default=None, max_length=2 * 1024 * 1024)
     base_commit: str | None = Field(default=None, pattern=r"^[a-f0-9]{40,64}$")
@@ -107,6 +109,7 @@ TOOLS: dict[str, tuple[type[BaseModel], str]] = {
     "memory.search": (Search, "Retrieve scoped historical observations and their verification status"),
     "catalog.search": (Search, "Find curated application plans and their operational limitations"),
     "agent.specialize": (Specialist, "Delegate the next planning phase to a specialist using the same permissions and durable shared state"),
+    "development.list": (Arguments, "List only projects for which this authenticated identity has an active development workspace grant"),
     "development.submit": (Development, "Queue a project-policy-gated isolated development job; does not claim deployment"),
 }
 NODE_TOOLS = {"docker.compose.update","package.plan", "package.apply", "configuration.plan", "configuration.apply","docker.backup.create", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "docker.restore.apply", "inventory.refresh", "diagnostics.network", "systemd.status", "systemd.logs", "systemd.restart", "docker.restart", "docker.compose.apply", "security.scan"}
@@ -117,7 +120,7 @@ def tool_schemas(profile: str = "all") -> list[dict]:
              "parameters": model.model_json_schema()}} for name, (model, description) in TOOLS.items()]
     if profile == "all":
         return core + operation_schemas()
-    base = {"inventory.read", "inventory.query", "inventory.refresh", "task.verify", "agent.specialize"}
+    base = {"inventory.read", "inventory.query", "inventory.refresh", "task.verify", "agent.specialize", "development.list", "development.submit"}
     families = {"infrastructure": set(), "linux": {"systemd.", "package.", "configuration.", "diagnostics."},
                 "docker": {"docker.", "catalog."}, "network": {"diagnostics.network"},
                 "security": {"security.", "host.audit"}, "development": {"development."},
@@ -238,15 +241,44 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
         state["specialist"] = args["specialist"]
         agent = AGENTS[args["specialist"]]
         return {"agent": agent.name, "instructions": agent.instructions, "permissions_changed": False}
+    if operation == "development.list":
+        from serverhub.development.config import project_descriptors
+        from serverhub.policy import authorize, PermissionDenied
+        visible = []
+        for project in project_descriptors():
+            try:
+                authorize(ctx.db, ctx.principal, "development.workspace", ctx.job.host_id, project["name"])
+                visible.append(project)
+            except PermissionDenied:
+                continue
+        return {"projects": visible}
     if operation == "development.submit":
-        from serverhub.jobs import submit_job
+        from serverhub.jobs import submit_job, WaitingChildren, BudgetExceeded
+        from serverhub.models import Job
         from serverhub.policy import authorize
         authorize(ctx.db, ctx.principal, "development.workspace", ctx.job.host_id, args["project"])
-        job = submit_job(ctx.db, ctx.principal, "development", args, host_id=ctx.job.host_id,
-                         project=args["project"], parent_id=ctx.job.id,
-                         idempotency_key=f"{ctx.job.id}:development:{call_id}")
+        key=f"{ctx.job.id}:development:{call_id}"
+        job=ctx.db.scalar(select(Job).where(Job.owner_id==ctx.principal.id, Job.idempotency_key==key))
+        if job is None:
+            child_units=ctx.db.scalar(select(func.coalesce(func.sum(Job.tokens_used),0)).where(Job.parent_id==ctx.job.id))
+            child_cost=ctx.db.scalar(select(func.coalesce(func.sum(Job.cost_used),0)).where(Job.parent_id==ctx.job.id))
+            available=ctx.job.token_budget-ctx.job.tokens_used-child_units-4000
+            if available<32:
+                raise BudgetExceeded("Insufficient task-tree budget for development plus final verification")
+            prompt=args.pop("prompt",None)
+            kind="development_autonomous" if prompt else "development"
+            payload={"project":args["project"],"prompt":prompt,"stage":args.get("stage",False)} if prompt else args
+            job=submit_job(ctx.db,ctx.principal,kind,payload,host_id=ctx.job.host_id, project=args["project"],parent_id=ctx.job.id,
+                idempotency_key=key,token_budget=available,cost_budget=max(0,ctx.job.cost_budget-ctx.job.cost_used-child_cost),
+                time_limit=max(1,int(ctx.job.time_limit-(utcnow()-ctx.job.started_at).total_seconds())) if ctx.job.started_at else ctx.job.time_limit)
+            ctx.db.commit()
+        if job.state == "succeeded":
+            return {"job_id":job.id,"state":job.state,"completed":True,"verified":job.result.get("verified", False),"result":job.result}
+        if job.state in {"failed","partial","cancelled"}:
+            return {"job_id":job.id,"state":job.state,"completed":False,"verified":False,"error":job.error,"result":job.result}
+        ctx.job.depends_on=list(set((ctx.job.depends_on or [])+[job.id]))
         ctx.db.commit()
-        return {"job_id": job.id, "state": job.state, "completed": False}
+        raise WaitingChildren("Development subtask is queued; parent releases its execution slot and resumes from checkpoint")
     raise ValueError("Tool has no installed implementation")
 
 
@@ -349,7 +381,10 @@ def autonomous_job(ctx, spec: dict) -> dict:
             {"role": "system", "content": BASE_INSTRUCTIONS},
             {"role": "user", "content": prompt}], "evidence": [], "completed_calls": {}}
         _save(ctx, state)
-    budget = UsageBudget(ctx.job.token_budget, ctx.job.cost_budget, ctx.job.tokens_used, ctx.job.cost_used)
+    from serverhub.models import Job
+    child_units=ctx.db.scalar(select(func.coalesce(func.sum(Job.tokens_used),0)).where(Job.parent_id==ctx.job.id))
+    child_cost=ctx.db.scalar(select(func.coalesce(func.sum(Job.cost_used),0)).where(Job.parent_id==ctx.job.id))
+    budget = UsageBudget(max(0,ctx.job.token_budget-child_units), max(0,ctx.job.cost_budget-child_cost), ctx.job.tokens_used, ctx.job.cost_used)
     activity_this_attempt = False
     def mark_execution():
         nonlocal activity_this_attempt

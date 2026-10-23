@@ -22,7 +22,7 @@ from .settings import get_settings
 
 HANDLERS: dict[str, object] = {}
 TERMINAL = {"succeeded", "partial", "failed", "cancelled"}
-RUNNABLE = {"queued", "retry"}
+RUNNABLE = {"queued", "retry", "waiting_children"}
 
 
 class RetryableError(Exception):
@@ -41,6 +41,10 @@ class PreflightRejected(BudgetExceeded):
 
 
 class JobCancelled(Exception):
+    pass
+
+
+class WaitingChildren(Exception):
     pass
 
 
@@ -274,6 +278,8 @@ def _classify(exc):
         return "waiting_approval", "policy", False
     if isinstance(exc, JobCancelled):
         return "cancelled", "cancelled", False
+    if isinstance(exc, WaitingChildren):
+        return "waiting_children", "dependency_wait", False
     if isinstance(exc, JobPaused):
         return "paused", "paused", False
     if isinstance(exc, LeaseLost):
@@ -309,7 +315,7 @@ def execute_job(job_id: str, worker_id: str):
             ctx.check_cancelled()
             job.result = redact(result if isinstance(result, dict) else {"value": result})
             job.progress = 1.0
-            unverified = job.result.get("completed") is False or (job.kind == "autonomous" and not job.result.get("verified"))
+            unverified = job.result.get("completed") is False or (job.kind in {"autonomous", "development_autonomous"} and not job.result.get("verified"))
             job.state = "partial" if unverified else "succeeded"
             job.finished_at = utcnow()
             job.error = None
@@ -413,7 +419,19 @@ class Worker:
                         Job.host_id == job.host_id, Job.state.in_(["running", "pause_requested", "cancel_requested"])))
                     if host_running >= settings.max_host_jobs:
                         continue
+                if job.started_at and (utcnow()-job.started_at).total_seconds() >= job.time_limit:
+                    job.state, job.failure_class, job.error = "failed", "timeout", "Task deadline exceeded while awaiting dependencies"
+                    job.finished_at = utcnow()
+                    _event(db, job, job.error)
+                    continue
                 dependencies = [db.get(Job, dep) for dep in job.depends_on]
+                # A delegated child failure is an observation for the parent planner,
+                # while an ordinary failed prerequisite still blocks execution.
+                if job.state == "waiting_children":
+                    pending_children = [dep for dep in dependencies if dep and dep.parent_id == job.id]
+                    if any(dep.state not in TERMINAL for dep in pending_children):
+                        continue
+                    dependencies = [dep for dep in dependencies if dep not in pending_children]
                 if any(dep is None or dep.state in {"failed", "partial", "cancelled"} for dep in dependencies):
                     job.state = "failed"
                     job.failure_class = "dependency"
@@ -426,8 +444,10 @@ class Worker:
                 chosen = job
                 break
             if chosen:
+                continuation = chosen.state == "waiting_children"
                 chosen.state = "running"
-                chosen.attempts += 1
+                if not continuation:
+                    chosen.attempts += 1
                 chosen.started_at = chosen.started_at or utcnow()
                 chosen.worker_id = self.worker_id
                 chosen.lease_until = utcnow() + timedelta(seconds=settings.lease_seconds)

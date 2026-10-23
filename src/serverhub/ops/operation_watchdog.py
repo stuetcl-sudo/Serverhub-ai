@@ -29,8 +29,69 @@ def run(argv):
                    env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LC_ALL':'C','DEBIAN_FRONTEND':'noninteractive'})
 
 
+def launch_stage(spec):
+    if not re.fullmatch('[a-zA-Z0-9_-]{1,100}',spec['unit']) or not spec['unit'].startswith('serverhub-stage-'):
+        raise ValueError('Invalid staging unit')
+    directory=protected(spec['directory'])
+    data=Path(spec['data_directory'])
+    if not directory.is_relative_to('/var/lib/serverhub-staging/releases') or not data.is_relative_to('/var/lib/serverhub-stage-data'):
+        raise ValueError('Staging path outside its namespace')
+    argv=spec['argv']
+    if not isinstance(argv,list) or not argv or not argv[0].startswith('/usr/bin/') or any(not isinstance(arg,str) or '\0' in arg for arg in argv):
+        raise ValueError('Invalid enrolled staging executable')
+    dynamic_user='serverhub-stage-'+data.name[:12]
+    properties=['DynamicUser=yes', 'User='+dynamic_user, 'SupplementaryGroups=serverhub-staging',
+        'StateDirectory=serverhub-stage-data/'+data.name, 'StateDirectoryMode=0700', 'ProtectProc=invisible', 'NoNewPrivileges=yes','PrivateNetwork=yes','PrivateTmp=yes','ProtectSystem=strict','ProtectHome=yes',
+        'CapabilityBoundingSet=','RestrictSUIDSGID=yes','ProtectKernelTunables=yes','ProtectKernelModules=yes',
+        'ProtectControlGroups=yes','TasksMax=128',f'MemoryMax={spec["memory_mb"]}M',f'ReadWritePaths={data}',
+        'InaccessiblePaths=-/etc/serverhub -/opt/serverhub -/var/backups/serverhub -/run/serverhub-broker -/var/run/docker.sock -/var/lib/serverhub-worker']
+    command=['/usr/bin/systemd-run','--quiet','--unit',spec['unit'],
+             '--working-directory',str(directory)]
+    for prop in properties:
+        command+=['--property',prop]
+    for key,value in spec['environment'].items():
+        if not re.fullmatch('[A-Z][A-Z0-9_]{0,63}',key) or not isinstance(value,str) or '\0' in value:
+            raise ValueError('Invalid staging environment')
+        command+=['--setenv',key+'='+value]
+    loaded=subprocess.run(['/usr/bin/systemctl','show',spec['unit'],'--property=LoadState','--value'],
+        text=True,capture_output=True,check=False).stdout.strip()
+    if loaded == 'loaded':
+        run(['/usr/bin/systemctl','start',spec['unit']])
+    else:
+        run([*command,'--',*argv])
+
+
+def stage_health(spec, *, timeout=90):
+    health=spec.get('health')
+    if not isinstance(health,dict):
+        raise ValueError('Staging health contract missing')
+    port,path,expected=health['port'],health['path'],health['contains']
+    if not isinstance(port,int) or not 1024<=port<=65535 or not isinstance(path,str) or not path.startswith('/') or len(path)>200 or not isinstance(expected,str) or len(expected)>1000:
+        raise ValueError('Invalid staging health contract')
+    script='import urllib.request; print(urllib.request.urlopen('+repr(f'http://127.0.0.1:{port}{path}')+', timeout=3).read(65536).decode())'
+    deadline=time.monotonic()+timeout
+    while True:
+        pid=subprocess.run(['/usr/bin/systemctl','show',spec['unit'],'--property=MainPID','--value'],text=True,capture_output=True,check=False).stdout.strip()
+        if pid.isdigit() and int(pid)>0:
+            response=subprocess.run(['/usr/bin/nsenter','--target',pid,'--net','--','/usr/bin/python3','-I','-c',script],
+                text=True,capture_output=True,check=False,timeout=5,env={'PATH':'/usr/bin:/bin'})
+            if response.returncode==0 and expected in response.stdout:
+                return True
+        if time.monotonic()>=deadline:
+            raise ValueError('Staging acceptance healthcheck failed')
+        time.sleep(1)
+
+
 def restore(record):
-    if record['kind'] == 'docker_start':
+    if record['kind'] == 'staging':
+        unit=record['new_launch']['unit']
+        if not re.fullmatch('serverhub-stage-[A-Za-z0-9_-]{1,90}',unit):
+            raise ValueError('Invalid staging rollback unit')
+        run(['/usr/bin/systemctl','stop',unit])
+        if record.get('previous_launch'):
+            launch_stage(record['previous_launch'])
+            stage_health(record['previous_launch'])
+    elif record['kind'] == 'docker_start':
         names = record.get('containers', [])
         if not all(re.fullmatch('[a-f0-9]{64}', value) for value in names):
             raise ValueError('Invalid Docker recovery identities')
@@ -46,7 +107,7 @@ def restore(record):
         os.chown(temporary, record['uid'], record['gid'])
         os.replace(temporary, target)
         if record.get('service'):
-            if not re.fullmatch('[A-Za-z0-9_.@-]+\\.service', record['service']) or record['service'].startswith(('serverhub','ssh','systemd','network','sudo','docker','postgres')):
+            if not re.fullmatch(r'[A-Za-z0-9_.@-]+\.service', record['service']) or record['service'].startswith(('serverhub','ssh','systemd','network','sudo','docker','postgres')):
                 raise ValueError('Protected recovery service')
             run(['/usr/bin/systemctl','restart',record['service']])
     elif record['kind'] == 'package':

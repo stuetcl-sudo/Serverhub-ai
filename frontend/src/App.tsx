@@ -278,6 +278,7 @@ export function Status({ value }: { value: unknown }) {
     "pending",
     "paused",
     "waiting_approval",
+    "waiting_children",
     "approval_required",
     "degraded",
     "retrying",
@@ -1066,7 +1067,7 @@ function Overview({ navigate }: { navigate: (p: string) => void }) {
     jobs = rows(j.data),
     findings = rows(f.data);
   const active = jobs.filter((x) =>
-    ["queued", "running", "retrying", "leased"].includes(x.state),
+    ["queued", "running", "retrying", "leased", "waiting_children"].includes(x.state),
   );
   const open = findings.filter(
     (x) => !["resolved", "dismissed"].includes(x.status),
@@ -3621,6 +3622,8 @@ function Projects() {
     notice = useContext(ToastContext);
   const [project, setProject] = useState<Json | null>(null),
     [patchText, setPatchText] = useState(""),
+    [promptText, setPromptText] = useState(""),
+    [targetHost, setTargetHost] = useState(""),
     [stage, setStage] = useState(false),
     [busy, setBusy] = useState(false),
     [job, setJob] = useState<string | null>(null);
@@ -3630,11 +3633,12 @@ function Projects() {
     setBusy(true);
     try {
       const result = await post("/jobs", {
-        kind: "development",
+        kind: promptText.trim() ? "development_autonomous" : "development",
+        ...(targetHost.trim() ? { host_id: targetHost.trim() } : {}),
         project: project.name,
         spec: {
           project: project.name,
-          ...(patchText.trim() ? { patch: patchText } : {}),
+          ...(promptText.trim() ? { prompt: promptText } : patchText.trim() ? { patch: patchText } : {}),
           stage,
         },
       });
@@ -3721,7 +3725,15 @@ function Projects() {
         >
           <form className="modal-content form-grid" onSubmit={submit}>
             <label>
-              Proposed patch (optional)
+              Autonomous development task (optional)
+              <textarea value={promptText} onChange={(event) => setPromptText(event.target.value)} rows={4} maxLength={16000} placeholder="Describe the requested change. The model inspects, edits, tests and verifies in the registered sandbox." />
+            </label>
+            <label>
+              Enrolled staging host ID (required for runtime deployment)
+              <input value={targetHost} onChange={(event) => setTargetHost(event.target.value)} maxLength={100} />
+            </label>
+            <label>
+              Proposed patch (optional; ignored when an autonomous task is supplied)
               <textarea
                 className="mono"
                 value={patchText}
@@ -3737,7 +3749,7 @@ function Projects() {
                 checked={stage}
                 onChange={(event) => setStage(event.target.checked)}
               />
-              Include configured staging checks
+              Deploy to enrolled isolated staging (autonomous task) or run configured staging checks
             </label>
             <p className="muted">
               The worker creates an isolated Git workspace and checks the active

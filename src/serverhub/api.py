@@ -329,6 +329,22 @@ def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], princi
         job.state = "cancel_requested" if job.state in {"running", "pause_requested"} else "cancelled"
         if job.state == "cancelled":
             job.finished_at = utcnow()
+        descendants = [job.id]
+        visited = {job.id}
+        while descendants:
+            children = db.scalars(select(Job).where(Job.parent_id.in_(descendants), Job.owner_id == job.owner_id)).all()
+            descendants = []
+            for child in children:
+                if child.id in visited:
+                    continue
+                visited.add(child.id)
+                descendants.append(child.id)
+                if child.state not in TERMINAL:
+                    child.state = "cancel_requested" if child.state in {"running", "pause_requested"} else "cancelled"
+                    if child.state == "cancelled":
+                        child.finished_at = utcnow()
+                    db.add(JobEvent(job_id=child.id, message="Parent task cancelled", data={"actor": principal.id, "parent": job.id}))
+                    append_audit(db, principal.id, "job.cancel", child.id, {"parent": job.id})
     elif action == "resume":
         if job.state not in {"paused", "waiting_approval"}:
             raise HTTPException(409, "Only paused or policy-blocked jobs can resume")

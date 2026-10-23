@@ -112,3 +112,60 @@ def test_root_named_plan_cannot_touch_control_plane():
                 'configuration_plans':{'unsafe':{'path':'/etc/passwd','candidate':{'path':str(candidate),'sha256':digest(candidate)}}}}
         with pytest.raises(DockerBackupError,match='Protected'):
             execute_administration('configuration.apply',{'target':'unsafe'},config)
+
+
+def test_waiting_parent_releases_host_slot_and_resumes_without_attempt(core_env,owner):
+    from serverhub.jobs import WaitingChildren
+    def parent(ctx,spec):
+        if not ctx.job.depends_on:
+            child=submit_job(ctx.db,ctx.principal,'child-test',{},parent_id=ctx.job.id,host_id='node1')
+            ctx.job.depends_on=[child.id]
+            ctx.db.commit()
+            raise WaitingChildren('Awaiting independently authorized child')
+        child=ctx.db.get(Job,ctx.job.depends_on[0])
+        return {'verified':True,'child_state':child.state}
+    HANDLERS['parent-test']=parent
+    HANDLERS['child-test']=lambda ctx,spec:{'verified':True}
+    with SessionLocal() as db:
+        task=submit_job(db,owner,'parent-test',{},host_id='node1')
+        identity=task.id
+        db.commit()
+    worker=Worker(isolated=False)
+    assert worker.run_once()
+    with SessionLocal() as db:
+        assert db.get(Job,identity).state=='waiting_children'
+    assert worker.run_once() and worker.run_once()
+    with SessionLocal() as db:
+        assert db.get(Job,identity).state=='succeeded'
+        assert db.get(Job,identity).attempts==1
+        assert db.get(Job,identity).result['child_state']=='succeeded'
+
+
+def test_parent_observes_failed_child_instead_of_silently_failing_dependency(core_env,owner):
+    HANDLERS['observing-parent']=lambda ctx,spec:{'observed':ctx.db.get(Job,ctx.job.depends_on[0]).state}
+    with SessionLocal() as db:
+        parent=submit_job(db,owner,'observing-parent',{})
+        child=submit_job(db,owner,'observing-parent',{},parent_id=parent.id)
+        child.state='failed'
+        parent.state='waiting_children'
+        parent.attempts=1
+        parent.depends_on=[child.id]
+        identity=parent.id
+        db.commit()
+    assert Worker(isolated=False).run_once()
+    with SessionLocal() as db:
+        assert db.get(Job,identity).result['observed']=='failed'
+        assert db.get(Job,identity).attempts==1
+
+
+def test_cancellation_propagates_to_queued_subtasks(client,owner):
+    HANDLERS['cancel-tree']=lambda ctx,spec:{}
+    with SessionLocal() as db:
+        headers=bearer(db)
+        parent=submit_job(db,owner,'cancel-tree',{})
+        child=submit_job(db,owner,'cancel-tree',{},parent_id=parent.id)
+        identities=parent.id,child.id
+        db.commit()
+    assert client.post('/api/jobs/'+identities[0]+'/cancel',headers=headers).status_code==200
+    with SessionLocal() as db:
+        assert all(db.get(Job,identity).state=='cancelled' for identity in identities)

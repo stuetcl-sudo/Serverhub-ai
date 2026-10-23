@@ -117,7 +117,7 @@ class WorkspaceManager:
             raise
         return destination
 
-    def apply_patch(self, workspace: Path, patch: str) -> dict:
+    def apply_patch(self, workspace: Path, patch: str, *, message="Apply authorized ServerHub development change") -> dict:
         if not patch or len(patch.encode()) > 2 * 1024 * 1024:
             raise DevelopmentError("patch must contain 1 byte to 2 MiB")
         if "GIT binary patch" in patch or re.search(r"^(?:new file mode|new mode) (?:120000|160000)", patch, re.M):
@@ -138,7 +138,7 @@ class WorkspaceManager:
         git(workspace, "apply", "--check", "--whitespace=error-all", "--", input=patch)
         git(workspace, "apply", "--index", "--whitespace=error-all", "--", input=patch)
         assert_safe_tree(workspace)
-        git(workspace, "commit", "-m", "Apply authorized ServerHub development change")
+        git(workspace, "commit", "-m", message)
         return {"commit": git(workspace, "rev-parse", "HEAD").strip(),
                 "patch_sha256": hashlib.sha256(patch.encode()).hexdigest(), "changed_paths": paths}
 

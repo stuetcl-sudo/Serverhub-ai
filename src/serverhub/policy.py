@@ -138,7 +138,7 @@ def _authorize(db, principal, operation: str, host_id: str | None = None, projec
 def operation_environment(operation, arguments=None, production=False):
     if production or operation in {"release.production", "development.release", "production.deploy", "network.apply", "firewall.apply"}:
         return "production"
-    if operation == "development.stage" or (arguments or {}).get("stage") is True:
+    if operation in {"development.stage", "development.deploy"} or (arguments or {}).get("stage") is True:
         return "staging"
     if operation.startswith("development."):
         return "development"

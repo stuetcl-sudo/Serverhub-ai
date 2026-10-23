@@ -28,7 +28,7 @@ from .security import vulnerability_findings
 
 MAX_REQUEST = 65536
 ALLOWED_OPERATIONS = frozenset({"inventory.refresh", "discovery.refresh", "diagnostics.network", "diagnostics.storage", "systemd.status", "systemd.logs", "systemd.restart",
-                                "docker.restart", "docker.compose.apply", "security.scan", "docker.backup.create", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "docker.restore.apply", "package.plan", "package.apply", "configuration.plan", "configuration.apply", "docker.compose.update"})
+                                "docker.restart", "docker.compose.apply", "security.scan", "docker.backup.create", "docker.backup.list", "docker.backup.verify", "docker.restore.plan", "docker.restore.apply", "package.plan", "package.apply", "configuration.plan", "configuration.apply", "docker.compose.update", "development.deploy"})
 PROTECTED_UNITS = re.compile(r"^(serverhub|ssh|sshd|network|systemd-network|NetworkManager|docker|containerd|ufw|nftables|postgresql|dbus|polkit|sudo|cron)", re.I)
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}$")
 
@@ -156,6 +156,13 @@ def _compose_file(entry: dict) -> tuple[Path, Path]:
 def execute(operation: str, arguments: dict, config: dict) -> dict:
     if operation not in ALLOWED_OPERATIONS | {"inventory.events"} or not isinstance(arguments, dict):
         raise BrokerDenied("operation is not allowlisted")
+    if operation == "development.deploy":
+        from .staging import deploy
+        from .docker_backup import DockerBackupError
+        try:
+            return deploy(arguments, config)
+        except (DockerBackupError, KeyError) as error:
+            raise BrokerDenied(str(error)) from error
     if operation == "docker.compose.update":
         from .compose_update import update
         from .docker_backup import DockerBackupError
