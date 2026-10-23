@@ -94,7 +94,7 @@ def _deploy(arguments, config, state, identity, artifact):
     health={'port':int(plan['port']),'path':plan.get('health_path','/'),'contains':plan.get('health_contains','')}
     if not 1024<=health['port']<=65535 or not isinstance(health['path'],str) or not health['path'].startswith('/') or len(health['path'])>200 or not isinstance(health['contains'],str) or len(health['contains'])>1000:
         raise DockerBackupError('Invalid enrolled health endpoint')
-    group='serverhub-ai-project-'+hashlib.sha256(target.encode()).hexdigest()[:12]
+    group='serverhub-ai-prj-'+hashlib.sha256(target.encode()).hexdigest()[:12]
     if plan.get('project_group')!=group:
         raise DockerBackupError('Re-enroll the staging project to establish its isolated source group')
     project_gid=grp.getgrnam(group).gr_gid

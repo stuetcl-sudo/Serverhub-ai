@@ -34,7 +34,7 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
     for target,plan in current.get('staging_projects',{}).items():
         if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',target):
             raise ValueError('Invalid staging project identity')
-        group='serverhub-ai-project-'+hashlib.sha256(target.encode()).hexdigest()[:12]
+        group='serverhub-ai-prj-'+hashlib.sha256(target.encode()).hexdigest()[:12]
         try:
             grp.getgrnam(group)
         except KeyError:

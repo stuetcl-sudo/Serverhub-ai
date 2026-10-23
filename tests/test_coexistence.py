@@ -451,3 +451,14 @@ def test_identity_home_copy_verifies_bytes_and_never_chowns_originals(tmp_path, 
     assert ownership and all(path.is_relative_to(target) for path, *_ in ownership)
     assert all(options == {'follow_symlinks': False} for *_, options in ownership)
     assert all(command[0] == 'useradd' and command[-1] == 'serverhub-ai-node' for command in calls)
+
+
+def test_project_group_namespace_fits_linux_group_name_limit():
+    import hashlib
+    group = 'serverhub-ai-prj-' + hashlib.sha256(b'jarvis').hexdigest()[:12]
+    assert len(group) <= 31
+    for name in ('src/serverhub/node/enroll.py', 'src/serverhub/node/staging.py',
+                 'src/serverhub/ops/operation_watchdog.py'):
+        text = (SOURCE / name).read_text()
+        assert 'serverhub-ai-prj-' in text
+        assert 'serverhub-ai-project-' not in text

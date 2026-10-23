@@ -41,7 +41,7 @@ def launch_stage(spec):
     if not isinstance(argv,list) or not argv or not argv[0].startswith('/usr/bin/') or any(not isinstance(arg,str) or '\0' in arg for arg in argv):
         raise ValueError('Invalid enrolled staging executable')
     project_group=spec.get('project_group','')
-    if not re.fullmatch(r'serverhub-ai-project-[a-f0-9]{12}',project_group):
+    if not re.fullmatch(r'serverhub-ai-prj-[a-f0-9]{12}',project_group):
         raise ValueError('Staging project group missing or invalid')
     dynamic_user='serverhub-ai-stage-'+data.name[:12]
     properties=['DynamicUser=yes', 'User='+dynamic_user, 'SupplementaryGroups='+project_group,
