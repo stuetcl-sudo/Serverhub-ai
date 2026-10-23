@@ -102,7 +102,7 @@ def restore(record):
             run(['/usr/bin/docker','start',*names])
     elif record['kind'] == 'configuration':
         target, backup = protected(record['target']), protected(record['backup'])
-        if str(target).startswith(('/etc/serverhub', '/opt/serverhub', '/etc/ssh', '/etc/sudoers', '/etc/pam', '/etc/systemd')):
+        if str(target).startswith(('/etc/serverhub', '/opt/serverhub', '/etc/ssh', '/etc/sudoers', '/etc/pam', '/etc/systemd', '/etc/apparmor', '/etc/security', '/etc/profile', '/etc/environment', '/etc/ld.so', '/etc/cron', '/etc/init.d', '/etc/rc', '/etc/polkit', '/etc/dbus', '/etc/udev', '/etc/modules', '/etc/modprobe', '/etc/sysctl', '/var/lib/serverhub', '/var/log/serverhub', '/var/backups/serverhub', '/var/spool/cron', '/root', '/usr', '/bin', '/sbin', '/lib', '/boot', '/proc', '/sys', '/dev', '/run')):
             raise ValueError('Protected control-plane recovery target')
         temporary = target.with_name('.serverhub-rollback-' + record['id'])
         shutil.copyfile(backup, temporary)

@@ -11,8 +11,8 @@ from .docker_backup import protected, atomic, DockerBackupError
 from .discovery import command, CollectionError
 from serverhub.ops.operation_watchdog import restore
 
-PROTECTED_PACKAGES = re.compile(r'^(serverhub|openssh|sudo|systemd|libc6|linux-|postgresql|mysql|mariadb|redis|ufw|nftables|iptables|network-manager|netplan|polkit|dbus|pam|libpam)', re.I)
-PROTECTED_PATHS = ('/etc/serverhub', '/etc/ssh', '/etc/sudoers', '/etc/pam', '/etc/shadow', '/etc/passwd', '/etc/group', '/etc/gshadow', '/etc/systemd', '/etc/apt', '/etc/netplan', '/etc/network', '/etc/nftables', '/etc/ufw', '/opt/serverhub')
+PROTECTED_PACKAGES = re.compile(r'^(apparmor|bubblewrap|python3|libpython|libapparmor|libcap|libseccomp|openssl|libssl|coreutils|util-linux|dpkg|apt|git|serverhub|openssh|sudo|systemd|libc6|linux-|postgresql|mysql|mariadb|redis|ufw|nftables|iptables|network-manager|netplan|polkit|dbus|pam|libpam)', re.I)
+PROTECTED_PATHS = ('/etc/serverhub', '/etc/ssh', '/etc/sudoers', '/etc/pam', '/etc/shadow', '/etc/passwd', '/etc/group', '/etc/gshadow', '/etc/systemd', '/etc/apt', '/etc/netplan', '/etc/network', '/etc/nftables', '/etc/ufw', '/opt/serverhub', '/etc/apparmor', '/etc/security', '/etc/profile', '/etc/environment', '/etc/ld.so', '/etc/cron', '/etc/init.d', '/etc/rc', '/etc/polkit', '/etc/dbus', '/etc/udev', '/etc/modules', '/etc/modprobe', '/etc/sysctl', '/var/lib/serverhub', '/var/log/serverhub', '/var/backups/serverhub', '/var/spool/cron', '/root', '/usr', '/bin', '/sbin', '/lib', '/boot', '/proc', '/sys', '/dev', '/run')
 
 
 def approved_file(entry):

@@ -212,6 +212,14 @@ feature in Jarvis OS.
 
 ## Audit and acceptance boundaries
 
+Ubuntu 24.04 user-namespace restrictions are handled by an unattached,
+root-installed serverhub-build AppArmor label used explicitly by aa-exec for
+Bubblewrap. It permits namespace setup, retains the filesystem/network sandbox
+and dropped capabilities, and never disables the global kernel restriction.
+A changed existing profile requires explicit local review. Routine package and
+configuration adapters cannot replace AppArmor, Bubblewrap, Python, the package
+manager, ServerHub state/audit files or other compiled protected controls.
+
 The root broker fsyncs an append-oriented hash chain independently of the AI
 worker. Records include job/operator/model correlation and effective OS identity.
 Database runtime roles cannot rewrite audit history. A malicious root operator
