@@ -403,6 +403,8 @@ def test_upgrade_of_existing_0003_schema_adds_runtime_without_erasing_grants(tmp
         )
         db.commit()
     with get_engine().begin() as connection:
+        connection.execute(text("DROP INDEX ix_jobs_priority"))
+        connection.execute(text("ALTER TABLE jobs DROP COLUMN priority"))
         connection.execute(text("DROP TABLE model_routes"))
         connection.execute(text("DROP TABLE worker_heartbeats"))
         connection.execute(text("ALTER TABLE policies DROP COLUMN environment"))
@@ -420,6 +422,7 @@ def test_upgrade_of_existing_0003_schema_adds_runtime_without_erasing_grants(tmp
             in connection.execute(text("SELECT operations FROM policies WHERE id='legacy-policy'")).scalar()
         )
         connection.execute(text("SELECT name FROM model_routes"))
+        connection.execute(text("SELECT priority FROM jobs"))
     get_engine().dispose()
     get_settings.cache_clear()
 

@@ -20,6 +20,7 @@ if (os.geteuid()!=0 or os.environ.get('SERVERHUB_DISPOSABLE_TEST')!='fresh-ubunt
 if not Path('/etc/serverhub/native-ci-node.json').exists():
     raise SystemExit('Run only after the guarded native installation suite')
 
+os.umask(0o077)
 root=Path('/opt/serverhub-operation-fixtures')
 root.mkdir(mode=0o700)
 output={}
@@ -60,7 +61,9 @@ run(['docker','pull','postgres:16-alpine'])
 run(['docker','volume','create','shub-ci-postgres'])
 bind=root/'bind'
 bind.mkdir()
+bind.chmod(0o755)
 (bind/'evidence').write_text('persistent bind content\n')
+(bind/'evidence').chmod(0o644)
 (root/'compose.database.yaml').write_text('services:\n  database:\n    image: postgres:16-alpine\n')
 container=run(['docker','run','-d','--name','shub-ci-database','--network','none',
     '--label',f'com.docker.compose.project.config_files={root / "compose.database.yaml"}',
@@ -74,6 +77,17 @@ for _ in range(60):
 else:
     raise AssertionError('Disposable database did not start')
 run(['docker','exec',container,'psql','-U','postgres','-c',"CREATE TABLE acceptance(value text); INSERT INTO acceptance VALUES ('verified database row');"])
+# Actual pinned stateless Compose lifecycle. Fixtures have no host socket/data.
+compose_images=[]
+for tag in ('busybox:1.36.1','busybox:1.37.0'):
+    run(['docker','pull',tag])
+    compose_images.append(json.loads(run(['docker','image','inspect',tag]))[0]['RepoDigests'][0])
+for name,image,bad in (('compose-old.yaml',compose_images[0],False),('compose-new.yaml',compose_images[1],False),('compose-bad.yaml',compose_images[1],True)):
+    (root/name).write_text(yaml.safe_dump({'services':{'app':{'image':image,'read_only':True,'user':'65534:65534',
+        'cap_drop':['ALL'],'security_opt':['no-new-privileges:true'],'command':['sh','-c','while true; do sleep 1; done'],
+        'healthcheck':{'test':['CMD','false' if bad else 'true'],'interval':'1s','timeout':'2s','retries':2},
+        'mem_limit':'128m','pids_limit':32,'networks':['isolated']}},'networks':{'isolated':{'internal':True}}}))
+run(['docker','compose','--project-name','shub-ci-update','--env-file','/dev/null','-f',str(root/'compose-old.yaml'),'up','-d','--wait'])
 destination=root/'backups'
 destination.mkdir(mode=0o700)
 
@@ -87,6 +101,13 @@ plans={
     'configuration_plans':{
         'fixture-config':{'path':'/etc/shub-disposable.conf','candidate':artifact('healthy.conf'),'service':'shub-disposable.service'},
         'fixture-config-bad':{'path':'/etc/shub-disposable.conf','candidate':artifact('broken.conf'),'service':'shub-disposable.service'}},
+    'compose_updates':{
+        'fixture-compose':{'stateless':True,'project':'shub-ci-update',
+            'previous':{'path':str(root),'compose_file':'compose-old.yaml','sha256':sha(root/'compose-old.yaml')},
+            'candidate':{'path':str(root),'compose_file':'compose-new.yaml','sha256':sha(root/'compose-new.yaml')}},
+        'fixture-compose-bad':{'stateless':True,'project':'shub-ci-update',
+            'previous':{'path':str(root),'compose_file':'compose-new.yaml','sha256':sha(root/'compose-new.yaml')},
+            'candidate':{'path':str(root),'compose_file':'compose-bad.yaml','sha256':sha(root/'compose-bad.yaml')}}},
     'docker_backup_plans':{'fixture-backup':{'containers':['shub-ci-database'],'destination':str(destination),
         'key_file':'/etc/serverhub/docker-backup.key','include_images':True,'allow_isolated_restore':True,
         'allowed_bind_roots':[str(root)]}}
@@ -112,7 +133,7 @@ headers={'Authorization':'Bearer '+login.json()['token'],'Origin':'https://127.0
 host=client.get('/api/hosts',headers=headers).json()[0]['id']
 policy=client.post('/api/policies/profiles',headers=headers,json={'profile':'maintenance','subject_id':login.json()['user']['id'],
     'host_id':host,'hours':1,'package_targets':['fixture-upgrade','fixture-bad'],
-    'configuration_targets':['fixture-config','fixture-config-bad'],'backup_targets':['fixture-backup']})
+    'configuration_targets':['fixture-config','fixture-config-bad'],'compose_targets':['fixture-compose','fixture-compose-bad'],'backup_targets':['fixture-backup']})
 policy.raise_for_status()
 
 
@@ -143,6 +164,12 @@ try:
     assert Path('/etc/shub-disposable.conf').read_text()=='healthy\n'
     assert run(['systemctl','is-active','shub-disposable'])=='active'
     output['configuration_rollback']='passed'
+    job('docker.compose.update',{'target':'fixture-compose'})
+    job('docker.compose.update',{'target':'fixture-compose-bad'},'failed')
+    compose_id=run(['docker','compose','--project-name','shub-ci-update','-f',str(root/'compose-new.yaml'),'ps','-q']).strip()
+    assert run(['docker','inspect','--format','{{.State.Health.Status}}',compose_id])=='healthy'
+    assert json.loads(run(['docker','inspect',compose_id]))[0]['Config']['Image']==compose_images[1]
+    output['stateless_compose_update_and_health_failure_rollback']='passed'
     backup=job('docker.backup.create',{'target':'fixture-backup'})
     assert backup['consistency']=='offline_clean_shutdown' and backup['verified']
     assert run(['docker','inspect','--format','{{.State.Running}}',container])=='true'
@@ -154,6 +181,22 @@ try:
     assert backup['id'] in job('docker.backup.list',{'target':'fixture-backup'})['backups'][0]['id']
     output['database_consistent_encrypted_backup_and_isolated_restore']='passed'
     output['image_exports_and_compose_metadata']='included and authenticated'
+    # Simulate an abandoned offline operation; only the independent root timer
+    # may recover it. No API/worker process performs this inverse.
+    import uuid
+    identity=uuid.uuid4().hex
+    journal=Path('/var/lib/serverhub-broker/operations')/(identity+'.json')
+    run(['docker','stop',container])
+    journal.write_text(json.dumps({'id':identity,'kind':'docker_start','containers':[container],
+        'state':'armed','deadline':time.time()-1}))
+    journal.chmod(0o600)
+    for _ in range(50):
+        if json.loads(journal.read_text())['state']=='reverted':
+            break
+        time.sleep(1)
+    assert json.loads(journal.read_text())['state']=='reverted'
+    assert run(['docker','inspect','--format','{{.State.Running}}',container])=='true'
+    output['independent_watchdog_abandoned_offline_operation']='passed'
     output['source_data_overwritten']=False
     print('HOST_OPERATIONS_EVIDENCE='+json.dumps(output),flush=True)
 finally:

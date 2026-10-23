@@ -196,7 +196,7 @@ def execute(operation: str, arguments: dict, config: dict) -> dict:
             except (BrokerDenied, OSError, ValueError, TypeError, AttributeError):
                 inventory["errors"].append({"collector": "caddy", "error": "Unavailable", "detail": "check protected adapted JSON path and format"})
         inventory["administration"] = {key: sorted(config.get(key, {})) for key in
-            ("docker_backup_plans", "package_plans", "configuration_plans", "compose_updates")}
+            ("docker_backup_plans", "package_plans", "configuration_plans", "compose_updates", "staging_projects")}
         operation_state = Path(config.get("operations_state", "/var/lib/serverhub-broker/operations"))
         transactions = []
         for journal in sorted(operation_state.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)[:100]:
@@ -471,8 +471,11 @@ class BrokerHandler(socketserver.StreamRequestHandler):
             result = execute(operation, payload["arguments"], self.server.config)
             result["execution_context"] = privilege
             response = {"ok": True, "result": result}
-        except (BrokerDenied, CollectionError, ValueError, OSError, TypeError, KeyError):
-            response = {"ok": False, "error": "operation rejected or failed; inspect protected broker audit"}
+        except Exception as error:
+            from serverhub.audit import redact
+            # No raw subprocess output or traceback crosses the broker boundary.
+            detail = str(error) if isinstance(error, (BrokerDenied, CollectionError, ValueError, OSError, TypeError, KeyError)) else type(error).__name__
+            response = {"ok": False, "error": "Broker operation failed: " + str(redact(detail))[:1000]}
         finally:
             try:
                 append_broker_audit(self.server.config, {"at": time.time(), "uid": uid,

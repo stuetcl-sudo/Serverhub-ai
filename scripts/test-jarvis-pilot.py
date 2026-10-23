@@ -27,6 +27,7 @@ def run(argv, **kw):
         print('JARVIS_FIXTURE_FAILURE='+json.dumps({'executable':argv[0],'stderr':error.stderr[-6000:]}),flush=True)
         raise
 
+os.umask(0o077)
 root=Path('/opt/serverhub-jarvis-pilot')
 root.mkdir(mode=0o755)
 root.chmod(0o755)
@@ -56,7 +57,7 @@ project={'name':'jarvis','repository':str(source),'base_ref':'serverhub-acceptan
     'allow_dependency_network':True,'max_memory_mb':2048,'max_processes':128,
     'dependencies':[{'argv':['/usr/bin/python3','-m','pip','install','--break-system-packages','--no-compile','--target','runtime','-r','requirements.txt','pytest==8.3.5'],'network':True,'timeout':600}],
     'build':[{'argv':['/usr/bin/python3','-m','compileall','-q','app']}],
-    'tests':[{'argv':['/usr/bin/env','PYTHONPATH=runtime','SAFE_MODE=true','DRY_RUN=true','WORKER_ENABLED=false','/usr/bin/python3','-m','pytest','-q','tests/test_dashboard_routes.py'],'timeout':180}],
+    'tests':[{'argv':['/usr/bin/env','PYTHONPATH=runtime','DB_PATH=/tmp/jarvis-test.db','SAFE_MODE=true','DRY_RUN=true','WORKER_ENABLED=false','/usr/bin/python3','-m','pytest','-q','tests/test_dashboard_routes.py'],'timeout':180}],
     'checks_path':str(checks),'independent_checks':[{'argv':['/usr/bin/python3','/checks/check.py']}],
     'artifact_paths':['app','runtime','requirements.txt'],'max_artifact_bytes':512*1024**2}
 projects=Path('/etc/serverhub/projects.yaml')
