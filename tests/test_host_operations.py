@@ -169,3 +169,34 @@ def test_cancellation_propagates_to_queued_subtasks(client,owner):
     assert client.post('/api/jobs/'+identities[0]+'/cancel',headers=headers).status_code==200
     with SessionLocal() as db:
         assert all(db.get(Job,identity).state=='cancelled' for identity in identities)
+
+
+def test_bind_source_cannot_escape_through_a_symlinked_ancestor(tmp_path):
+    from serverhub.node.docker_backup import DockerBackups
+    root=tmp_path/'allowed'
+    root.mkdir()
+    (root/'escape').symlink_to('/etc',target_is_directory=True)
+    instance=object.__new__(DockerBackups)
+    instance.plan={'allowed_bind_roots':[str(root)]}
+    with pytest.raises(DockerBackupError,match='Sensitive or symlinked'):
+        instance._source(root/'escape'/'passwd')
+
+
+def test_backup_mount_preflight_rejects_silent_root_disk_fallback(tmp_path,monkeypatch):
+    import serverhub.node.docker_backup as backup
+    monkeypatch.setattr(backup.os,'geteuid',lambda:0)
+    monkeypatch.setattr(backup,'protected',lambda path,**kw:Path(path))
+    monkeypatch.setattr(backup.os.path,'ismount',lambda path:Path(path)==Path('/'))
+    key=tmp_path/'key'
+    key.write_bytes(secrets.token_bytes(32))
+    key.chmod(0o600)
+    config={'operations_state':str(tmp_path),'docker_backup_plans':{'data':{'key_file':str(key),'destination':str(tmp_path)}}}
+    with pytest.raises(DockerBackupError,match='OS filesystem'):
+        backup.DockerBackups(config,'data')
+    config['docker_backup_plans']['data']['required_mount']='/mnt/not-mounted'
+    with pytest.raises(DockerBackupError,match='Required backup mount'):
+        backup.DockerBackups(config,'data')
+    config['docker_backup_plans']['data'].pop('required_mount')
+    config['docker_backup_plans']['data']['allow_system_disk']=True
+    instance=backup.DockerBackups(config,'data')
+    instance.close()

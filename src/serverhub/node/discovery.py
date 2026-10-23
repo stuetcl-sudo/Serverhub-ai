@@ -15,7 +15,6 @@ import re
 import shutil
 import socket
 import subprocess
-import resource
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,31 +31,60 @@ class CollectionError(RuntimeError):
 
 
 def bounded_run(argv: list[str], *, timeout: int = 15, limit: int = MAX_OUTPUT) -> str:
-    """No shell or caller environment. A tempfile bounds memory even for noisy tools."""
-    import tempfile
+    """Bound captured streams, not every file the child legitimately writes.
+
+    RLIMIT_FSIZE is deliberately not used: it also truncates apt/dpkg databases
+    and cache files, unrelated to captured diagnostic output.
+    """
+    import selectors
+    import signal
     if not argv or not Path(argv[0]).is_absolute():
         raise CollectionError("executable must use an absolute path")
-    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
+    proc = None
+    try:
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C", "HOME": "/nonexistent",
+                 "DEBIAN_FRONTEND": "noninteractive", "APT_LISTCHANGES_FRONTEND": "none"}, start_new_session=True)
+        deadline=time.monotonic()+timeout
+        output=bytearray()
+        captured=0
+        with selectors.DefaultSelector() as selector:
+            selector.register(proc.stdout,selectors.EVENT_READ,True)
+            selector.register(proc.stderr,selectors.EVENT_READ,False)
+            while selector.get_map():
+                remaining=deadline-time.monotonic()
+                if remaining<=0:
+                    raise CollectionError(f"{Path(argv[0]).name} timed out")
+                for key,_ in selector.select(min(.1,remaining)):
+                    block=os.read(key.fileobj.fileno(),65536)
+                    if not block:
+                        selector.unregister(key.fileobj)
+                        continue
+                    captured+=len(block)
+                    if captured>limit:
+                        raise CollectionError(f"{Path(argv[0]).name} exceeded output limit")
+                    if key.data:
+                        output.extend(block)
         try:
-            proc = subprocess.Popen(argv, stdout=output, stderr=error, stdin=subprocess.DEVNULL,
-                                    env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C", "HOME": "/nonexistent", "DEBIAN_FRONTEND": "noninteractive", "APT_LISTCHANGES_FRONTEND": "none"},
-                                    start_new_session=True, preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit)))
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                import signal
-                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=max(.01,deadline-time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise CollectionError(f"{Path(argv[0]).name} timed out") from None
+        if proc.returncode:
+            raise CollectionError(f"{Path(argv[0]).name} exited {proc.returncode}; permission or tool failure")
+        return output.decode("utf-8","replace")
+    except OSError as exc:
+        raise CollectionError(f"{Path(argv[0]).name}: {type(exc).__name__}") from exc
+    finally:
+        if proc is not None:
+            if proc.poll() is None:
+                try:
+                    os.killpg(proc.pid,signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 proc.wait()
-                raise CollectionError(f"{Path(argv[0]).name} timed out") from None
-            size = output.tell()
-            if size > limit:
-                raise CollectionError(f"{Path(argv[0]).name} exceeded output limit")
-            if proc.returncode:
-                raise CollectionError(f"{Path(argv[0]).name} exited {proc.returncode}; permission or tool failure")
-            output.seek(0)
-            return output.read(limit + 1).decode("utf-8", "replace")
-        except OSError as exc:
-            raise CollectionError(f"{Path(argv[0]).name}: {type(exc).__name__}") from exc
+            for stream in (proc.stdout,proc.stderr):
+                if stream is not None:
+                    stream.close()
 
 
 def command(name: str, *args: str, timeout: int = 15) -> str:
