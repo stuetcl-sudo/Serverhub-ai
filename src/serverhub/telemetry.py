@@ -55,6 +55,8 @@ def metrics_from(inventory: dict) -> dict:
         "memory_total": memory.get("total"),
         "load_1m": load[0] if load else None,
         "load_per_core": (load[0] / cores) if load else None,
+        "disk_usage": {str(disk.get("mountpoint")): {key: disk.get(key) for key in ("used", "free", "total", "percent", "fstype")}
+                       for disk in hardware.get("disks", [])},
         "disk_max_percent": max((x.get("percent", 0) for x in hardware.get("disks", [])), default=None),
         "temperatures": {
             name: [entry.get("current") for entry in entries]

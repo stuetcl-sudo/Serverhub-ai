@@ -211,6 +211,24 @@ for _ in range(60):
 assert result["state"] == "succeeded", result
 assert result["result"]["verified"]
 assert result["attempts"] == 1 and result["tokens_used"] <= 20000
+
+# The deterministic read-only audit must also work without a model call, under
+# the real worker DB role and native node UID. Poll only this disposable node.
+audit_job = client.post("/api/jobs", headers=adult_headers, json={"kind": "operation", "host_id": host,
+    "spec": {"operation": "host.audit", "arguments": {}}, "token_budget": 0, "cost_budget": 0, "time_limit": 180})
+audit_job.raise_for_status()
+for _ in range(30):
+    subprocess.run(["runuser", "-u", "serverhub-node", "--", python, "-c",
+        'import json;from serverhub.node.agent import NodeAgent;NodeAgent(json.load(open("/etc/serverhub/native-ci-node.json"))).run_once()'],
+        cwd="/", check=True)
+    audit_result = client.get("/api/jobs/" + audit_job.json()["id"], headers=adult_headers).json()
+    if audit_result["state"] in ("succeeded", "partial", "failed", "waiting_approval"):
+        break
+    time.sleep(1)
+assert audit_result["state"] == "partial", audit_result
+assert audit_result["result"]["mode"] == "read_only_dry_run"
+assert audit_result["result"]["changes_executed"] == []
+assert audit_result["tokens_used"] == 0
 diag = client.get("/api/diagnostics", headers=headers)
 diag.raise_for_status()
 checks = {check["id"]: check for check in diag.json()["checks"]}
@@ -259,6 +277,7 @@ print(
             "model_setup": "mock Ollama API verified",
             "preflight_pause_refund_resume": "passed",
             "read_only_autonomous_job": result["state"],
+            "read_only_host_audit": audit_result["state"],
             "unauthorized_restart": unauthorized.status_code,
             "upgrade": upgraded["state"],
             "failed_upgrade_rollback": "passed",

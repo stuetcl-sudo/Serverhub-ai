@@ -4,6 +4,10 @@ The [token-budget and execution fix](docs/token-budget-fix.md) records the measu
 20k failure, provider-aware accounting, durable reservations and attempt-safe
 preflight pause/resume behavior.
 
+A [persistent read-only host audit](docs/host-audit.md) now collects fresh node
+evidence and generates capacity/security/update/zone plans without a model or
+production changes. See [its verification report](docs/host-audit-report.md).
+
 The first [issue #2 increment](docs/host-autonomy.md) fixes model token accounting
 and adds bounded read-only discovery history. See [its verification report](docs/issue-2-report.md)
 for implemented scope, tests and remaining multi-agent/optimization work.

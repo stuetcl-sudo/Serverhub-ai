@@ -439,6 +439,8 @@ TOOLS = [
         ),
         "serverhub:policies",
     ),
+    ("audit_host", "Queue a persistent read-only host audit; returns job ID, no repairs or fake synchronous completion",
+     _object({"host_id": HOST}, ["host_id"]), "serverhub:jobs"),
     ("list_hosts", "List authorized managed hosts", _object(), "serverhub:read"),
     (
         "read_inventory",
@@ -508,6 +510,9 @@ def _call(name, arguments, actor, db):
         return policy_templates()
     if name == "activate_policy":
         return activate_policy(arguments, actor, db)
+    if name == "audit_host":
+        return api.add_job(api.NewJob(kind="operation", host_id=arguments["host_id"],
+                                     spec={"operation": "host.audit", "arguments": {}}, token_budget=0, cost_budget=0), actor, db)
     if name == "list_hosts":
         return api.hosts(actor, db)
     if name == "read_inventory":

@@ -6,6 +6,7 @@ agent has neither Docker-group membership nor a privileged socket.
 from __future__ import annotations
 
 import hashlib
+import csv
 import ipaddress
 import json
 import os
@@ -312,8 +313,26 @@ def gpu_inventory() -> dict:
             except (OSError, ValueError):
                 continue
         devices.append(item)
-    return {"devices": devices, "source": "linux_drm_sysfs", "utilization": "unavailable",
-            "coverage": "DRM devices only; missing devices are not proof of no GPU"}
+    nvidia = {"pci_devices": [], "status": "unverified", "devices": []}
+    for device in sorted(Path("/sys/bus/pci/devices").glob("*"))[:1000]:
+        try:
+            if (device / "vendor").read_text().strip() == "0x10de" and (device / "class").read_text().strip().startswith("0x03"):
+                nvidia["pci_devices"].append(device.name)
+        except OSError:
+            continue
+    if shutil.which("nvidia-smi", path="/usr/sbin:/usr/bin:/sbin:/bin"):
+        try:
+            text = command("nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,utilization.gpu", "--format=csv,noheader,nounits", timeout=3)
+            for row in list(csv.reader(text.splitlines()))[:32]:
+                if len(row) == 5:
+                    nvidia["devices"].append({"index": row[0].strip(), "name": row[1].strip(), "memory_total_mib": row[2].strip(), "memory_used_mib": row[3].strip(), "utilization_percent": row[4].strip()})
+            nvidia["status"] = "observed" if nvidia["devices"] else "no_devices_reported"
+        except CollectionError:
+            nvidia["status"] = "probe_failed"
+    else:
+        nvidia["status"] = "tool_unavailable"
+    return {"devices": devices, "source": "linux_drm_sysfs", "nvidia": nvidia,
+            "coverage": "DRM/PCI and optional bounded nvidia-smi read; missing observations do not prove no GPU"}
 
 
 def caddy_endpoints(document: dict) -> list[dict]:
@@ -354,9 +373,34 @@ def firewall_inventory() -> dict:
             return {"available": False, "backend": "unknown", "effectiveness": "unverified", "reason": "insufficient privileges or no supported tool"}
 
 
+
+def storage_inventory() -> dict:
+    result = {"mounts": [], "loops": [], "errors": [], "smart_tool_available": bool(shutil.which("smartctl")),
+              "smart_health": "unverified"}
+    for key, args in (("mounts", ("findmnt", "--json", "--list", "--output", "TARGET,SOURCE,FSTYPE")),
+                      ("loops", ("losetup", "--json", "--output", "NAME,BACK-FILE,SIZELIMIT,RO"))):
+        try:
+            raw = json.loads(command(*args, timeout=5))
+            result[key] = raw.get("filesystems" if key == "mounts" else "loopdevices", [])[:1000]
+        except (CollectionError, ValueError):
+            result["errors"].append({"collector": key, "reason": "read unavailable; not proof of no mounts/loopback"})
+    return result
+
+
+def update_inventory() -> dict:
+    result = {"available": False, "reboot_required": Path("/run/reboot-required").exists(), "esm_updates": "unverified"}
+    try:
+        text = command("apt", "list", "--upgradable", timeout=10)
+        lines = [line for line in text.splitlines() if "/" in line and "[upgradable from:" in line]
+        result.update({"available": True, "upgradable_count": len(lines), "source": "local_apt_cache",
+                       "cache_freshness": "unverified", "packages": [line.split("/", 1)[0] for line in lines[:200]], "truncated": len(lines) > 200})
+    except CollectionError:
+        result["reason"] = "apt local cache listing unavailable; no update/install attempted"
+    return result
+
 def discover(*, privileged: bool = False) -> dict[str, Any]:
     inventory: dict[str, Any] = {"schema_version": 1, "observed_at": datetime.now(timezone.utc).isoformat(), "errors": []}
-    collectors = {"os": _os, "hardware": _hardware, "packages": _packages, "interfaces": _interfaces,
+    collectors = {"storage": storage_inventory, "updates": update_inventory, "os": _os, "hardware": _hardware, "packages": _packages, "interfaces": _interfaces,
                   "routes": _routes, "dns": _dns, "ports": _ports, "services": _services, "docker": docker_inventory if privileged else _docker,
                   "firewall": firewall_inventory if privileged else lambda: {"available": False, "effectiveness": "unverified", "reason": "broker required"},
                   "neighbors": lambda: json.loads(command("ip", "-j", "neigh", "show"))}
