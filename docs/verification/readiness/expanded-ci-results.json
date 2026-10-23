@@ -24,15 +24,18 @@
     "scope": "DOM integration tests and build; no new full browser session"
   },
   "native": {
-    "commit": "f3cfba3a0891a1df1e894ba93753fc63c62d0541",
-    "run": 39945270439,
-    "job": 120386435369,
+    "commit": "442ccb33a14260c9514940a6e3e17a202e81c0af",
+    "run": 39946677391,
+    "job": 120391116810,
     "install_upgrade": "passed",
     "host_operations": "passed",
     "docker_consistent_restore": "passed",
     "root_timer_recovery": "passed",
-    "jarvis": "actual source repair, dependencies, eight upstream dashboard tests and independent version check passed; native staging denied by extracted root mode 0700",
-    "entire_job": "failure"
+    "jarvis": "passed: actual Qwen source repair, dependencies, eight upstream tests, independent acceptance, worker interruption/recovery, private HTTP staging and verified failed-next-stage rollback",
+    "entire_job": "success",
+    "worker_recovery_attempts": 2,
+    "jarvis_tokens": 13420,
+    "production_deployed": false
   },
   "real_ollama": {
     "commit": "f3cfba3a0891a1df1e894ba93753fc63c62d0541",
@@ -53,7 +56,41 @@
   "limitations": [
     "Private owner test VM/Ollama/NTFS/Pi unavailable",
     "Off-host WORM retention not enrolled",
-    "Stateful update/cutover requires reviewed application-specific adapter",
-    "Jarvis expanded native staging suite pending"
-  ]
+    "Stateful update/cutover requires reviewed application-specific adapter"
+  ],
+  "jarvis": {
+    "commit": "442ccb33a14260c9514940a6e3e17a202e81c0af",
+    "run": 39946677391,
+    "job": 120391116810,
+    "upstream": "0c0ab744cb4159b0d36c00cf52defe3d4caab02b",
+    "regression": "deliberately injected local VERSION value, not upstream bug",
+    "model": "qwen2.5:3b",
+    "verified": true,
+    "worker_recovery": {
+      "restarted_after_source_commit": true,
+      "pid_changed": true
+    },
+    "attempts": 2,
+    "tokens": 13420,
+    "staging_private_network": true,
+    "failed_candidate_rollback_http_verified": true,
+    "production_deployed": false,
+    "scope": "registered tests/test_dashboard_routes.py (8 tests), not every Jarvis test or feature",
+    "version_http": {
+      "commit": "629c4677eaabbbdb5d75905cbbb0f72331718e3b",
+      "run": 39947283945,
+      "job": 120393102757,
+      "verified": true,
+      "tokens": 15463,
+      "attempts": 2,
+      "rollback_http_verified": true
+    }
+  },
+  "emergency_drill": {
+    "commit": "629c4677eaabbbdb5d75905cbbb0f72331718e3b",
+    "run": 39947283945,
+    "job": 120393102757,
+    "status": "failed harness: AI-only inventory.read has no generic operation adapter; replaced with package.plan and native node polling",
+    "not_claimed_passed": true
+  }
 }

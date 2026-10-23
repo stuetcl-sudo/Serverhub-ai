@@ -28,13 +28,21 @@ a test on the owner's private production host.
 | Native host transactions | [Run 39943512380](https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39943512380), native job 120380643727: actual pinned-package upgrade plus failed-acceptance rollback, configuration rollback, healthy stateless Compose update plus unhealthy-candidate rollback passed. |
 | Docker backup/restore | Same native job: cleanly stopped PostgreSQL 16 container, discovered volumes/binds, encrypted backup, SHA/HMAC verification, Compose metadata and image exports, isolated restore into fresh storage and SQL verification of the restored row passed. Original source storage was not overwritten. |
 | Independent operation watchdog | The root systemd timer recovered an intentionally abandoned stopped-container operation. This was timer-driven recovery, not a direct test call to recovery code. |
-| Autonomous Jarvis | Actual pinned upstream source and qwen2.5:3b exercised dependency installation, source-edit attempts, eight upstream dashboard tests and an independent version check. At f3cfba3 the model inspected and repaired the injected local regression, installed dependencies and passed all registered checks. Staging then failed because extraction reset the release root to mode 0700. The fix normalizes the root as well as descendants to the project-only group permissions; actual runtime acceptance and failed-next-stage rollback still require a passing run. |
+| Autonomous Jarvis | [Run 39946677391](https://github.com/stuetcl-sudo/Serverhub-ai/actions/runs/39946677391), native job 120391116810 at `442ccb3`: actual qwen2.5:3b inspected/committed the controlled version repair, installed dependencies, passed eight upstream dashboard tests and the independent version acceptance, recovered after actual worker restart (two attempts), launched native private-network staging and verified its HTTP response. A deliberately failing next health contract rolled back and reverified the prior runtime. 13,420 tokens; no production deployment. |
 
 The six backend skips are four root-only fixtures and two opt-in live-model tests.
 Root behavior runs separately in the native job; real-model execution runs
 separately in the actual Ollama workflow. The native installer also uses an HTTP
 Ollama fixture for predictable onboarding failures: that fixture is not counted
-as real model inference. Read-only host audit can be partial when its inventory
+as real model inference. The earlier Jarvis staging failures (broker UID switching and extracted root
+permissions) were fixed; the successful native run includes the permission
+regression and real runtime acceptance. At `629c467` the strengthened Jarvis probe also verified the version returned by
+/api/health and its rollback. The new emergency-stop drill initially used an
+AI-only tool as a generic operation and failed in the harness after the stop had
+been cleared. The drill now uses the existing read-only package.plan adapter;
+its full run and audit-tampering check are not yet claimed passed.
+
+Read-only host audit can be partial when its inventory
 collectors report gaps; partial is not verified success.
 
 The actual model digest observed for qwen2.5:3b is
@@ -71,9 +79,10 @@ not guaranteed to solve arbitrary development or infrastructure tasks.
    and owner's private Ollama/NTFS disk are inaccessible from this development
    environment. Disposable Ubuntu evidence does not verify their routing,
    certificates, real reboot, storage durability, ARM64 hardware or backups.
-2. Actual autonomous Jarvis runtime staging and failed-next-stage rollback have
-   not yet passed the expanded live integration suite. Do not deploy production
-   on the strength of unit/fixture checks.
+2. The live Jarvis pilot verifies a controlled version regression against eight
+   registered upstream dashboard tests, not completion of all Jarvis features or
+   its entire test suite. Small-model quality is variable; bounded failures remain
+   partial/failed and must never be represented as successful administration.
 3. Stateful package/application migrations, online database snapshots, privileged
    container restores and automatic production cutover require application-specific
    reviewed adapters. General arbitrary root shell execution is not exposed.
