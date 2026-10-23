@@ -52,11 +52,23 @@ def plan(source, *, root=Path('/')):
         raise ConflictError('Namespaced installation already claimed; use normal repair-install.sh')
     journal = root / 'var/lib/serverhub-install/state.json'
     current = root / 'opt/serverhub/current'
+    # Older releases can lack the install journal. Only the live host can
+    # establish identity without it, using independently protected code hashes,
+    # release metadata, and exact systemd unit provenance checked below.
+    journal_missing = not journal.exists()
     if root == Path('/'):
-        protected(journal)
-    data = json.loads(journal.read_text())
-    if data.get('format') != 1 or data.get('state') != 'installed' or not data.get('trust_digest'):
-        raise ConflictError('No completed legacy AI OS install journal; do not adopt this installation')
+        if not journal_missing:
+            protected(journal)
+    elif journal_missing:
+        raise ConflictError('Offline legacy migration requires an install journal')
+    if journal_missing:
+        if root != Path('/'):
+            raise ConflictError('Cannot verify journal-less legacy installation offline')
+        data = None
+    else:
+        data = json.loads(journal.read_text())
+        if data.get('format') != 1 or data.get('state') != 'installed' or not data.get('trust_digest'):
+            raise ConflictError('No completed legacy AI OS install journal; do not adopt this installation')
     if not current.is_symlink() or not current.resolve().is_relative_to((root / 'opt/serverhub/releases').resolve()):
         raise ConflictError('Legacy current release is not an AI OS release symlink')
     installed = current / 'installed.json'
