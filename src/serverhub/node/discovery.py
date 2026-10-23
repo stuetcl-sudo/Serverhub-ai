@@ -85,7 +85,8 @@ def bounded_run(argv: list[str], *, timeout: int = 15, limit: int = MAX_OUTPUT) 
                 directory=protected('/var/lib/serverhub-broker/diagnostics',create=True)
                 from serverhub.audit import redact
                 payload={'executable':Path(argv[0]).name,'returncode':proc.returncode if proc else None,
-                         'stderr':redact(bytes(locals().get('error_tail',b'')).decode('utf-8','replace'))}
+                         'stderr':redact(bytes(locals().get('error_tail',b'')).decode('utf-8','replace')),
+                         'stdout':redact(bytes(locals().get('output',b''))[-8192:].decode('utf-8','replace'))}
                 fd=os.open(directory/'latest.json',os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
                 with os.fdopen(fd,'w') as stream:
                     json.dump(payload,stream)

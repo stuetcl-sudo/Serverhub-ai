@@ -5,7 +5,7 @@
 For an installation with no resume journal, or a reviewed change to protected code, use the explicit local-root workflow below. This is not callable by an AI worker. It intentionally accepts reviewed trust-boundary changes; signing a normal autonomous release must never silently replace its trust anchors.
 
 ```sh
-# Check out the reviewed overhaul branch/ref as your normal user.
+# Check out the reviewed release/production-readiness branch/ref as your normal user.
 ./scripts/install-ubuntu.sh --build-only
 sudo ./scripts/repair-install.sh
 ```

@@ -246,6 +246,23 @@ class DockerBackups:
         if not names or not all(isinstance(n, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', n) for n in names):
             raise DockerBackupError('Plan requires exact container names')
         containers = self.inspect(names)
+        for item in containers:
+            pid=(item.get('State') or {}).get('Pid',0)
+            if isinstance(pid,int) and pid>0:
+                try:
+                    fields={line.split(':',1)[0]:line.split(':',1)[1].split() for line in Path(f'/proc/{pid}/status').read_text().splitlines() if ':' in line}
+                    host_uid,host_gid=int(fields['Uid'][1]),int(fields['Gid'][1])
+                    def mapped(kind,value):
+                        for row in Path(f'/proc/{pid}/{kind}_map').read_text().splitlines():
+                            inside,outside,length=map(int,row.split())
+                            if outside<=value<outside+length:
+                                return inside+value-outside
+                        raise ValueError('Unmapped runtime identity')
+                    uid,gid=mapped('uid',host_uid),mapped('gid',host_gid)
+                    if uid>0:
+                        item['ServerHubRuntimeUser']=str(uid)+':'+str(gid)
+                except (OSError,KeyError,ValueError):
+                    pass  # Config.User or an explicit restore_users contract remains authoritative.
         sources, mounts, compose = {}, {}, {}
         for container in containers:
             for mount in container.get('Mounts', []):
@@ -432,8 +449,12 @@ class DockerBackups:
                 envfile.write_text('\n'.join(cfg.get('Env') or []) + '\n')
                 argv = ['create', '--name', f'{prefix}-{index}', '--network', network, '--cap-drop', 'ALL',
                         '--security-opt', 'no-new-privileges', '--env-file', str(envfile)]
-                if cfg.get('User'):
-                    argv += ['--user', cfg['User']]
+                restore_user=(self.plan.get('restore_users') or {}).get(item['Name'].lstrip('/'))
+                if restore_user is not None and not re.fullmatch(r'[1-9][0-9]*:[0-9]+',str(restore_user)):
+                    raise DockerBackupError('Enrolled restore user must be a numeric nonroot UID:GID')
+                user=restore_user or cfg.get('User') or item.get('ServerHubRuntimeUser')
+                if user:
+                    argv += ['--user',user]
                 if cfg.get('WorkingDir'):
                     argv += ['--workdir', cfg['WorkingDir']]
                 for alias in {item['Name'].lstrip('/'), (cfg.get('Labels') or {}).get('com.docker.compose.service', '')} - {''}:

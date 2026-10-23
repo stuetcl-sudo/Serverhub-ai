@@ -120,7 +120,8 @@ renew only the intended grant.
 ## Package, configuration and Compose rollback
 
 package.plan checks pinned .deb metadata, exact previous installed versions and
-apt simulation. package.apply snapshots inverse packages, requires the declared
+apt simulation. Only the approved local artifacts are installed with dpkg;
+APT is used for simulation only, with no repository downloads. package.apply snapshots inverse packages, requires the declared
 stateless contract, installs only enrolled artifacts and checks versions plus
 an optional fixed file hash. Removal of unrelated packages and critical
 controller/OS/database packages is denied. On failed acceptance it restores the
@@ -183,7 +184,9 @@ For runtime staging, root enrolls staging_projects with the same project name:
         environment: {SAFE_MODE: "true", DRY_RUN: "true", WORKER_ENABLED: "false"}
 
 The candidate must contain its Python dependencies under runtime and must pass
-independent checks. The broker verifies its SHA-256, rejects links/special files,
+independent checks. Restores preserve an explicit Config.User or a mapped nonroot
+runtime UID:GID observed before shutdown; root can enroll restore_users by exact
+container name when an application needs a specific nonroot startup identity. The broker verifies its SHA-256, rejects links/special files,
 makes a root-owned release, and launches a systemd DynamicUser with private data,
 private network, no capabilities and explicit limits. A fixed independent root
 HTTP checker enters only the candidate network namespace. The job succeeds only

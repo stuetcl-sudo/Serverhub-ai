@@ -9,12 +9,15 @@ Ubuntu Server 24.04 x86_64 VM with at least 2 GB RAM and normal sudo access.
 Check out the reviewed source revision. During review of this overhaul:
 
 ```sh
-git clone --branch overhaul/stability-autonomy https://github.com/stuetcl-sudo/Serverhub-ai.git serverhub-ai-os
+git clone --branch release/production-readiness https://github.com/stuetcl-sudo/Serverhub-ai.git serverhub-ai-os
 cd serverhub-ai-os
-./scripts/install-ubuntu.sh --public-url https://serverhub.example.net --owner dennis
+./scripts/install-ubuntu.sh --public-url https://serverhub.example.net --owner dennis --ai-identity
 ```
 
-After this branch is merged, clone the reviewed `main` or a release ref instead.
+Pin the reviewed commit with git checkout before running the workflow. This is the
+unmerged release candidate; consult [delegated administration](delegated-administration.md)
+and current CI evidence before any production enrollment. After review/merge,
+use the reviewed main branch or signed release ref instead.
 Run the wrapper as your normal user. It validates Ubuntu/Python, installs apt
 prerequisites, downloads an official SHA256-pinned Node.js 22.23.4 build into
 `.build-tools`, installs hashed Python runtime dependencies in `.build-venv`, builds
@@ -24,7 +27,7 @@ PyPI, npm and nodejs.org is required; use reviewed caches for an offline environ
 The build tools are pinned; apt security updates are intentionally not frozen.
 
 The installer creates dedicated `serverhub-api`, `serverhub-worker`,
-`serverhub-node`, and `serverhub-migrate` accounts; a separate `serverhub` database
+`serverhub-node`, `serverhub-staging`, and `serverhub-migrate` accounts; a separate `serverhub` database
 and roles; root-owned release files; hardened systemd units; protected configuration;
 and initial owner credentials. It does not edit existing SSH, firewall, VPN, Docker
 workloads or reverse-proxy configuration. PostgreSQL package installation starts a

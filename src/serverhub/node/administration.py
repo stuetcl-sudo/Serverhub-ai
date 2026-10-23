@@ -88,7 +88,7 @@ def execute_administration(operation, arguments, config):
         record.update(kind='package', previous_debs=copies,new_packages=[name for name,version in before.items() if version is None])
         atomic(journal,record)
         try:
-            command('apt-get','-o','APT::Sandbox::User=root','-y','--no-download','--no-remove','--allow-downgrades','install',*[str(path) for path in candidates],timeout=180)
+            command('dpkg','--install',*[str(path) for path in candidates],timeout=180)
             if any(installed_version(item['name']) != item['version'] for item in descriptions):
                 raise DockerBackupError('Installed package version verification failed')
             if plan.get('verify_file'):

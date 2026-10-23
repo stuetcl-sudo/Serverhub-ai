@@ -113,7 +113,7 @@ def restore(record):
     elif record['kind'] == 'package':
         files = [str(protected(path)) for path in record['previous_debs']]
         if files:
-            run(['/usr/bin/apt-get','-o','APT::Sandbox::User=root','-y','--no-download','--no-remove','--allow-downgrades','install',*files])
+            run(['/usr/bin/dpkg','--install',*files])
         if record.get('new_packages'):
             if not all(re.fullmatch('[a-z0-9][a-z0-9+.-]+', value) for value in record['new_packages']):
                 raise ValueError('Invalid package inverse')
