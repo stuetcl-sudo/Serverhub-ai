@@ -86,6 +86,13 @@ run(['docker','exec','serverhub-jarvis-ollama','ollama','pull','qwen2.5:3b'],tim
 tags=httpx.get('http://127.0.0.1:11434/api/tags',trust_env=False).json()
 
 ca='/etc/serverhub/tls/cert.pem'
+public_ca=Path('/etc/serverhub/native-public-ca.pem')
+shutil.copyfile(ca,public_ca)
+public_ca.chmod(0o644)
+node_path=Path('/etc/serverhub/native-ci-node.json')
+node=json.loads(node_path.read_text())
+node.update(controller_url='https://127.0.0.1:9080',ca_bundle=str(public_ca))
+node_path.write_text(json.dumps(node))
 client=httpx.Client(base_url='https://127.0.0.1:9080',verify=ssl.create_default_context(cafile=ca),trust_env=False,timeout=360)
 login=client.post('/api/auth/login',json={'username':'ciowner','password':'isolated-native-owner-password-42'})
 login.raise_for_status()

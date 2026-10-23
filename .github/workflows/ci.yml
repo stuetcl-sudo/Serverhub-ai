@@ -78,10 +78,12 @@ jobs:
       - name: Build through the documented fresh-Ubuntu workflow
         run: ./scripts/install-ubuntu.sh --build-only
       - name: Native install, interruption, resume, model setup, delegated job and upgrade
+        id: native_install
         run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-native-ubuntu.py
       - name: Actual package transactions and database-consistent Docker restore
         run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-host-operations.py
       - name: Real qwen autonomous Jarvis source repair and native staging rollback
+        if: always() && steps.native_install.outcome == 'success'
         run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-jarvis-pilot.py
       - name: Native service diagnostics
         if: failure()
