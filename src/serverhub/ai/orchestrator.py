@@ -63,7 +63,7 @@ class InventoryQuery(Arguments):
 
 
 class VerificationCheck(Arguments):
-    kind: str = Field(pattern=r"^(inventory.fresh|host.online|systemd.active|container.healthy)$")
+    kind: str = Field(pattern=r"^(inventory.fresh|host.online|systemd.active|container.healthy|job.verified)$")
     target: str | None = Field(default=None, max_length=160)
 
 
@@ -99,7 +99,7 @@ TOOLS: dict[str, tuple[type[BaseModel], str]] = {
     "inventory.query": (InventoryQuery, "Inspect a bounded inventory section of the selected host with optional text filter"),
     "inventory.refresh": (Arguments, "Ask the target Linux node for a fresh inventory"),
     "diagnostics.network": (Network, "Probe a fixed owner-configured network target through the node"),
-    "task.verify": (Verification, "Evaluate explicit inventory freshness, host liveness, service active state or container health from recent authenticated observations. Required before claiming a verified result."),
+    "task.verify": (Verification, "Verify named observations or an acceptance-verified delegated child with kind job.verified and its job ID as target. Required before claiming a verified result."),
     "systemd.logs": (Service, "Read last 100 journal lines of an explicitly permitted broker-allowlisted unit"),
     "systemd.status": (Service, "Read an owner-allowlisted service's measured status"),
     "systemd.restart": (Service, "Restart an owner-allowlisted service and verify status"),
@@ -201,10 +201,10 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
         from serverhub.node_api import execute_node
         return execute_node(ctx, operation, args, idempotency_key=f"{ctx.job.id}:ai:{call_id}")
     if operation == "task.verify":
-        from serverhub.verification import verify_inventory
+        from serverhub.verification import verify_task
         ctx.require("task.verify", arguments=args)
         ctx.require("inventory.read")
-        return verify_inventory(ctx.db, ctx.job.host_id, args["checks"])
+        return verify_task(ctx,args["checks"])
     if operation in {"inventory.read", "inventory.query"}:
         from serverhub.models import Host
         ctx.require("inventory.read")

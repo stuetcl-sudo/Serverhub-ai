@@ -46,6 +46,7 @@ for path in [source,*source.rglob('*')]:
 
 checks=root/'checks'
 checks.mkdir(mode=0o755)
+checks.chmod(0o755)
 (checks/'check.py').write_text("from pathlib import Path\nimport ast,sys\nbase=Path(sys.argv[1]) if len(sys.argv)>1 else Path('/workspace')\nmodule=ast.parse((base/'app/version.py').read_text())\nassert any(isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='VERSION' for t in n.targets) and ast.literal_eval(n.value)=='0.23.0' for n in module.body)\nprint('Independent version acceptance passed')\n")
 (checks/'check.py').chmod(0o644)
 python='/opt/serverhub/current/venv/bin/python'
@@ -120,7 +121,7 @@ def await_job(identity, timeout=1800):
 
 response=client.post('/api/jobs',headers=headers,json={'kind':'development_autonomous','project':'jarvis','host_id':host,
     'token_budget':100000,'time_limit':1800,'max_attempts':2,'spec':{'project':'jarvis','stage':True,'max_steps':16,
-    'prompt':'Repair the controlled local version regression. Record a plan, read app/version.py, and change ONLY VERSION to the expected release 0.23.0 using edit_file. Then run_checks and finish. Preserve the application and tests; the independent acceptance check verifies the exact version. Do not change requirements or other files.'}})
+    'prompt':'Repair the controlled local version regression. Record a plan, read app/version.py, and change ONLY VERSION to the expected release 0.23.0 using set_python_constant with name VERSION and value 0.23.0. Then run_checks and finish. Preserve the application and tests; the independent acceptance check verifies the exact version. Do not change requirements or other files.'}})
 response.raise_for_status()
 job=await_job(response.json()['id'])
 events=client.get('/api/jobs/'+job['id']+'/events',headers=headers).json()
@@ -132,7 +133,8 @@ assert job['result']['staging']['verified'] and job['result']['production_deploy
 assert (source/'app/version.py').read_text()!=original
 assert run(['git','-c','safe.directory='+str(source),'-C',str(source),'rev-parse','HEAD'])==fixture_commit
 work=Path('/var/lib/serverhub-worker/development/workspaces/jarvis')/job['id']
-assert (work/'app/version.py').read_text()==original
+import ast
+assert ast.literal_eval(next(node.value for node in ast.parse((work/'app/version.py').read_text()).body if isinstance(node,ast.Assign) and any(isinstance(name,ast.Name) and name.id=='VERSION' for name in node.targets)))=='0.23.0'
 previous=json.loads(Path('/var/lib/serverhub-broker/operations/stage-jarvis.state').read_text())
 assert run(['systemctl','is-active',previous['unit']])=='active'
 
