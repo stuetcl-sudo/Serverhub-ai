@@ -241,6 +241,17 @@ def api_owns_port(runner, port=9080):
 
 
 def valid_dropin(unit, name, text):
+    if unit == 'serverhub-ai-worker.service' and name == '10-vm-paths.conf':
+        # Permit only the legacy VM override that repeats the reviewed unit's
+        # exact InaccessiblePaths. Never accept an arbitrary reset/relaxation.
+        return text == (
+            '[Service]\n'
+            'InaccessiblePaths=\n'
+            'InaccessiblePaths=-/etc/serverhub/api.env -/etc/serverhub/recovery.env '
+            '-/etc/serverhub/broker.yaml -/var/backups/serverhub '
+            '-/var/lib/serverhub-recovery -/var/lib/serverhub-release '
+            '-/var/run/docker.sock -/run/serverhub-broker -/var/lib/serverhub-node\n'
+        )
     if unit == 'serverhub-ai-worker.service' and name == '10-ai-identity.conf':
         return text == '[Service]\nUser=serverhub-ai\nGroup=serverhub-worker\n'
     if unit == 'serverhub-ai-broker.service' and name == '20-administration.conf':
