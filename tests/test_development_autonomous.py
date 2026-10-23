@@ -73,3 +73,28 @@ def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_
         assert [record['returncode'] for record in job.result['commands']]==[1,0]
         assert job.result['candidate']['sha256']
     assert (source/'app.py').read_text()=="print('old')\n"
+
+
+
+def test_failed_parent_cannot_leave_an_unattended_orphan_executing(core_env,owner):
+    HANDLERS['orphan-fixture']=lambda ctx,spec: {'unexpected_execution':True}
+    with SessionLocal() as db:
+        parent=submit_job(db,owner,'orphan-fixture',{})
+        child=submit_job(db,owner,'orphan-fixture',{},parent_id=parent.id)
+        parent.state='failed'
+        identity=child.id
+        db.commit()
+    assert not Worker(isolated=False).run_once()
+    with SessionLocal() as db:
+        child=db.get(Job,identity)
+        assert child.state=='cancelled' and child.failure_class=='parent_stopped'
+        assert not child.result
+
+def test_development_catalog_tracks_inspection_and_verification():
+    def names(state):
+        return {item['function']['name'] for item in autonomous.available_development_tools(state)}
+    assert names({})=={'plan','read_file','list_files'}
+    inspected=names({'read_hashes':{'app.py':'digest'}})
+    assert 'set_python_constant' in inspected and 'run_checks' in inspected
+    assert 'finish' not in inspected
+    assert 'finish' in names({'read_hashes':{'app.py':'digest'},'checked_commit':'commit'})

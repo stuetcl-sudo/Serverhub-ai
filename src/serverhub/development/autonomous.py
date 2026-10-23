@@ -47,6 +47,16 @@ SCHEMAS=[{'type':'function','function':{'name':name,'description':description,'p
         ('set_python_constant','Set one top-level Python constant to a literal value after reading its file; avoids quote matching',PythonConstant),('edit_file','Replace exactly one matching text block in a previously read source file and commit; simpler than a unified diff',Edit),('run_checks','Run registered dependencies/build/tests/independent checks in bubblewrap',None),('finish','Finish only after configured checks pass; requested staging is verified by an independent broker',None)]]
 
 
+def available_development_tools(state):
+    """Expose only the next executable phase; authorization still runs per tool."""
+    names={'plan','read_file','list_files'}
+    if state.get('read_hashes'):
+        names.update({'apply_patch','edit_file','set_python_constant','run_checks'})
+    if state.get('checked_commit'):
+        names.add('finish')
+    return [schema for schema in SCHEMAS if schema['function']['name'] in names]
+
+
 def replace_python_constant(content, name, value):
     """Change one top-level literal without fuzzy matching or executing source."""
     import ast
@@ -133,6 +143,8 @@ def autonomous_development(ctx,spec):
         raise DevelopmentError('Configure a tool-capable development model route in Setup')
     cfg=routes[route]
     def checks():
+        if not state.get('read_hashes'):
+            raise DevelopmentError('Call read_file to inspect the relevant source before running checks or finishing')
         head=git(workspace,'rev-parse','HEAD').strip()
         failures=state.setdefault('failed_checks',{})
         if failures.get(head,0)>=2:
@@ -179,7 +191,7 @@ def autonomous_development(ctx,spec):
                     raise DevelopmentError('Edit path is outside the bounded source workspace')
                 content=path.read_text()
                 if state.get('read_hashes',{}).get(edit.path)!=hashlib.sha256(content.encode()).hexdigest():
-                    raise DevelopmentError('Read the current file before editing it')
+                    raise DevelopmentError('Call read_file with path '+edit.path+' before editing; the current source has not been inspected')
                 if name=='set_python_constant':
                     if path.suffix!='.py':
                         raise DevelopmentError('Python constant editing requires a .py source file')
@@ -248,7 +260,7 @@ def autonomous_development(ctx,spec):
                 reservation=budget.last_preflight
                 ctx.reserve_model_request(reservation['estimated_input_tokens']+reservation['output_reserve_tokens'],reservation['cost_reserve'])
             try:
-                completion=ChatProvider(cfg).complete(request_messages,SCHEMAS,budget,before_request=before)
+                completion=ChatProvider(cfg).complete(request_messages,available_development_tools(state),budget,before_request=before)
             except PreflightRejected as error:
                 from serverhub.jobs import PreflightRejected as JobPreflight, BudgetExceeded as JobBudget
                 if not activity[0]:

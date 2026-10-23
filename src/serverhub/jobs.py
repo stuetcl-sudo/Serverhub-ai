@@ -25,6 +25,17 @@ TERMINAL = {"succeeded", "partial", "failed", "cancelled"}
 RUNNABLE = {"queued", "retry", "waiting_children"}
 
 
+def parent_stopped(db,job):
+    if not job.parent_id:
+        return False
+    parent=db.get(Job,job.parent_id)
+    if parent:
+        db.refresh(parent)
+    return not parent or parent.owner_id!=job.owner_id or parent.state in TERMINAL or bool(
+        parent.started_at and (utcnow()-parent.started_at).total_seconds()>=parent.time_limit)
+
+
+
 class RetryableError(Exception):
     pass
 
@@ -140,6 +151,8 @@ class JobContext:
         self.db.refresh(self.job)
         if self.job.worker_id != self.worker_id or (self.job.lease_until and self.job.lease_until <= utcnow()):
             raise LeaseLost("Job lease expired or was claimed by another worker")
+        if parent_stopped(self.db,self.job):
+            raise JobCancelled("Parent task finished or its execution deadline expired")
         if self.job.state in {"cancel_requested", "cancelled"}:
             raise JobCancelled("Job cancelled")
         if self.job.state in {"pause_requested", "paused"}:
@@ -414,6 +427,11 @@ class Worker:
                                     .with_for_update(skip_locked=True)).all()
             chosen = None
             for job in candidates:
+                if parent_stopped(db,job):
+                    job.state,job.failure_class,job.error="cancelled","parent_stopped","Parent task finished or its execution deadline expired"
+                    job.finished_at=utcnow()
+                    _event(db,job,job.error)
+                    continue
                 if job.host_id:
                     host_running = db.scalar(select(func.count()).select_from(Job).where(
                         Job.host_id == job.host_id, Job.state.in_(["running", "pause_requested", "cancel_requested"])))
@@ -470,6 +488,8 @@ class Worker:
                     interrupted = ("failed", "lease_lost")
                 elif job.state == "cancel_requested" or self.stopping:
                     interrupted = ("cancelled" if not self.stopping else "retry", "cancelled" if not self.stopping else "worker_shutdown")
+                elif parent_stopped(db,job):
+                    interrupted = ("cancelled", "parent_stopped")
                 elif job.state == "pause_requested":
                     interrupted = ("paused", "paused")
                 elif job.started_at and (utcnow() - job.started_at).total_seconds() >= job.time_limit:
