@@ -276,3 +276,46 @@ def test_migration_rejects_missing_build_artifact_before_systemd(tmp_path, monke
         migration.migrate(source)
     assert systemd_calls == []
     assert not migration.JOURNAL.exists()
+
+
+def test_migration_journal_creates_private_directory_and_persists(tmp_path, monkeypatch):
+    """Exercise real filesystem creation and atomic journal replacement."""
+    import serverhub.ops.migrate_units as migration
+
+    if os.geteuid() != 0:
+        pytest.skip('Root-only migration journal ownership requires root')
+    journal = tmp_path / 'new-installer-state/unit-migration.json'
+    monkeypatch.setattr(migration, 'JOURNAL', journal)
+    assert not journal.parent.exists()
+    migration._save({'state': 'armed', 'units': []})
+    assert journal.parent.is_dir()
+    assert journal.parent.stat().st_mode & 0o777 == 0o700
+    assert json.loads(journal.read_text())['state'] == 'armed'
+    migration._save({'state': 'verified', 'units': []})
+    assert json.loads(journal.read_text())['state'] == 'verified'
+    assert not journal.with_suffix('.tmp').exists()
+
+
+def test_migration_journal_rejects_unsafe_directory(tmp_path, monkeypatch):
+    import serverhub.ops.migrate_units as migration
+
+    journal = tmp_path / 'installer-state/unit-migration.json'
+    journal.parent.mkdir(mode=0o755)
+    journal.parent.chmod(0o755)
+    monkeypatch.setattr(migration, 'JOURNAL', journal)
+    with pytest.raises(ConflictError, match='Unsafe migration journal directory'):
+        migration._save({'state': 'armed'})
+    assert not journal.exists()
+
+
+def test_migration_journal_rejects_symlink_directory(tmp_path, monkeypatch):
+    import serverhub.ops.migrate_units as migration
+
+    actual = tmp_path / 'actual'
+    actual.mkdir(mode=0o700)
+    link = tmp_path / 'installer-link'
+    link.symlink_to(actual, target_is_directory=True)
+    monkeypatch.setattr(migration, 'JOURNAL', link / 'unit-migration.json')
+    with pytest.raises(ConflictError, match='Unsafe migration journal directory'):
+        migration._save({'state': 'armed'})
+    assert not (actual / 'unit-migration.json').exists()
