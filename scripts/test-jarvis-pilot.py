@@ -46,7 +46,7 @@ for path in [source,*source.rglob('*')]:
 
 checks=root/'checks'
 checks.mkdir(mode=0o755)
-(checks/'check.py').write_text("from pathlib import Path\nimport ast\nmodule=ast.parse(Path('/workspace/app/version.py').read_text())\nassert any(isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='VERSION' for t in n.targets) and ast.literal_eval(n.value)=='0.23.0' for n in module.body)\nprint('Independent version acceptance passed')\n")
+(checks/'check.py').write_text("from pathlib import Path\nimport ast,sys\nbase=Path(sys.argv[1]) if len(sys.argv)>1 else Path('/workspace')\nmodule=ast.parse((base/'app/version.py').read_text())\nassert any(isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='VERSION' for t in n.targets) and ast.literal_eval(n.value)=='0.23.0' for n in module.body)\nprint('Independent version acceptance passed')\n")
 (checks/'check.py').chmod(0o644)
 python='/opt/serverhub/current/venv/bin/python'
 # /usr/bin Python remains inside the minimal sandbox. Dependencies and package
@@ -65,6 +65,7 @@ projects.write_text(yaml.safe_dump({'projects':[project]}))
 projects.chmod(0o644)
 plan={'argv':['/usr/bin/python3','-m','uvicorn','app.main_auth:app','--host','127.0.0.1','--port','28098'],
       'port':28098,'health_path':'/','health_contains':'Jarvis','memory_mb':1024,
+      'acceptance_script':{'path':str(checks/'check.py'),'sha256':__import__('hashlib').sha256((checks/'check.py').read_bytes()).hexdigest()},
       'environment':{'SAFE_MODE':'true','DRY_RUN':'true','WORKER_ENABLED':'false'}}
 plans=root/'staging.yaml'
 plans.write_text(yaml.safe_dump({'staging_projects':{'jarvis':plan}}))

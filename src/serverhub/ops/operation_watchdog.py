@@ -39,8 +39,11 @@ def launch_stage(spec):
     argv=spec['argv']
     if not isinstance(argv,list) or not argv or not argv[0].startswith('/usr/bin/') or any(not isinstance(arg,str) or '\0' in arg for arg in argv):
         raise ValueError('Invalid enrolled staging executable')
+    project_group=spec.get('project_group','')
+    if not re.fullmatch(r'serverhub-project-[a-f0-9]{12}',project_group):
+        raise ValueError('Staging project group missing or invalid')
     dynamic_user='serverhub-stage-'+data.name[:12]
-    properties=['DynamicUser=yes', 'User='+dynamic_user, 'SupplementaryGroups=serverhub-staging',
+    properties=['DynamicUser=yes', 'User='+dynamic_user, 'SupplementaryGroups='+project_group,
         'StateDirectory=serverhub-stage-data/'+data.name, 'StateDirectoryMode=0700', 'ProtectProc=invisible', 'NoNewPrivileges=yes','PrivateNetwork=yes','PrivateTmp=yes','ProtectSystem=strict','ProtectHome=yes',
         'CapabilityBoundingSet=','RestrictSUIDSGID=yes','ProtectKernelTunables=yes','ProtectKernelModules=yes',
         'ProtectControlGroups=yes','TasksMax=128',f'MemoryMax={spec["memory_mb"]}M',f'ReadWritePaths={data}',

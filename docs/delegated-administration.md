@@ -181,13 +181,17 @@ For runtime staging, root enrolls staging_projects with the same project name:
         health_path: /
         health_contains: Jarvis
         memory_mb: 1024
+        acceptance_script:
+          path: /srv/checks/jarvis-stage.py
+          sha256: REPLACE_WITH_64_HEX
         environment: {SAFE_MODE: "true", DRY_RUN: "true", WORKER_ENABLED: "false"}
 
 The candidate must contain its Python dependencies under runtime and must pass
 independent checks. Restores preserve an explicit Config.User or a mapped nonroot
 runtime UID:GID observed before shutdown; root can enroll restore_users by exact
 container name when an application needs a specific nonroot startup identity. The broker verifies its SHA-256, rejects links/special files,
-makes a root-owned release, and launches a systemd DynamicUser with private data,
+makes a root-owned release, runs the pinned owner acceptance script as a separate
+nonprivileged checker, and launches a systemd DynamicUser with private data, a project-specific read-only source group,
 private network, no capabilities and explicit limits. A fixed independent root
 HTTP checker enters only the candidate network namespace. The job succeeds only
 after actual HTTP acceptance. Failed staging stops the new unit, relaunches the

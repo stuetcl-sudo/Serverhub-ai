@@ -42,9 +42,9 @@ for version in ('1','2','3'):
     package=root/('package-'+version)
     (package/'DEBIAN').mkdir(parents=True)
     (package/'DEBIAN/control').write_text(f'Package: shub-disposable-fixture\nVersion: {version}.0\nArchitecture: all\nMaintainer: CI fixture <ci@example.invalid>\nDescription: Disposable ServerHub acceptance fixture\n')
-    target=package/'usr/share/shub-disposable-fixture'
+    target=package/'etc'
     target.mkdir(parents=True)
-    (target/'version').write_text(version)
+    (target/'shub-disposable-package-version').write_text(version)
     for item in [package,*package.rglob('*')]:
         item.chmod(0o755 if item.is_dir() else 0o644)
     run(['dpkg-deb','--build',str(package),str(root/f'package-{version}.deb')])
@@ -95,9 +95,9 @@ def artifact(name):return {'path':str(root/name),'sha256':sha(root/name)}
 plans={
     'package_plans':{
         'fixture-upgrade':{'stateless':True,'debs':[artifact('package-2.deb')],'previous_debs':[artifact('package-1.deb')],
-            'verify_file':{'path':'/usr/share/shub-disposable-fixture/version','sha256':hashlib.sha256(b'2').hexdigest()}},
+            'verify_file':{'path':'/etc/shub-disposable-package-version','sha256':hashlib.sha256(b'2').hexdigest()}},
         'fixture-bad':{'stateless':True,'debs':[artifact('package-3.deb')],'previous_debs':[artifact('package-2.deb')],
-            'verify_file':{'path':'/usr/share/shub-disposable-fixture/version','sha256':hashlib.sha256(b'never').hexdigest()}}},
+            'verify_file':{'path':'/etc/shub-disposable-package-version','sha256':hashlib.sha256(b'never').hexdigest()}}},
     'configuration_plans':{
         'fixture-config':{'path':'/etc/shub-disposable.conf','candidate':artifact('healthy.conf'),'service':'shub-disposable.service'},
         'fixture-config-bad':{'path':'/etc/shub-disposable.conf','candidate':artifact('broken.conf'),'service':'shub-disposable.service'}},
@@ -155,9 +155,9 @@ def job(operation,arguments,expected='succeeded'):
 
 try:
     job('package.apply',{'target':'fixture-upgrade'})
-    assert Path('/usr/share/shub-disposable-fixture/version').read_text()=='2'
+    assert Path('/etc/shub-disposable-package-version').read_text()=='2'
     job('package.apply',{'target':'fixture-bad'},'failed')
-    assert Path('/usr/share/shub-disposable-fixture/version').read_text()=='2'
+    assert Path('/etc/shub-disposable-package-version').read_text()=='2'
     output['package_upgrade_and_verified_failure_rollback']='passed'
     job('configuration.apply',{'target':'fixture-config'})
     job('configuration.apply',{'target':'fixture-config-bad'},'failed')

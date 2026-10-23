@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import secrets
 import re
+import grp
+import hashlib
 import subprocess
 
 import yaml
@@ -29,6 +31,15 @@ def enroll(plans, *, config='/etc/serverhub/broker.yaml', apply=False):
             raise ValueError('Plan family must be a mapping')
         current.setdefault(key,{}).update(value)
     current['enable_administration']=True
+    for target,plan in current.get('staging_projects',{}).items():
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',target):
+            raise ValueError('Invalid staging project identity')
+        group='serverhub-project-'+hashlib.sha256(target.encode()).hexdigest()[:12]
+        try:
+            grp.getgrnam(group)
+        except KeyError:
+            subprocess.run(['groupadd','--system',group],check=True)
+        plan['project_group']=group
     for plan in current.get('docker_backup_plans',{}).values():
         key_path=Path(plan['key_file'])
         protected(key_path.parent)
