@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
+import tempfile
 
 from .coexistence import CLAIM, ConflictError, claim, protected, write_claim, valid_dropin
 from .installer import Installer
@@ -132,6 +133,21 @@ def plan(source, *, root=Path('/')):
             'preserved': '/opt/serverhub-control and all foreign services; accounts, data and database remain in place'}
 
 
+def _atomic_file(path, content, mode=0o644, uid=0, gid=0):
+    path = Path(path)
+    fd, temporary = tempfile.mkstemp(prefix='.ai-namespace-', dir=path.parent)
+    try:
+        os.fchmod(fd, mode)
+        os.fchown(fd, uid, gid)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 def _run(argv):
     return subprocess.run(argv, check=True, text=True, capture_output=True, timeout=180, cwd='/')
 
@@ -159,9 +175,7 @@ def recover(*, force=False):
     for path, saved in data['files'].items():
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(base64.b64decode(saved['content']))
-        target.chmod(saved['mode'])
-        os.chown(target, saved['uid'], saved['gid'])
+        _atomic_file(target, base64.b64decode(saved['content']), saved['mode'], saved['uid'], saved['gid'])
     for unit in data['units']:
         Path('/etc/systemd/system', unit['new']).unlink(missing_ok=True)
         directory = Path('/etc/systemd/system', unit['new'] + '.d')
@@ -237,12 +251,11 @@ def migrate(source, *, repair_legacy_permissions=False):
     _save(data)
     # Stable standalone stdlib recovery: does not depend on a candidate wheel.
     helper = Path('/var/lib/serverhub-install/unit-recovery.py')
-    helper.write_text(Path(__file__).with_name('unit_recovery.py').read_text())
-    helper.chmod(0o600)
+    _atomic_file(helper, Path(__file__).with_name('unit_recovery.py').read_bytes(), 0o600)
     service = Path('/etc/systemd/system/serverhub-ai-namespace-recovery.service')
     timer = service.with_suffix('.timer')
-    service.write_text('[Unit]\nDescription=Independent AI OS namespace migration recovery\n[Service]\nType=oneshot\nUser=root\nExecStart=/usr/bin/python3 -I ' + str(helper) + '\n')
-    timer.write_text('[Unit]\nDescription=Recover interrupted AI OS namespace migration\n[Timer]\nOnBootSec=30s\nOnActiveSec=30s\nOnUnitInactiveSec=30s\n[Install]\nWantedBy=timers.target\n')
+    _atomic_file(service, ('[Unit]\nDescription=Independent AI OS namespace migration recovery\n[Service]\nType=oneshot\nUser=root\nExecStart=/usr/bin/python3 -I ' + str(helper) + '\n').encode())
+    _atomic_file(timer, ('[Unit]\nDescription=Recover interrupted AI OS namespace migration\n[Timer]\nOnBootSec=30s\nOnActiveSec=30s\nOnUnitInactiveSec=30s\n[Install]\nWantedBy=timers.target\n').encode())
     _run(['systemctl', 'daemon-reload'])
     _run(['systemctl', 'enable', '--now', timer.name])
     try:
@@ -268,20 +281,21 @@ def migrate(source, *, repair_legacy_permissions=False):
                 text = text.replace(unit['old'], unit['new'])
             text = text.replace('/run/serverhub-broker', '/run/serverhub-ai-broker').replace(
                 'RuntimeDirectory=serverhub-broker', 'RuntimeDirectory=serverhub-ai-broker').replace('/opt/serverhub/recovery/', '/opt/serverhub/recovery-ai/')
-            new.write_text(text)
+            _atomic_file(new, text.encode())
             old.unlink()
             dropdir = Path(str(old) + '.d')
             if dropdir.exists():
                 replacement = Path(str(new) + '.d')
                 replacement.mkdir()
                 for drop in dropdir.iterdir():
-                    import shutil
-                    shutil.copy2(drop, replacement / drop.name)
+                    info = drop.stat()
+                    _atomic_file(replacement / drop.name, drop.read_bytes(), info.st_mode & 0o777, info.st_uid, info.st_gid)
                     drop.unlink()
                 dropdir.rmdir()
         for path in [Path('/etc/serverhub/broker.yaml'), Path('/etc/serverhub/node.yaml')]:
             text = path.read_text().replace('/run/serverhub-broker', '/run/serverhub-ai-broker')
-            path.write_text(text)
+            info = path.stat()
+            _atomic_file(path, text.encode(), info.st_mode & 0o777, info.st_uid, info.st_gid)
         write_claim()
         _run(['systemctl', 'daemon-reload'])
         # The reviewed repair upgrades code, trust anchors and independent runtime.

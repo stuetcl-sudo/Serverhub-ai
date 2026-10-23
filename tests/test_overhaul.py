@@ -334,6 +334,11 @@ def test_install_resume_retains_credentials_configuration_and_completed_phases(t
     monkeypatch.setattr(
         native, "check_compatibility", lambda *args: {"compatible": True, "ready_for_apply": True}
     )
+    # This fixture never applies to the host: accounts/chown/commands are mocked.
+    # Exercise real mode sealing on its caller-owned temporary runtime trees.
+    import serverhub.ops.runtime_permissions as permissions
+    seal = permissions.seal_runtime
+    monkeypatch.setattr(permissions, 'seal_runtime', lambda runtime: seal(runtime, require_root=False))
     monkeypatch.setattr(native.os, "chown", lambda *args: None)
     monkeypatch.setattr(native.os, "getgrouplist", lambda *args: [])
     monkeypatch.setattr(
