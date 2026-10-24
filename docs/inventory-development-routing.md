@@ -64,3 +64,27 @@ mismatched/enriched recovery markers, denied specialization, denied valid writes
 and a crash after an authorized write checkpoint without duplicate dispatch.
 The attached finish patch applied cleanly to f9fb248; recovery guards and tests
 were strengthened during review. No production configuration is changed.
+
+## Native Jarvis follow-up
+
+Validation run 40099244567 failed in the real qwen2.5:3b Jarvis pilot:
+the model successfully read and committed the requested version change, but after
+the intentional worker restart it attempted the same malformed patch three times
+instead of checking its already committed work. The stall guard correctly returned
+partial, not success. Backend, frontend, dependency scans, migrations, installation,
+Docker backup/restore and network isolation checks in that run passed.
+
+The development loop now durably schedules the existing run_checks tool for each
+changed source HEAD before requesting another model decision. It recovers from the
+Git HEAD plus existing inspection/checkpoint state, including older checkpoints.
+A failed check is recorded once per HEAD so this does not create an automatic
+retry loop; changed source permits fresh verification. All configured commands
+still use project authorization and the sandbox. Permission denial is propagated,
+never converted into a successful receipt. Completion and staging gates remain
+unchanged; a successful check does not itself mark the whole job complete.
+Tool availability for further authorized multi-file work is preserved.
+
+Regression coverage includes interruption after the committed edit receipt,
+verification before the next provider request, and revocation of test permission
+while the worker is interrupted. The latter must wait for approval without running
+a new command. Local provider/sandbox fixtures are not real-model evidence.
