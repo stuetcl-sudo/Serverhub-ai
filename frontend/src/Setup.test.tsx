@@ -66,3 +66,17 @@ it("grants controller-only development without enrolling a host or enabling stag
   const write = fetch.mock.calls.find(([url]) => url.endsWith("/policies/profiles"))!;
   expect(JSON.parse(String(write[1]?.body))).toMatchObject({ profile: "development", project: "jarvis-os", host_id: null, allow_staging: false, hours: 24 });
 });
+it("removes a previously selected host when switching to controller-only development", async () => {
+  const fetch = backend(); render(<ProfileSetup />);
+  await screen.findByText("Linux");
+  fireEvent.change(screen.getByLabelText("Authenticated account"), { target: { value: "u1" } });
+  fireEvent.change(screen.getByLabelText("Target host"), { target: { value: "h1" } });
+  fireEvent.change(screen.getByLabelText("Autonomy profile"), { target: { value: "development" } });
+  expect(screen.getByLabelText("Target host")).toBeDisabled();
+  expect(screen.getByLabelText("Target host")).not.toBeRequired();
+  fireEvent.change(screen.getByLabelText("Registered project"), { target: { value: "jarvis-os" } });
+  fireEvent.click(screen.getByText("Grant expiring profile"));
+  await screen.findByText("Scoped profile active");
+  const write = fetch.mock.calls.find(([url]) => url.endsWith("/policies/profiles"))!;
+  expect(JSON.parse(String(write[1]?.body))).toMatchObject({ profile: "development", host_id: null, allow_staging: false });
+});

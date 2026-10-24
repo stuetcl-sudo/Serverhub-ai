@@ -127,11 +127,11 @@ def _compose_file(entry: dict) -> tuple[Path, Path]:
             raise BrokerDenied("compose service uses unsupported privileges/features")
         if not re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[0-9a-f]{64}", str(service.get("image", ""))):
             raise BrokerDenied("compose images must be pinned by digest")
-        if not service.get("read_only") or service.get("cap_drop") != ["ALL"] or "no-new-privileges:true" not in service.get("security_opt", []):
+        if service.get("read_only") is not True or service.get("cap_drop") != ["ALL"] or service.get("security_opt") != ["no-new-privileges:true"]:
             raise BrokerDenied("compose services require read_only, cap_drop ALL and no-new-privileges")
-        if str(service.get("user", "0")).split(":", 1)[0] in {"0", "root", ""}:
-            raise BrokerDenied("compose services require non-root user")
-        if "${" in json.dumps(service):
+        if not re.fullmatch(r"[1-9][0-9]{0,8}(:[1-9][0-9]{0,8})?", str(service.get("user", ""))):
+            raise BrokerDenied("compose services require an explicit numeric non-root UID and optional non-root GID")
+        if re.search(r"\$(?:[A-Za-z_]|\{)", json.dumps(service).replace("$$", "")):
             raise BrokerDenied("compose interpolation is not accepted")
         for mount in service.get("volumes", []):
             # Named volumes only. Bind mounts, driver options and secrets are not accepted.
