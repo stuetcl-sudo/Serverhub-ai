@@ -331,7 +331,7 @@ def test_job_token_budget_is_enforced(core_env, owner, monkeypatch):
         db.commit()
     Worker(isolated=False).run_once()
     with SessionLocal() as db:
-        assert db.get(Job, job_id).state == "failed"
+        assert db.get(Job, job_id).state == "paused"
         assert db.get(Job, job_id).failure_class == "budget"
         assert db.get(Job, job_id).tokens_used == 11
 

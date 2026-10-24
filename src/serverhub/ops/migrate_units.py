@@ -250,7 +250,7 @@ def plan(source, *, root=Path('/')):
             raise ConflictError('Legacy release record must be an ordinary root-owned file')
         protected(installed.resolve().parent)
         expected = {'manifest': {'release_id': current.resolve().name,
-                                'schema_revision': '0005_priority',
+                                'schema_revision': '0006_pause_clock',
                                 'trust_boundary_digest': expected_trust}}
         if json.loads(installed.read_text()) != expected:
             raise ConflictError('Legacy release record does not match independently verified release identity/trust/schema')

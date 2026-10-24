@@ -138,3 +138,9 @@ No new SQL revision is needed. Existing host-specific development grants are not
 broadened: review/regrant a controller-only project profile, adding staging,
 network or draft PR publication only when wanted. See [the exact reviewed upgrade
 and rollback procedure](development-mcp.md#reviewed-production-procedure--not-executed).
+
+### Autopilot reliability
+
+The autopilot update adds migration `0006_pause_clock` and model/job budget defaults.
+See [pause-clock semantics, security limits and reviewed recovery](autopilot-reliability.md).
+Automatic activation across schema revisions remains prohibited.

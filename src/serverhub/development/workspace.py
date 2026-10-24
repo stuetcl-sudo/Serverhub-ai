@@ -59,6 +59,37 @@ def safe_relative(value: str) -> PurePosixPath:
     return path
 
 
+
+def read_source(workspace: Path, relative: str) -> str:
+    """Read bounded regular source via directory FDs; never follow symlinks."""
+    path = safe_relative(relative)
+    sensitive = {".ssh", ".aws", ".azure", ".kube", ".config", "credentials",
+                 "credentials.json", "secrets", "secrets.json", "secrets.yaml", "secrets.yml",
+                 "id_rsa", "id_ed25519", ".netrc", ".npmrc", ".pypirc"}
+    if any(part.lower() in sensitive or (part.lower().startswith(".env") and part.lower() != ".env.example")
+           for part in path.parts):
+        raise DevelopmentError("Credential/configuration path is not readable source")
+    if path.suffix not in {'.py','.json','.toml','.txt','.md','.yaml','.yml','.ts','.tsx','.js','.html','.css','.sql','.sh','.ini','.cfg','.conf','.lock'} and path.name not in {'Dockerfile','Makefile'}:
+        raise DevelopmentError("Source path is outside the bounded text read allowlist")
+    fd = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in path.parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        source = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        with os.fdopen(source, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size > 65536:
+                raise DevelopmentError("Source must be a bounded regular file without hardlinks")
+            content = stream.read(65537)
+            if len(content) > 65536:
+                raise DevelopmentError("Source file exceeds read bound")
+            return content.decode("utf-8")
+    finally:
+        os.close(fd)
+
+
 def assert_safe_tree(workspace: Path) -> None:
     """Reject symlink/submodule content before patching and before artifact export."""
     for root, dirs, files in os.walk(workspace, followlinks=False):
