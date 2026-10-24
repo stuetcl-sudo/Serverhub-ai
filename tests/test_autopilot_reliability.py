@@ -297,3 +297,13 @@ def test_legacy_release_identity_keeps_historical_schema():
     source = inspect.getsource(plan)
     assert "'schema_revision': '0005_priority'" in source
     assert "'schema_revision': '0006_pause_clock'" not in source
+
+
+def test_pausing_unstarted_job_does_not_create_execution_credit():
+    job = SimpleNamespace(started_at=None, paused_seconds=0,
+                          paused_at=utcnow()-timedelta(hours=2))
+    resume_clock(job)
+    assert job.paused_seconds == 0 and job.paused_at is None
+    now = utcnow()
+    job.started_at = now-timedelta(seconds=30)
+    assert elapsed_seconds(job,now) == 30

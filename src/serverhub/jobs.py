@@ -41,7 +41,11 @@ def mark_paused(job):
 
 def resume_clock(job):
     if job.paused_at:
-        job.paused_seconds += max(0.0, (utcnow()-job.paused_at).total_seconds())
+        # A queue pause before the first start was never inside the execution
+        # interval and must not create extra execution credit.
+        if job.started_at:
+            start = max(job.paused_at, job.started_at)
+            job.paused_seconds += max(0.0, (utcnow()-start).total_seconds())
         job.paused_at = None
 
 
