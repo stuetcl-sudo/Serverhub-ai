@@ -47,9 +47,11 @@ Repository code executes under bubblewrap with a fresh user/PID/network/mount na
 no capabilities, a clean environment, read-only `/usr` and `.git`, and only its own
 workspace writable. Host `/etc/serverhub`, backups, home directories and Docker sockets
 are not mounted. Time, process, memory, CPU, core dump and file-size limits apply.
-Network is disabled for builds/tests; an explicitly permitted dependency command shares
-the worker network with DNS/CA trust mounted. It does not implement destination-level
-egress filtering, so approve dependency network access accordingly.
+Network is disabled for builds/tests. Explicitly permitted dependency commands use
+an isolated HTTPS gateway to exact root-registered public package hosts; the host
+network namespace, DNS configuration and private services remain inaccessible.
+See [security-review-a634.md](security-review-a634.md) for limits, IPv4 gateway
+transport, trusted registry assumptions and fail-closed behavior.
 
 Root-owned independent tests are mounted read-only at `/checks`, allowing checks not
 editable by a generated patch. Configure these for meaningful application guarantees.

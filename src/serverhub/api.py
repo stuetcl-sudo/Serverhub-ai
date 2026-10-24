@@ -125,6 +125,8 @@ def _host_dict(host):
 @router.post("/auth/login")
 def login(body: Login, request: Request, response: Response, db=Depends(get_db)):
     settings = get_settings()
+    from .login_security import admit, failure, success
+    admission_key = admit(db, request, body.username)
     user = db.scalar(select(User).where(User.username == body.username).with_for_update())
     now = utcnow()
     # Same expensive verification for absent/disabled/locked users limits account enumeration.
@@ -132,13 +134,11 @@ def login(body: Login, request: Request, response: Response, db=Depends(get_db))
     verified = verify_password(body.password, encoded)
     locked = bool(user and user.locked_until and user.locked_until > now)
     if not user or not verified or not user.enabled or locked:
-        if user and not locked:
-            user.failed_logins += 1
-            if user.failed_logins >= settings.login_failures:
-                user.locked_until = now + timedelta(seconds=settings.login_lock_seconds)
+        if user:
             append_audit(db, "authentication", "login.failed", user.id)
-            db.commit()
+        failure(db, admission_key)
         raise HTTPException(401, "Invalid credentials or account temporarily unavailable")
+    success(db, admission_key)
     user.failed_logins = 0
     user.locked_until = None
     if PASSWORDS.check_needs_rehash(user.password_hash):

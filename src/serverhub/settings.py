@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,19 @@ class Settings(BaseSettings):
     session_hours: int = 12
     login_failures: int = 5
     login_lock_seconds: int = 900
+    login_ip_limit: int = Field(default=10, ge=1, le=1000)
+    login_global_limit: int = Field(default=100, ge=10, le=10000)
+    trusted_proxy_cidrs: list[str] = []
+
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def validate_proxy_networks(cls, values):
+        import ipaddress
+        for value in values:
+            network = ipaddress.ip_network(value, strict=True)
+            if network.prefixlen == 0:
+                raise ValueError("Trust only the actual reverse proxy, never all clients")
+        return values
     max_concurrent_jobs: int = 4
     max_host_jobs: int = 1
     lease_seconds: int = 45

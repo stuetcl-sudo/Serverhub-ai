@@ -1,0 +1,13 @@
+# Optional AI OS vhost only. Do NOT replace or reload the active Caddyfile.
+# Review/import this separate vhost using the existing Caddy administration flow.
+# Keep all existing Control, Pocket ID, MCP and Jarvis routes unchanged.
+ai.example.net {
+    reverse_proxy 127.0.0.1:9080
+}
+# Login rate limits run in the AI OS API, no Caddy plugin required.
+# The API trusts no forwarding headers by default. If this Caddy is the direct
+# loopback peer, set the API's protected environment (not Control's environment):
+# SERVERHUB_TRUSTED_PROXY_CIDRS='["127.0.0.1/32","::1/128"]'
+# Keep uvicorn proxy_headers=False. Do not set a wildcard/broad proxy trust list.
+# If another proxy/CDN precedes Caddy, review Caddy's own trusted_proxies first.
+# Direct native TLS API deployments need no trusted proxy setting.

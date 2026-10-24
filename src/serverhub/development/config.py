@@ -48,6 +48,15 @@ class Project(BaseModel):
     allow_dependency_network: bool = False
     max_memory_mb: int = Field(default=2048, ge=128, le=16384)
     max_processes: int = Field(default=64, ge=4, le=256)
+    dependency_hosts: list[str] = Field(default_factory=lambda: ["pypi.org", "files.pythonhosted.org", "registry.npmjs.org"], max_length=30)
+    max_dependency_bytes: int = Field(default=512*1024**2, ge=1024, le=2*1024**3)
+
+    @field_validator("dependency_hosts")
+    @classmethod
+    def public_dependency_names(cls, names):
+        if any(not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,251}[a-z0-9]", name) or ".." in name for name in names):
+            raise ValueError("dependency_hosts requires exact lowercase public DNS names, no wildcards or URLs")
+        return names
     publication_token_env: str | None = Field(default=None, pattern=r"^SERVERHUB_GITHUB_[A-Z0-9_]{1,80}$")
     publication_paths: list[str] = Field(default_factory=list, max_length=32)
 

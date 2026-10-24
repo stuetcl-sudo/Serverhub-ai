@@ -74,3 +74,5 @@ Automatic firewall/SSH/network mutation and generic production application deplo
 `src/serverhub` contains controller, agent, AI, integrations, native operations and development tools. `frontend` is the real-data web client. `migrations`, `packaging`, `scripts`, `policies`, `tests` and `.github/workflows` contain native deployment and validation assets. The release archive includes source, Git history, a wheel, locked dependencies and prebuilt web assets. No production data, API credentials or private signing keys are included.
 
 License: Apache-2.0.
+
+Security follow-up against installed a63400f: [findings, scope, network/login controls and reviewed upgrade/rollback](docs/security-review-a634.md).

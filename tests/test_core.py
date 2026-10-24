@@ -232,7 +232,7 @@ def test_api_host_scoping_and_owner_only_controls(client):
 def test_api_lockout_and_logout(client):
     for _ in range(5):
         assert client.post("/api/auth/login", json={"username": "adult", "password": "wrong"}).status_code == 401
-    assert client.post("/api/auth/login", json={"username": "adult", "password": PASSWORD}).status_code == 401
+    assert client.post("/api/auth/login", json={"username": "adult", "password": PASSWORD}).status_code == 429
     result = client.post("/api/auth/login", json={"username": "owner", "password": PASSWORD})
     token = result.json()["token"]
     assert client.post("/api/auth/logout", headers={"Origin": "http://testserver"}).status_code == 200
