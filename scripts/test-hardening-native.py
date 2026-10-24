@@ -19,7 +19,11 @@ if not Path('/etc/serverhub/native-ci-node.json').exists():
 
 
 def run(argv, **kw):
-    return subprocess.run(argv,check=True,text=True,capture_output=True,timeout=180,**kw).stdout.strip()
+    result = subprocess.run(argv,check=False,text=True,capture_output=True,timeout=180,**kw)
+    if result.returncode:
+        # Only disposable fixture commands, never authentication payloads.
+        raise RuntimeError(f'Fixture command failed ({result.returncode}): {result.stderr[-8000:]}')
+    return result.stdout.strip()
 
 
 root=Path('/var/lib/serverhub-hardening-ci')
@@ -100,18 +104,30 @@ shutil.copyfile(ca,root/'ca.pem')
 ''')
 (root/'Caddyfile').chmod(0o644)
 try:
+    run(['docker','run','--rm','--read-only','--cap-drop','ALL',
+        '--security-opt','no-new-privileges:true','--tmpfs','/data','--tmpfs','/config',
+        '-v',str(root)+':/fixtures:ro','caddy:2.11.7','caddy','validate',
+        '--config','/fixtures/Caddyfile','--adapter','caddyfile'])
     run(['docker','run','-d','--name','shub-hardening-caddy','--network','host','--read-only','--cap-drop','ALL',
         '--security-opt','no-new-privileges:true','--tmpfs','/data','--tmpfs','/config',
         '-v',str(root)+':/fixtures:ro','caddy:2.11.7','caddy','run','--config','/fixtures/Caddyfile','--adapter','caddyfile'])
+    last_health = 'No health request attempted'
     for _ in range(40):
         try:
-            if httpx.get('http://127.0.0.1:19081/health',trust_env=False).status_code==200:
+            health = httpx.get('http://127.0.0.1:19081/health',trust_env=False)
+            last_health = f'HTTP {health.status_code}: {health.text[:500]}'
+            if health.status_code==200:
                 break
-        except httpx.HTTPError:
-            pass
+        except httpx.HTTPError as exc:
+            last_health = str(exc)
         time.sleep(.5)
     else:
-        raise AssertionError('Disposable Caddy proxy did not become healthy')
+        logs = subprocess.run(['docker','logs','--tail','40','shub-hardening-caddy'],
+                              text=True,capture_output=True,timeout=20)
+        state = subprocess.run(['docker','inspect','--format','{{json .State}}','shub-hardening-caddy'],
+                               text=True,capture_output=True,timeout=20)
+        raise AssertionError('Disposable Caddy proxy did not become healthy: '+last_health+'\n'+
+                             state.stdout+'\n'+logs.stdout+logs.stderr)
     origin={'Origin':'https://127.0.0.1:9080'}
     with httpx.Client(base_url='http://127.0.0.1:19081',transport=httpx.HTTPTransport(local_address='127.0.0.2'),trust_env=False) as attacker:
         for _ in range(5):
