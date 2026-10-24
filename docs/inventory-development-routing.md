@@ -29,3 +29,38 @@ continuation, enum schema, project routing, development tool selection and inval
 mutation arguments without dispatch. Existing policy-denial and restart tests
 remain applicable. Real Ollama behavior requires separate integration verification;
 mocked provider responses demonstrate control flow, not model reliability.
+
+## Follow-up: validation precedes journaling
+
+Argument validation now runs before `in_flight`/`mutating` journaling, before the
+"AI tool request" job event and before any authorization or dispatch. An invalid
+call therefore writes no in-flight marker, logs only operation, specialist and
+error field paths (never rejected values) and cannot trigger "interrupted external
+mutation needs owner reconciliation" after a crash. A stale in-flight marker for a
+call whose arguments are invalid is discarded only when it exactly matches the
+operation, arguments and call ID and contains no checkpoint, failure or other
+dispatch evidence. A mismatched or enriched marker remains blocked for owner
+reconciliation. This legacy recovery assumes the unchanged argument schemas from
+PR #9; schema migrations must not treat newly invalid former writes as unexecuted.
+Valid calls still journal before dispatch, authorize before execution, and retain
+durable checkpoints, idempotency keys and interrupted-mutation reconciliation.
+
+Repeated identical invalid calls remain subject to job step and token budgets: the second sets
+`requires_changed_strategy` and omits the schema to save tokens. An invalid call is
+never dispatched, so it never aborts the job even for a mutating tool.
+
+The development specialist now states its tool coverage (development.list,
+development.submit, task.verify, agent.specialize) and tells the model to call
+`agent.specialize` for host work instead of declaring it unsupported. Delegation
+never changes permissions; the same `job.submit` check and principal apply.
+
+Follow-up validation (2026-10-24): 59 targeted orchestrator/provider tests passed;
+full local suite: 409 passed, 15 skipped, one Starlette deprecation warning.
+Ruff on the changed Python files and git diff whitespace checks passed.
+Skipped tests require disposable PostgreSQL, Unix sockets denied by this local
+sandbox, or a configured real Ollama endpoint. These results are not a real-model
+or native Ubuntu installation verification. Additional negative cases cover
+mismatched/enriched recovery markers, denied specialization, denied valid writes,
+and a crash after an authorized write checkpoint without duplicate dispatch.
+The attached finish patch applied cleanly to f9fb248; recovery guards and tests
+were strengthened during review. No production configuration is changed.

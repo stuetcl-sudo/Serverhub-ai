@@ -20,11 +20,6 @@ from .agents import AGENTS, BASE_INSTRUCTIONS
 from .providers import BudgetExceeded as ProviderBudgetExceeded, ChatProvider, ProviderError, PreflightRejected, UsageBudget, load_routes, estimate_prompt
 
 
-class ToolArgumentsError(Exception):
-    def __init__(self, errors, schema):
-        self.errors, self.schema = errors, schema
-
-
 class Arguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -290,6 +285,34 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
     raise ValueError("Tool has no installed implementation")
 
 
+def _invalid_arguments(operation: str, arguments) -> dict | None:
+    """Validate model-proposed arguments before any journaling, logging of values or dispatch.
+
+    Returns sanitized field paths/types and the tool schema, or None when valid. Rejected
+    values, Pydantic input, context and URLs are never included.
+    """
+    model = OPERATIONS[operation].arguments if operation in OPERATIONS else TOOLS[operation][0]
+    try:
+        model.model_validate(arguments)
+    except ValidationError as exc:
+        errors = [{"path": list(error["loc"]), "type": error["type"]}
+                  for error in exc.errors(include_input=False, include_context=False, include_url=False)]
+        return {"errors": errors, "schema": model.model_json_schema()}
+    return None
+
+
+def _complete_call(ctx, state: dict, operation: str, call_id: str, result: dict) -> dict:
+    cleaned = redact(result)
+    if len(json.dumps(cleaned, default=str).encode()) > 256 * 1024:
+        cleaned = {"truncated": True, "detail": "Tool output exceeds conversation bound; inspect inventory/API directly"}
+    state["completed_calls"][call_id] = cleaned
+    state["evidence"].append({"operation": operation, "result": cleaned})
+    state.pop("in_flight", None)
+    _save(ctx, state)
+    ctx.log("AI tool result", {"operation": operation, "call_id": call_id, "result": cleaned})
+    return cleaned
+
+
 def _pending_tools(ctx, state: dict, on_execution=None) -> None:
     for call in list(state.get("pending_calls") or []):
         operation = call["operation"]
@@ -300,57 +323,62 @@ def _pending_tools(ctx, state: dict, on_execution=None) -> None:
         if prior is not None:
             result = prior
         else:
-            mutating = operation in OPERATIONS and OPERATIONS[operation].writes
-            previous = state.get("in_flight")
-            if previous and previous.get("id") == call_id and previous.get("mutating"):
-                raise ValueError("An interrupted external mutation needs owner reconciliation; its durable checkpoint is retained")
-            state["in_flight"] = {"id": call_id, "operation": operation,
-                                  "arguments": call["arguments"], "mutating": mutating}
-            _save(ctx, state)
-            ctx.log("AI tool request", {"operation": operation, "arguments": call["arguments"],
-                                        "specialist": state["specialist"]})
             fingerprint = hashlib.sha256(json.dumps([operation, call["arguments"]], sort_keys=True).encode()).hexdigest()
             failures = state.setdefault("failed_tools", {})
-            try:
-                if failures.get(fingerprint, 0) >= 2:
-                    raise IntegrationError("Repeated failed operation suppressed; choose a changed diagnostic or remediation strategy", retryable=False)
-                model = OPERATIONS[operation].arguments if operation in OPERATIONS else TOOLS[operation][0]
-                try:
-                    model.model_validate(call["arguments"])
-                except ValidationError as exc:
-                    # Do not echo rejected values, secrets, or Pydantic input/context.
-                    errors = [{"path": list(error["loc"]), "type": error["type"]}
-                              for error in exc.errors(include_input=False, include_context=False, include_url=False)]
-                    raise ToolArgumentsError(errors, model.model_json_schema()) from None
-                if on_execution:
-                    on_execution()
-                result = _run_tool(ctx, operation, call["arguments"], state, call_id)
-            except ToolArgumentsError as exc:
-                failures[fingerprint] = min(3, failures.get(fingerprint, 0) + 1)
-                result = {"failure_class": "invalid_tool_arguments", "errors": exc.errors,
-                          "expected_schema": exc.schema, "operation": operation,
-                          "completed": False, "verified": False, "executed": False,
+            invalid = _invalid_arguments(operation, call["arguments"])
+            if invalid is not None:
+                # Validation precedes in_flight/mutating journaling: nothing was authorized or dispatched,
+                # An exact, bare legacy marker can precede validation in older builds.
+                # Never erase a different request or evidence of dispatch/checkpointing.
+                previous = state.get("in_flight")
+                if previous:
+                    legacy_marker = (
+                        previous.get("id") == call_id
+                        and previous.get("operation") == operation
+                        and previous.get("arguments") == call["arguments"]
+                        and set(previous) <= {"id", "operation", "arguments", "mutating"}
+                    )
+                    if not legacy_marker:
+                        raise ValueError("An interrupted external mutation needs owner reconciliation; its durable checkpoint is retained")
+                    state.pop("in_flight", None)
+                identical = failures[fingerprint] = min(3, failures.get(fingerprint, 0) + 1)
+                ctx.log("AI tool request rejected", {"operation": operation, "specialist": state["specialist"],
+                                                      "valid": False, "error_paths": [e["path"] for e in invalid["errors"]]})
+                result = {"failure_class": "invalid_tool_arguments", "errors": invalid["errors"],
+                          "operation": operation, "completed": False, "verified": False, "executed": False,
                           "retryable": True, "requires_changed_arguments": True,
+                          "identical_failures": identical, "requires_changed_strategy": identical >= 2,
                           "guidance": "Use the advertised schema. Repository dependencies belong to development.list/development.submit, not host inventory."}
-            except IntegrationError as exc:
-                state["in_flight"]["failure"] = {"error": str(exc), "rollback": exc.rollback}
+                if identical < 2:
+                    result["expected_schema"] = invalid["schema"]
+                result = _complete_call(ctx, state, operation, call_id, result)
+            else:
+                mutating = operation in OPERATIONS and OPERATIONS[operation].writes
+                previous = state.get("in_flight")
+                if previous and previous.get("id") == call_id and previous.get("mutating"):
+                    raise ValueError("An interrupted external mutation needs owner reconciliation; its durable checkpoint is retained")
+                state["in_flight"] = {"id": call_id, "operation": operation,
+                                      "arguments": call["arguments"], "mutating": mutating}
                 _save(ctx, state)
-                if mutating:
-                    raise
-                failures[fingerprint] = min(3, failures.get(fingerprint, 0) + 1)
-                result = {"error": str(exc), "verified": False, "completed": False,
-                          "failure_class": "integration", "retryable": exc.retryable,
-                          "identical_failures": failures[fingerprint],
-                          "requires_changed_strategy": failures[fingerprint] >= 2}
-            cleaned = redact(result)
-            if len(json.dumps(cleaned, default=str).encode()) > 256 * 1024:
-                cleaned = {"truncated": True, "detail": "Tool output exceeds conversation bound; inspect inventory/API directly"}
-            result = cleaned
-            state["completed_calls"][call_id] = result
-            state["evidence"].append({"operation": operation, "result": result})
-            state.pop("in_flight", None)
-            _save(ctx, state)
-            ctx.log("AI tool result", {"operation": operation, "call_id": call_id, "result": result})
+                ctx.log("AI tool request", {"operation": operation, "arguments": call["arguments"],
+                                            "specialist": state["specialist"]})
+                try:
+                    if failures.get(fingerprint, 0) >= 2:
+                        raise IntegrationError("Repeated failed operation suppressed; choose a changed diagnostic or remediation strategy", retryable=False)
+                    if on_execution:
+                        on_execution()
+                    result = _run_tool(ctx, operation, call["arguments"], state, call_id)
+                except IntegrationError as exc:
+                    state["in_flight"]["failure"] = {"error": str(exc), "rollback": exc.rollback}
+                    _save(ctx, state)
+                    if mutating:
+                        raise
+                    failures[fingerprint] = min(3, failures.get(fingerprint, 0) + 1)
+                    result = {"error": str(exc), "verified": False, "completed": False,
+                              "failure_class": "integration", "retryable": exc.retryable,
+                              "identical_failures": failures[fingerprint],
+                              "requires_changed_strategy": failures[fingerprint] >= 2}
+                result = _complete_call(ctx, state, operation, call_id, result)
         # Persist removal and its tool response in one checkpoint. A crash at any
         # earlier point reuses the completed result without repeating the effect.
         state["messages"].append({"role": "tool", "tool_call_id": call_id,

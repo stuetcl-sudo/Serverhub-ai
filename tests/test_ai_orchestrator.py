@@ -171,3 +171,179 @@ def test_invalid_mutation_arguments_never_dispatch_or_echo_input(monkeypatch):
     assert failure['executed'] is False
     assert 'secret-value' not in str(failure)
     assert not ctx.operations
+
+
+def _write_state(arguments, call_id="bad-write", **extra):
+    state = {"specialist": "network", "step": 1, "messages": [], "evidence": [], "completed_calls": {},
+             "pending_calls": [{"id": call_id, "name": "adguard__set_rules", "operation": "adguard.set_rules",
+                                "arguments": arguments}]}
+    state.update(extra)
+    return state
+
+
+INVALID_WRITE = {"integration_id": "dns", "rules": [], "token": "secret-value"}
+
+
+def test_invalid_arguments_precede_in_flight_and_mutating_journaling(monkeypatch):
+    snapshots = []
+    original = ai._save
+
+    def spy(ctx, state):
+        snapshots.append(deepcopy(state.get("in_flight")))
+        original(ctx, state)
+    monkeypatch.setattr(ai, "_save", spy)
+    ctx = Context()
+    state = _write_state(INVALID_WRITE)
+    ai._pending_tools(ctx, state)
+    assert snapshots and all(snapshot is None for snapshot in snapshots)
+    assert "in_flight" not in state and ctx.operations == []
+    result = state["evidence"][0]["result"]
+    assert result["failure_class"] == "invalid_tool_arguments" and result["executed"] is False
+    assert not any(message == "AI tool request" for message, _ in ctx.logs)
+    assert "secret-value" not in str(ctx.logs) and "secret-value" not in str(state["messages"])
+
+
+def test_stale_in_flight_marker_of_never_dispatched_invalid_call_does_not_block_recovery():
+    state = _write_state(INVALID_WRITE, in_flight={"id": "bad-write", "operation": "adguard.set_rules",
+                                                    "arguments": INVALID_WRITE, "mutating": True})
+    ai._pending_tools(Context(), state)
+    assert "in_flight" not in state and state["pending_calls"] == []
+    assert state["messages"][0]["role"] == "tool"
+
+
+def test_valid_interrupted_write_keeps_reconciliation_and_checkpoint():
+    valid = {"integration_id": "dns", "rules": []}
+    state = _write_state(valid, in_flight={"id": "bad-write", "operation": "adguard.set_rules", "mutating": True,
+                                            "checkpoint": {"user_rules": ["||old.example^"]}})
+    with pytest.raises(ValueError, match="reconciliation"):
+        ai._pending_tools(Context(), state)
+    assert state["in_flight"]["checkpoint"] == {"user_rules": ["||old.example^"]}
+    assert state["completed_calls"] == {}
+
+
+def test_repeated_identical_invalid_mutation_is_bounded_and_never_aborts_or_dispatches():
+    ctx = Context()
+    state = _write_state(INVALID_WRITE, call_id="c1")
+    for index in (2, 3):
+        state["pending_calls"].append({"id": f"c{index}", "name": "adguard__set_rules",
+                                       "operation": "adguard.set_rules", "arguments": INVALID_WRITE})
+    ai._pending_tools(ctx, state)
+    results = [entry["result"] for entry in state["evidence"]]
+    assert [item["identical_failures"] for item in results] == [1, 2, 3]
+    assert results[0]["requires_changed_strategy"] is False and "expected_schema" in results[0]
+    assert results[1]["requires_changed_strategy"] and "expected_schema" not in results[1]
+    assert results[2]["requires_changed_strategy"] and ctx.operations == []
+
+
+def test_authorization_still_checked_for_valid_call_after_validation(monkeypatch):
+    import serverhub.node_api as node
+    monkeypatch.setattr(node, "execute_node", lambda ctx, op, args, **kw: ctx.require(op, arguments=args))
+    state = {"specialist": "linux", "step": 1, "messages": [], "evidence": [], "completed_calls": {},
+             "pending_calls": [{"id": "ok", "name": "systemd__restart", "operation": "systemd.restart",
+                                "arguments": {"service": "demo.service"}}]}
+    ctx = Context(deny="systemd.restart")
+    with pytest.raises(PermissionDenied):
+        ai._pending_tools(ctx, state)
+    assert ctx.operations == ["systemd.restart"] and state["completed_calls"] == {}
+
+
+def test_development_specialist_states_tool_coverage_and_delegation_path():
+    from serverhub.ai.agents import AGENTS
+    instructions = AGENTS["development"].instructions
+    assert "agent.specialize" in instructions and "no host inventory" in instructions
+    names = {s["function"]["name"] for s in ai.tool_schemas("development")}
+    assert names == {"development__list", "development__submit", "task__verify", "agent__specialize"}
+
+
+def test_specialize_from_development_restores_host_tools_without_changing_permissions():
+    state = {"specialist": "development", "step": 1, "messages": [], "evidence": [], "completed_calls": {},
+             "pending_calls": [{"id": "s", "name": "agent__specialize", "operation": "agent.specialize",
+                                "arguments": {"specialist": "linux"}}]}
+    ctx = Context()
+    ai._pending_tools(ctx, state)
+    names = {s["function"]["name"] for s in ai.tool_schemas(state["specialist"])}
+    assert state["specialist"] == "linux" and {"systemd__restart", "inventory__query"} <= names
+    assert ctx.operations == ["job.submit"] and ctx.principal.role == "adult"
+    assert state["evidence"][0]["result"]["permissions_changed"] is False
+
+
+@pytest.mark.parametrize("marker_changes", [
+    {"id": "another-call"},
+    {"operation": "adguard.other"},
+    {"arguments": {"integration_id": "dns", "rules": []}},
+    {"checkpoint": {"user_rules": ["||old.example^"]}},
+    {"failure": {"error": "interrupted"}},
+    {"dispatched": True},
+])
+def test_invalid_call_cannot_erase_ambiguous_mutation_marker(marker_changes):
+    marker = {"id": "bad-write", "operation": "adguard.set_rules",
+              "arguments": INVALID_WRITE, "mutating": True}
+    marker.update(marker_changes)
+    state = _write_state(INVALID_WRITE, in_flight=deepcopy(marker))
+    with pytest.raises(ValueError, match="reconciliation"):
+        ai._pending_tools(Context(), state)
+    assert state["in_flight"] == marker
+    assert not state["completed_calls"]
+
+
+def test_specialization_denial_preserves_specialist():
+    state = {"specialist": "development", "messages": [], "evidence": [], "completed_calls": {},
+             "pending_calls": [{"id": "s", "name": "agent__specialize", "operation": "agent.specialize",
+                                "arguments": {"specialist": "linux"}}]}
+    ctx = Context(deny="job.submit")
+    with pytest.raises(PermissionDenied):
+        ai._pending_tools(ctx, state)
+    assert state["specialist"] == "development"
+    assert ctx.principal.role == "adult"
+    assert not state["completed_calls"]
+
+
+def test_authorized_write_checkpoints_then_crash_never_reexecutes(monkeypatch):
+    ctx = Context()
+    state = _write_state({"integration_id": "dns", "rules": []})
+    executions = []
+
+    def execute(operation, arguments, checkpoint):
+        assert ctx.operations == ["adguard.set_rules"]
+        assert ctx.job.checkpoint["ai"]["in_flight"]["mutating"] is True
+        checkpoint({"user_rules": ["||old.example^"]})
+        executions.append(operation)
+        raise SystemExit("crash after external write")
+
+    monkeypatch.setattr(ai, "execute", execute)
+    with pytest.raises(SystemExit):
+        ai._pending_tools(ctx, state)
+    recovered = deepcopy(ctx.job.checkpoint["ai"])
+    with pytest.raises(ValueError, match="reconciliation"):
+        ai._pending_tools(ctx, recovered)
+    assert executions == ["adguard.set_rules"]
+    assert recovered["in_flight"]["checkpoint"] == {"user_rules": ["||old.example^"]}
+
+
+def test_valid_integration_write_requires_permission_before_dispatch(monkeypatch):
+    ctx = Context(deny="adguard.set_rules")
+    state = _write_state({"integration_id": "dns", "rules": []})
+    def forbidden(*args, **kwargs):
+        pytest.fail("Unauthorized write dispatched")
+    monkeypatch.setattr(ai, "execute", forbidden)
+    with pytest.raises(PermissionDenied):
+        ai._pending_tools(ctx, state)
+    assert ctx.operations == ["adguard.set_rules"]
+    assert not state["completed_calls"]
+
+
+def test_invalid_result_checkpoint_recovers_without_execution(monkeypatch):
+    ctx = Context()
+    ctx.crash_after_result = True
+    state = _write_state(INVALID_WRITE)
+    with pytest.raises(SystemExit):
+        ai._pending_tools(ctx, state)
+    recovered = deepcopy(ctx.job.checkpoint["ai"])
+    assert "in_flight" not in recovered
+    def forbidden(*args, **kwargs):
+        pytest.fail("Completed invalid call was dispatched again")
+    monkeypatch.setattr(ai, "_run_tool", forbidden)
+    ai._pending_tools(ctx, recovered)
+    assert not recovered["pending_calls"]
+    assert len(recovered["messages"]) == 1
+    assert not ctx.operations
