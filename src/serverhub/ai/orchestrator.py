@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select, func
 
 from serverhub.database import utcnow
@@ -17,6 +18,11 @@ from serverhub.integrations.registry import OPERATIONS, IntegrationError, execut
 from serverhub.host_audit import AuditArguments
 from .agents import AGENTS, BASE_INSTRUCTIONS
 from .providers import BudgetExceeded as ProviderBudgetExceeded, ChatProvider, ProviderError, PreflightRejected, UsageBudget, load_routes, estimate_prompt
+
+
+class ToolArgumentsError(Exception):
+    def __init__(self, errors, schema):
+        self.errors, self.schema = errors, schema
 
 
 class Arguments(BaseModel):
@@ -57,7 +63,7 @@ class Search(Arguments):
 
 
 class InventoryQuery(Arguments):
-    section: str = Field(pattern=r"^(packages|services|ports|containers|addresses|routes|hardware)$")
+    section: Literal["packages", "services", "ports", "containers", "addresses", "routes", "hardware"]
     query: str = Field(default="", max_length=256)
     limit: int = Field(default=30, ge=1, le=100)
 
@@ -125,6 +131,8 @@ def tool_schemas(profile: str = "all") -> list[dict]:
                 "docker": {"docker.", "catalog."}, "network": {"diagnostics.network"},
                 "security": {"security.", "host.audit"}, "development": {"development."},
                 "monitoring": {"memory.", "host.audit"}, "verification": set()}
+    if profile == "development":
+        base = {"development.list", "development.submit", "task.verify", "agent.specialize"}
     prefixes = families.get(profile, set())
     return [schema for schema in core + operation_schemas()
             if (schema["function"]["name"].replace("__", ".") in base or
@@ -306,9 +314,24 @@ def _pending_tools(ctx, state: dict, on_execution=None) -> None:
             try:
                 if failures.get(fingerprint, 0) >= 2:
                     raise IntegrationError("Repeated failed operation suppressed; choose a changed diagnostic or remediation strategy", retryable=False)
+                model = OPERATIONS[operation].arguments if operation in OPERATIONS else TOOLS[operation][0]
+                try:
+                    model.model_validate(call["arguments"])
+                except ValidationError as exc:
+                    # Do not echo rejected values, secrets, or Pydantic input/context.
+                    errors = [{"path": list(error["loc"]), "type": error["type"]}
+                              for error in exc.errors(include_input=False, include_context=False, include_url=False)]
+                    raise ToolArgumentsError(errors, model.model_json_schema()) from None
                 if on_execution:
                     on_execution()
                 result = _run_tool(ctx, operation, call["arguments"], state, call_id)
+            except ToolArgumentsError as exc:
+                failures[fingerprint] = min(3, failures.get(fingerprint, 0) + 1)
+                result = {"failure_class": "invalid_tool_arguments", "errors": exc.errors,
+                          "expected_schema": exc.schema, "operation": operation,
+                          "completed": False, "verified": False, "executed": False,
+                          "retryable": True, "requires_changed_arguments": True,
+                          "guidance": "Use the advertised schema. Repository dependencies belong to development.list/development.submit, not host inventory."}
             except IntegrationError as exc:
                 state["in_flight"]["failure"] = {"error": str(exc), "rollback": exc.rollback}
                 _save(ctx, state)
@@ -367,7 +390,7 @@ def autonomous_job(ctx, spec: dict) -> dict:
     steps = spec.get("max_steps", 20)
     if isinstance(steps, bool) or not isinstance(steps, int) or not 1 <= steps <= 100:
         raise ValueError("max_steps must be 1–100")
-    selected = spec.get("specialist", "infrastructure")
+    selected = spec.get("specialist", "development" if ctx.job.project else "infrastructure")
     if selected not in AGENTS:
         raise ValueError("Unknown specialist")
     routes = load_routes()

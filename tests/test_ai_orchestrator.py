@@ -132,3 +132,42 @@ def test_model_accounting_event_keeps_numbers_visible_through_secret_redaction(m
     assert persisted["input_estimate"] == 123
     assert persisted["input_measured"] == 4
     assert persisted["unit"] == "tokens"
+
+
+def test_dependencies_invalid_argument_is_durable_observation_then_model_corrects(monkeypatch):
+    provider(monkeypatch, [
+        Completion('', tool_calls=[ToolCall('bad', 'inventory__query', {'section': 'dependencies'})]),
+        Completion('', tool_calls=[ToolCall('good', 'catalog__search', {'query': 'pdf'})]),
+        Completion('Partial investigation')])
+    ctx = Context()
+    result = ai.autonomous_job(ctx, {'prompt': 'Investigate dependencies'})
+    failure = result['evidence'][0]['result']
+    assert failure['failure_class'] == 'invalid_tool_arguments'
+    assert failure['executed'] is False and failure['verified'] is False
+    assert 'packages' in failure['expected_schema']['properties']['section']['enum']
+    assert 'inventory.read' not in ctx.operations
+    assert result['evidence'][1]['result']['applications']
+    assert not result['completed']
+    assert ctx.job.checkpoint['ai']['pending_calls'] == []
+
+
+def test_development_profile_excludes_host_inventory_and_project_defaults_to_it(monkeypatch):
+    names = {s['function']['name'] for s in ai.tool_schemas('development')}
+    assert {'development__list', 'development__submit'} <= names
+    assert not any(name.startswith('inventory__') for name in names)
+    provider(monkeypatch, [Completion('No verified work yet')])
+    ctx = Context()
+    ctx.job.project = 'jarvis'
+    ai.autonomous_job(ctx, {'prompt': 'Inspect project dependencies'})
+    assert ctx.job.checkpoint['ai']['specialist'] == 'development'
+
+
+def test_invalid_mutation_arguments_never_dispatch_or_echo_input(monkeypatch):
+    provider(monkeypatch, [Completion('', tool_calls=[ToolCall('bad', 'systemd__restart',
+        {'service': 'secret-value/invalid'})]), Completion('Cannot complete')])
+    ctx = Context()
+    result = ai.autonomous_job(ctx, {'prompt': 'Restart service'})
+    failure = result['evidence'][0]['result']
+    assert failure['executed'] is False
+    assert 'secret-value' not in str(failure)
+    assert not ctx.operations
