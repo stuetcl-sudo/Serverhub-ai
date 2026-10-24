@@ -66,7 +66,7 @@ def read_source(workspace: Path, relative: str) -> str:
     sensitive = {".ssh", ".aws", ".azure", ".kube", ".config", "credentials",
                  "credentials.json", "secrets", "secrets.json", "secrets.yaml", "secrets.yml",
                  "id_rsa", "id_ed25519", ".netrc", ".npmrc", ".pypirc"}
-    if any(part.lower() in sensitive or (part.lower().startswith(".env") and part.lower() != ".env.example")
+    if any(part.lower() in sensitive or PurePosixPath(part).stem.lower() in {"secret", "secrets", "credential", "credentials"} or (part.lower().startswith(".env") and part.lower() != ".env.example")
            for part in path.parts):
         raise DevelopmentError("Credential/configuration path is not readable source")
     if path.suffix not in {'.py','.json','.toml','.txt','.md','.yaml','.yml','.ts','.tsx','.js','.html','.css','.sql','.sh','.ini','.cfg','.conf','.lock'} and path.name not in {'Dockerfile','Makefile'}:

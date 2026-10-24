@@ -146,8 +146,8 @@ def tick(directory: str | Path) -> list[dict]:
                 with os.fdopen(fd, "wb") as fh:
                     fh.write(content)
                     fh.flush()
-                    os.fchmod(fh.fileno(), data["target_mode"])
                     os.fchown(fh.fileno(), data["target_uid"], data["target_gid"])
+                    os.fchmod(fh.fileno(), data["target_mode"])
                     os.fsync(fh.fileno())
                 os.replace(temporary, target)
                 directory_fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)

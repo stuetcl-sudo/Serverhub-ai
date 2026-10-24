@@ -249,8 +249,9 @@ def plan(source, *, root=Path('/')):
         if installed.is_symlink() or installed.stat().st_uid != 0:
             raise ConflictError('Legacy release record must be an ordinary root-owned file')
         protected(installed.resolve().parent)
+        # Historical pre-namespace releases used 0005; never substitute current HEAD.
         expected = {'manifest': {'release_id': current.resolve().name,
-                                'schema_revision': '0006_pause_clock',
+                                'schema_revision': '0005_priority',
                                 'trust_boundary_digest': expected_trust}}
         if json.loads(installed.read_text()) != expected:
             raise ConflictError('Legacy release record does not match independently verified release identity/trust/schema')

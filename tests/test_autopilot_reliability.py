@@ -99,7 +99,7 @@ def test_fork_child_does_not_inherit_worker_sigterm_handler():
 
 
 @pytest.mark.parametrize("path", ["../secret.txt", "/etc/passwd", ".env", ".ssh/key.txt",
-                                   "secrets.json", ".git/config", "key.pem"])
+                                   "secrets.json", "secrets.toml", "credentials.txt", ".git/config", "key.pem"])
 def test_read_source_rejects_sensitive_and_escaping_paths(tmp_path,path):
     with pytest.raises((DevelopmentError,OSError)):
         read_source(tmp_path,path)
@@ -287,3 +287,13 @@ def test_pause_schema_upgrade_and_downgrade_preserves_job(core_env,owner):
     command.upgrade(_alembic_config(),"head")
     with SessionLocal() as db:
         assert db.get(Job,identity).state=="waiting_approval"
+
+
+def test_legacy_release_identity_keeps_historical_schema():
+    # This is deliberately a source contract check: the privileged full migration
+    # is exercised against two actual old installations by Ubuntu CI.
+    import inspect
+    from serverhub.ops.migrate_units import plan
+    source = inspect.getsource(plan)
+    assert "'schema_revision': '0005_priority'" in source
+    assert "'schema_revision': '0006_pause_clock'" not in source
