@@ -480,7 +480,7 @@ def execute_job(job_id: str, worker_id: str):
                 job.checkpoint = {**job.checkpoint, "budget_pause": {
                     "minimum_tokens": data.get("minimum_tokens", (data.get("estimated_input_tokens", data.get("input_estimate")) or 0) + 32),
                     "minimum_cost": data.get("cost_reserve", 0),
-                    "reason": str(exc)[:500]}}
+                    "reason": redact(str(exc))[:500]}}
             if isinstance(exc, PreflightRejected):
                 job.result = {"completed": False, "preflight": exc.diagnostics,
                               "verification": "No provider request or tool execution in this attempt. Correct the configuration/scope and resume, or submit a separately authorized larger-budget job."}
@@ -554,6 +554,10 @@ class Worker:
                     job.state = "cancelled"
                 elif job.state == "pause_requested":
                     job.state = "paused"
+                elif parent_stopped(db, job):
+                    job.state, job.failure_class = "cancelled", "parent_stopped"
+                elif parent_paused(db, job):
+                    job.state, job.failure_class = "paused", "parent_paused"
                 elif job.attempts >= job.max_attempts:
                     job.state = "failed"
                     job.failure_class = "lease_exhausted"

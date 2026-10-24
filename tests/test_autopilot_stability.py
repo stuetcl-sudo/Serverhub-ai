@@ -300,3 +300,56 @@ def test_paused_waiting_parent_preserves_delegated_failure_semantics(core_env, o
     assert Worker(isolated=False).run_once()
     with SessionLocal() as db:
         assert db.get(Job, identity).state == "succeeded"
+
+
+def test_expired_child_lease_under_paused_parent_does_not_exhaust_attempts(core_env, owner, monkeypatch):
+    monkeypatch.setitem(HANDLERS, "fixture", lambda *_: {})
+    with SessionLocal() as db:
+        parent = submit_job(db, owner, "fixture", {})
+        child = submit_job(db, owner, "fixture", {}, parent_id=parent.id, max_attempts=1)
+        parent.state, parent.failure_class = "paused", "budget"
+        child.state, child.worker_id, child.attempts = "running", "dead", 1
+        child.lease_until = utcnow()-timedelta(seconds=1)
+        child.checkpoint = {"in_flight": {"idempotency_key": "stable-write"}}
+        identity = child.id
+        db.commit()
+    assert not Worker(isolated=False).run_once()
+    with SessionLocal() as db:
+        child = db.get(Job, identity)
+        assert (child.state, child.failure_class, child.attempts) == ("paused", "parent_paused", 0)
+        assert child.checkpoint["in_flight"]["idempotency_key"] == "stable-write"
+
+
+def test_daily_and_pending_limits_reject_without_charging_or_dispatch(core_env, owner, monkeypatch):
+    from serverhub.job_limits import charge_daily
+    monkeypatch.setitem(HANDLERS, "fixture", lambda *_: {})
+    settings = get_settings()
+    settings.max_user_pending_jobs = 1
+    settings.user_daily_cost = 1
+    with SessionLocal() as db:
+        first = submit_job(db, owner, "fixture", {})
+        db.commit()
+        with pytest.raises(ValueError, match="pending"):
+            submit_job(db, owner, "fixture", {})
+        db.rollback()
+        charge_daily(db, owner.id, 0, 1)
+        db.commit()
+        first.state, first.failure_class = "paused", "budget"
+        first.checkpoint = {"budget_pause": {"minimum_tokens": 32, "minimum_cost": .1}}
+        db.commit()
+        with pytest.raises(HTTPException) as denied:
+            job_action(first.id, "resume", owner, db)
+        assert denied.value.status_code == 409 and denied.value.detail["job_budget_increase_will_not_bypass_quota"]
+
+
+def test_monitor_denied_grant_never_reserves_restart(core_env, owner, monkeypatch):
+    from serverhub.extensions import reserve_monitor_restart
+    monkeypatch.setitem(HANDLERS, "fixture", lambda *_: {})
+    with SessionLocal() as db:
+        job = submit_job(db, owner, "fixture", {}, host_id="node1")
+        job.state, job.worker_id = "running", "test"
+        db.commit()
+        ctx = JobContext(db, job, owner)
+        with pytest.raises(PermissionDenied):
+            reserve_monitor_restart(ctx, {"operation": "systemd.restart", "arguments": {"service": "example.service"}})
+        assert not db.scalars(select(SystemState).where(SystemState.key.like("monitor-restart:%"))).all()
