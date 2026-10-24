@@ -299,7 +299,10 @@ def detect_incidents(db, host: Host, inventory: dict, metrics: dict):
         if incident.evidence.get("source") != "telemetry" or incident.title in active:
             continue
         evidence = dict(incident.evidence)
-        if incident.title not in healthy or inventory.get("errors"):
+        healthcheck_missing = (incident.title.startswith("Unstable container: ")
+            and (evidence.get("health") == "unhealthy" or evidence.get("latest", {}).get("health") == "unhealthy")
+            and healthy.get(incident.title, {}).get("health") != "healthy")
+        if incident.title not in healthy or inventory.get("errors") or healthcheck_missing:
             evidence["stable"] = []
             evidence["stable_since"] = None
         else:

@@ -353,3 +353,36 @@ def test_monitor_denied_grant_never_reserves_restart(core_env, owner, monkeypatc
         with pytest.raises(PermissionDenied):
             reserve_monitor_restart(ctx, {"operation": "systemd.restart", "arguments": {"service": "example.service"}})
         assert not db.scalars(select(SystemState).where(SystemState.key.like("monitor-restart:%"))).all()
+
+
+def test_parent_resume_accounts_for_delegated_usage_and_verification_reserve(core_env, owner, monkeypatch):
+    monkeypatch.setitem(HANDLERS, "fixture", lambda *_: {})
+    with SessionLocal() as db:
+        parent = submit_job(db, owner, "fixture", {}, token_budget=5000)
+        child = submit_job(db, owner, "fixture", {}, parent_id=parent.id)
+        child.tokens_used, child.state = 1000, "succeeded"
+        parent.state, parent.failure_class = "paused", "budget"
+        parent.checkpoint = {"budget_pause": {"minimum_tokens": 4032}}
+        db.commit()
+        with pytest.raises(HTTPException) as denied:
+            job_action(parent.id, "resume", owner, db)
+        assert denied.value.status_code == 409 and denied.value.detail["remaining_tokens"] == 4000
+        update_job_budget(parent.id, JobBudgetUpdate(token_budget=5032, cost_budget=1), owner, db)
+        job_action(parent.id, "resume", owner, db)
+        assert parent.state == "queued"
+
+
+def test_removing_container_healthcheck_is_not_verified_recovery(core_env):
+    from serverhub.telemetry import ingest_inventory
+    with SessionLocal() as db:
+        host = db.get(Host, "node1")
+        def observation(health):
+            return {"docker": {"containers": [{"id": "same", "name": "app", "state": "running",
+                    "health": health, "restart_count": 0}]}}
+        ingest_inventory(db, host, observation("unhealthy"))
+        db.commit()
+        incident = db.scalar(select(Incident))
+        for _ in range(4):
+            ingest_inventory(db, host, observation(None))
+            db.commit()
+        assert incident.state == "open" and incident.evidence["stable"] == []

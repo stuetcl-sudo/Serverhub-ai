@@ -266,7 +266,7 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
             child_cost=ctx.db.scalar(select(func.coalesce(func.sum(Job.cost_used),0)).where(Job.parent_id==ctx.job.id))
             available=ctx.job.token_budget-ctx.job.tokens_used-child_units-4000
             if available<32:
-                raise BudgetExceeded("Insufficient task-tree budget for development plus final verification")
+                raise BudgetExceeded("Insufficient task-tree budget for development plus final verification", {"minimum_tokens": 4032})
             prompt=args.pop("prompt",None)
             kind="development_autonomous" if prompt else "development"
             payload={"project":args["project"],"prompt":prompt,"stage":args.get("stage",False)} if prompt else args

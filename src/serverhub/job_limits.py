@@ -82,11 +82,17 @@ def resume_budget_error(job, db=None):
                     or row.value["cost"] + cost > settings.user_daily_cost):
             return {"message": "Per-user daily model quota cannot fit the next request; retry next UTC day",
                     "budget_endpoint": f"/api/jobs/{job.id}/budget", "job_budget_increase_will_not_bypass_quota": True}
-    if (job.token_budget - job.tokens_used < minimum or job.cost_budget - job.cost_used < cost
-            or (job.cost_budget > 0 and job.cost_used >= job.cost_budget)):
+    child_tokens, child_cost = 0, 0
+    if db is not None:
+        child_tokens, child_cost = db.execute(select(func.coalesce(func.sum(Job.tokens_used), 0),
+            func.coalesce(func.sum(Job.cost_used), 0)).where(Job.parent_id == job.id)).one()
+    remaining_tokens = job.token_budget - job.tokens_used - child_tokens
+    remaining_cost = job.cost_budget - job.cost_used - child_cost
+    if (remaining_tokens < minimum or remaining_cost < cost
+            or (job.cost_budget > 0 and remaining_cost <= 0)):
         return {"message": "Insufficient remaining budget to resume; raise the authorized budget first",
                 "minimum_remaining_tokens": minimum, "minimum_remaining_cost": cost,
-                "remaining_tokens": job.token_budget-job.tokens_used,
-                "remaining_cost": job.cost_budget-job.cost_used,
+                "remaining_tokens": remaining_tokens,
+                "remaining_cost": remaining_cost,
                 "budget_endpoint": f"/api/jobs/{job.id}/budget"}
     return None
