@@ -484,9 +484,10 @@ def autonomous_job(ctx, spec: dict) -> dict:
                 safe = {"input_estimate": data.get("estimated_input_tokens"),
                         "output_reserve": data.get("output_reserve_tokens"), "minimum_output": 32,
                         "context_limit": data.get("context_limit"), "remaining_job_budget": data.get("remaining_tokens"),
-                        "estimator": data.get("method"), "serialized_utf8_bytes": data.get("serialized_utf8_bytes")}
+                        "estimator": data.get("method"), "serialized_utf8_bytes": data.get("serialized_utf8_bytes"),
+                        "cost_reserve": data.get("cost_reserve", 0)}
                 raise JobPreflightRejected(str(exc), safe) from exc
-            raise BudgetExceeded(str(exc)) from exc
+            raise BudgetExceeded(str(exc), exc.diagnostics) from exc
         except ProviderError as exc:
             if exc.retryable:
                 from serverhub.jobs import RetryableError

@@ -332,6 +332,11 @@ def update_job_budget(job_id: str, body: JobBudgetUpdate, principal: Authenticat
         raise HTTPException(409, "Pause the job before changing its budget")
     if body.token_budget < job.tokens_used or body.cost_budget < job.cost_used:
         raise HTTPException(409, "Budget cannot be lower than accounted usage")
+    from .job_limits import check_route_budget
+    try:
+        check_route_budget(principal, job.kind, job.spec, body.token_budget, body.cost_budget)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     job.token_budget, job.cost_budget = body.token_budget, body.cost_budget
     append_audit(db, principal.id, "job.budget", job.id, body.model_dump())
     db.commit()
@@ -345,6 +350,11 @@ def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], princi
     if job.state in TERMINAL:
         raise HTTPException(409, "Job has already finished")
     if action == "pause":
+        if job.state == "waiting_children":
+            job.checkpoint = {**job.checkpoint, "pause_previous_state": "waiting_children"}
+        # An explicit operator pause overrides automatic parent-resume behavior.
+        if job.failure_class == "parent_paused":
+            job.failure_class = "paused"
         job.state = "pause_requested" if job.state == "running" else "paused"
     elif action == "cancel":
         job.state = "cancel_requested" if job.state in {"running", "pause_requested"} else "cancelled"
@@ -370,6 +380,13 @@ def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], princi
         if job.state not in {"paused", "waiting_approval"}:
             raise HTTPException(409, "Only paused or policy-blocked jobs can resume")
         authorize(db, principal, "job.submit", job.host_id, job.project)
+        from .job_limits import resume_budget_error
+        from .jobs import parent_paused, parent_stopped
+        problem = resume_budget_error(job, db)
+        if problem:
+            raise HTTPException(409, problem)
+        if parent_paused(db, job) or parent_stopped(db, job):
+            raise HTTPException(409, "Resume the parent task first; terminal parents cannot resume")
         denial = (job.result or {}).get("denial")
         if job.state == "waiting_approval" and isinstance(denial, dict) and denial.get("operation"):
             from .auth import Principal
@@ -379,12 +396,15 @@ def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], princi
             authorize(db, Principal(id=owner.id, username=owner.username, role=owner.role), denial["operation"],
                       job.host_id, job.project, denial.get("arguments", {}),
                       denial.get("environment") == "production")
-        from .jobs import resume_clock
+        from .jobs import resume_clock, resume_state
         resume_clock(job)
-        job.state = "queued"
+        job.state = resume_state(job)
         job.run_after = utcnow()
-    from .jobs import mark_paused
+    from .jobs import mark_paused, pause_descendants
     mark_paused(job)
+    if action == "pause":
+        pause_descendants(db, job)
+
     append_audit(db, principal.id, "job." + action, job.id)
     db.add(JobEvent(job_id=job.id, message="Operator requested " + action, data={"actor": principal.id}))
     db.commit()

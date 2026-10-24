@@ -40,7 +40,7 @@ def analyze(inventory: dict[str, Any]) -> list[dict]:
         if not container.get("has_healthcheck"):
             findings.append(_finding("missing_healthcheck", service, "low", "verified_configuration", evidence,
                                      "Container has no Docker healthcheck", ["Define an application-specific healthcheck and test its failure behavior"]))
-        if container.get("health") == "unhealthy" or container.get("restart_count", 0) >= 5:
+        if container.get("health") == "unhealthy" or (container.get("restart_delta") or 0) >= 5:
             findings.append(_finding("container_instability", service, "high", "verified_observation", {**evidence, "health": container.get("health"), "restart_count": container.get("restart_count")},
                                      "Container is unhealthy or repeatedly restarting", ["Inspect bounded logs and dependencies", "Compare resources to baseline before an authorized restart"]))
         for mount in container.get("mounts", []):

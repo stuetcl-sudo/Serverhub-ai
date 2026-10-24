@@ -245,7 +245,7 @@ def test_budget_pause_update_preserves_usage_and_scope(core_env,owner,monkeypatc
             update_job_budget(identity,JobBudgetUpdate(token_budget=9,cost_budget=1),owner,db)
         update_job_budget(identity,JobBudgetUpdate(token_budget=100,cost_budget=1),owner,db)
         assert (job.tokens_used,job.cost_used)==(10,.1)
-        assert job.checkpoint=={"step":"saved"} and job.state=="paused"
+        assert job.checkpoint["step"]=="saved" and job.state=="paused"
 
 
 def test_expired_grant_stays_expired_after_approval_pause(core_env,monkeypatch):

@@ -22,6 +22,14 @@ _LOCK = threading.RLock()
 PREFIX = 'login-rate:'
 
 
+class Admission(str):
+    """Request-local refund receipt; only a verified login may release its IP slot."""
+    def __new__(cls, key, ip_key, ip_start):
+        value = super().__new__(cls, key)
+        value.ip_key, value.ip_start = ip_key, ip_start
+        return value
+
+
 def client_address(request):
     peer = request.client.host if request.client else 'unknown'
     settings = get_settings()
@@ -108,7 +116,7 @@ def admit(db, request, username):
                 state['count'] += 1
             row.value = state
         db.commit()
-    return keys[1]
+    return Admission(keys[1], keys[0], next(state["start"] for _, state, key in pending if key == keys[0]))
 
 
 def failure(db, key):
@@ -127,6 +135,10 @@ def success(db, key):
         if db.bind.dialect.name == 'postgresql':
             from sqlalchemy import text
             db.execute(text('SELECT pg_advisory_xact_lock(734882109)'))
+        if isinstance(key, Admission):
+            ip_row = db.get(SystemState, key.ip_key, populate_existing=True)
+            if ip_row and ip_row.value['start'] == key.ip_start:
+                ip_row.value = {**ip_row.value, 'count': max(0, ip_row.value['count']-1)}
         row = db.get(SystemState,key,populate_existing=True)
         if row:
             row.value = {**row.value,'count':0}

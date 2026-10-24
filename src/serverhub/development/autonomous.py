@@ -279,10 +279,10 @@ def autonomous_development(ctx,spec):
                 from serverhub.jobs import PreflightRejected as JobPreflight, BudgetExceeded as JobBudget
                 if not activity[0]:
                     raise JobPreflight(str(error),error.diagnostics) from error
-                raise JobBudget(str(error)) from error
+                raise JobBudget(str(error), error.diagnostics) from error
             except BudgetExceeded as error:
                 from serverhub.jobs import BudgetExceeded as JobBudget
-                raise JobBudget(str(error)) from error
+                raise JobBudget(str(error), error.diagnostics) from error
             except ProviderError as error:
                 if error.retryable:
                     from serverhub.jobs import RetryableError

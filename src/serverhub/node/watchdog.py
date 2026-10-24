@@ -121,6 +121,25 @@ def commit(directory: str | Path, key: str, token: str) -> dict:
     return {"id": key, "state": "committed"}
 
 
+def cleanup_stale(directory, key, data, *, age=3600):
+    """Called only under recovery flock; never follow links or remove unknown files."""
+    if data.get("state") not in {"restoring", "reverted", "committed"}:
+        return
+    target = trusted_file(data["target"])
+    candidates = list(target.parent.glob(f".serverhub-recovery-{key}-*"))
+    candidates.append(directory / f"{key}.new")
+    for path in candidates:
+        try:
+            st = path.lstat()
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_nlink != 1
+                    or st.st_mode & 0o022 or time.time()-st.st_mtime < age):
+                continue
+            # Both parents are root-protected; serialized recovery owns this key.
+            path.unlink()
+        except FileNotFoundError:
+            continue
+
+
 @_serialized
 def tick(directory: str | Path) -> list[dict]:
     if os.geteuid() != 0:
@@ -131,6 +150,7 @@ def tick(directory: str | Path) -> list[dict]:
         key = entry.stem
         try:
             path, data = _load(directory, key)
+            cleanup_stale(directory, key, data)
             if data.get("state") not in {"armed", "restoring"} or data.get("deadline", float("inf")) > time.time():
                 continue
             backup = trusted_file(directory/f"{key}.checkpoint")
