@@ -25,6 +25,30 @@ TERMINAL = {"succeeded", "partial", "failed", "cancelled"}
 RUNNABLE = {"queued", "retry", "waiting_children"}
 
 
+
+def elapsed_seconds(job, now=None):
+    now = now or utcnow()
+    if not job.started_at:
+        return 0.0
+    end = getattr(job, "paused_at", None) or now
+    return max(0.0, (end-job.started_at).total_seconds()-getattr(job, "paused_seconds", 0.0))
+
+
+def mark_paused(job):
+    if job.state in {"paused", "waiting_approval"} and not job.paused_at:
+        job.paused_at = utcnow()
+
+
+def resume_clock(job):
+    if job.paused_at:
+        # A queue pause before the first start was never inside the execution
+        # interval and must not create extra execution credit.
+        if job.started_at:
+            start = max(job.paused_at, job.started_at)
+            job.paused_seconds += max(0.0, (utcnow()-start).total_seconds())
+        job.paused_at = None
+
+
 def parent_stopped(db,job):
     if not job.parent_id:
         return False
@@ -32,7 +56,7 @@ def parent_stopped(db,job):
     if parent:
         db.refresh(parent)
     return not parent or parent.owner_id!=job.owner_id or parent.state in TERMINAL or bool(
-        parent.started_at and (utcnow()-parent.started_at).total_seconds()>=parent.time_limit)
+        parent.started_at and elapsed_seconds(parent)>=parent.time_limit)
 
 
 
@@ -92,7 +116,7 @@ def _event(db, job: Job, message: str, data=None, level="info"):
 def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | None = None,
                project: str | None = None, parent_id: str | None = None, depends_on: list | None = None,
                idempotency_key: str | None = None, run_after=None, max_attempts: int = 3,
-               time_limit: int = 3600, token_budget: int = 20000, cost_budget: float = 1.0, priority: int = 0) -> Job:
+               time_limit: int = 3600, token_budget: int | None = None, cost_budget: float | None = None, priority: int = 0) -> Job:
     if kind in {"development", "development_autonomous"}:
         from .development.config import configured_projects
         if not isinstance(spec, dict) or not isinstance(spec.get("project"), str):
@@ -119,6 +143,15 @@ def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | N
         raise ValueError(f"Unknown job kind: {kind}")
     if not isinstance(spec, dict):
         raise ValueError("job specification must be an object")
+    if token_budget is None or cost_budget is None:
+        defaults = None
+        if kind in {"autonomous", "development_autonomous"}:
+            from .ai.providers import load_routes
+            routes = load_routes()
+            route = spec.get("model_route") or ("development" if kind == "development_autonomous" and "development" in routes else "default")
+            defaults = routes.get(route)
+        token_budget = token_budget if token_budget is not None else (defaults.default_job_token_budget if defaults else 20000)
+        cost_budget = cost_budget if cost_budget is not None else (defaults.default_job_cost_budget if defaults else 1.0)
     if not (1 <= max_attempts <= 10 and 1 <= time_limit <= 86400 and 0 <= token_budget <= 2_000_000
             and math.isfinite(cost_budget) and 0 <= cost_budget <= 1000):
         raise ValueError("job execution limits outside supported bounds")
@@ -180,7 +213,7 @@ class JobContext:
             raise JobPaused("Job paused")
         if self.job.state != "running":
             raise LeaseLost("Job is no longer running")
-        if self.job.started_at and (utcnow() - self.job.started_at).total_seconds() >= self.job.time_limit:
+        if self.job.started_at and elapsed_seconds(self.job) >= self.job.time_limit:
             raise TimeoutError("Job deadline reached")
         if self.job.tokens_used > self.job.token_budget or self.job.cost_used > self.job.cost_budget:
             raise BudgetExceeded("Job token or API cost budget exceeded")
@@ -321,7 +354,7 @@ def _classify(exc):
     if isinstance(exc, PreflightRejected):
         return "paused", "preflight", False
     if isinstance(exc, BudgetExceeded):
-        return "failed", "budget", False
+        return "paused", "budget", False
     if isinstance(exc, TimeoutError):
         return "failed", "timeout", False
     if isinstance(exc, (RetryableError, ConnectionError)):
@@ -366,6 +399,7 @@ def execute_job(job_id: str, worker_id: str):
             if retryable and job.attempts >= job.max_attempts:
                 state = "failed"
             job.state = state
+            mark_paused(job)
             if isinstance(exc, PreflightRejected):
                 job.attempts = max(0, job.attempts - 1)
                 job.result = {"completed": False, "preflight": exc.diagnostics,
@@ -387,6 +421,10 @@ def execute_job(job_id: str, worker_id: str):
 
 
 def _child_execute(job_id, worker_id):
+    # The parent stop handler only changes its own Worker flag. In a forked
+    # child that handler would swallow terminate(), forcing SIGKILL.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     # Forked processes must never reuse inherited pooled database connections.
     get_engine().dispose(close=False)
     execute_job(job_id, worker_id)
@@ -433,6 +471,7 @@ class Worker:
                     job.state = "retry"
                     job.run_after = utcnow()
                     job.failure_class = "restart_recovery"
+                mark_paused(job)
                 job.worker_id = None
                 job.lease_until = None
                 if job.state in TERMINAL:
@@ -458,7 +497,7 @@ class Worker:
                         Job.host_id == job.host_id, Job.state.in_(["running", "pause_requested", "cancel_requested"])))
                     if host_running >= settings.max_host_jobs:
                         continue
-                if job.started_at and (utcnow()-job.started_at).total_seconds() >= job.time_limit:
+                if job.started_at and elapsed_seconds(job) >= job.time_limit:
                     job.state, job.failure_class, job.error = "failed", "timeout", "Task deadline exceeded while awaiting dependencies"
                     job.finished_at = utcnow()
                     _event(db, job, job.error)
@@ -513,7 +552,7 @@ class Worker:
                     interrupted = ("cancelled", "parent_stopped")
                 elif job.state == "pause_requested":
                     interrupted = ("paused", "paused")
-                elif job.started_at and (utcnow() - job.started_at).total_seconds() >= job.time_limit:
+                elif job.started_at and elapsed_seconds(job) >= job.time_limit:
                     interrupted = ("failed", "timeout")
                 else:
                     emergency = db.get(SystemState, "emergency_stop")
@@ -537,6 +576,7 @@ class Worker:
                 job.state = state
                 job.failure_class = failure
                 job.error = "Worker process stopped; in-flight external effects require adapter reconciliation"
+                mark_paused(job)
                 job.worker_id = None
                 job.lease_until = None
                 if state in TERMINAL:

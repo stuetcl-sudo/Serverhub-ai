@@ -138,6 +138,8 @@ class ProviderConfig(BaseModel):
     input_cost_per_million: float | None = Field(default=None, ge=0, le=10000)
     output_cost_per_million: float | None = Field(default=None, ge=0, le=10000)
     context_limit: int = Field(default=32768, ge=1024, le=2000000)
+    default_job_token_budget: int = Field(default=20000, ge=0, le=2_000_000)
+    default_job_cost_budget: float = Field(default=1.0, ge=0, le=1000, allow_inf_nan=False)
 
     @field_validator("kind")
     @classmethod

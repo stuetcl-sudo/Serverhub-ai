@@ -514,13 +514,15 @@ it("submits a scoped autonomous project task and staging host without executable
   render(<App />);
   await userEvent.click(await screen.findByRole("button", { name: "Run project workflow" }));
   await userEvent.type(screen.getByLabelText(/Autonomous development task/), "Repair the application version");
+  await userEvent.type(screen.getByLabelText(/Token budget/), "85000");
+  await userEvent.type(screen.getByLabelText(/API cost budget/), "2.5");
   await userEvent.selectOptions(screen.getByLabelText(/Enrolled staging host ID/), "host-a");
   await userEvent.click(screen.getByLabelText(/Deploy to enrolled isolated staging/));
   await userEvent.click(screen.getByRole("button", { name: "Submit workflow" }));
   await screen.findByText("Job execution");
   const call = f.mock.calls.find(([path, options]) => path === "/api/jobs" && options?.method === "POST");
   expect(JSON.parse(String(call?.[1]?.body))).toEqual({
-    kind: "development_autonomous", host_id: "host-a", project: "jarvis",
+    kind: "development_autonomous", host_id: "host-a", project: "jarvis", token_budget: 85000, cost_budget: 2.5,
     spec: { project: "jarvis", prompt: "Repair the application version", stage: true },
   });
 });

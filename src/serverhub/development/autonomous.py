@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .config import load_projects, DevelopmentError
 from .sandbox import SandboxRunner
-from .workspace import WorkspaceManager, git, safe_relative, write_manifest
+from .workspace import WorkspaceManager, git, safe_relative, write_manifest, read_source
 from .workflow import _require, _run_commands
 from serverhub.ai.providers import ChatProvider, UsageBudget, load_routes, estimate_prompt, PreflightRejected, BudgetExceeded, ProviderError
 from serverhub.audit import redact
@@ -172,13 +172,7 @@ def autonomous_development(ctx,spec):
         if name=='read_file':
             _require(ctx,project.name,'development.read')
             relative=ReadFile.model_validate(args).path
-            safe_relative(relative)
-            path=(workspace/relative).resolve()
-            if not path.is_relative_to(workspace.resolve()) or (path.suffix not in {'.py','.json','.toml','.txt','.md','.yaml','.yml','.ts','.tsx','.js','.html','.css','.sql','.sh','.ini','.cfg','.conf','.lock'} and path.name not in {'Dockerfile','Makefile'}):
-                raise DevelopmentError('Source path is outside the bounded text read allowlist')
-            if path.stat().st_size>65536:
-                raise DevelopmentError('Source file exceeds read bound')
-            content=path.read_text()
+            content=read_source(workspace,relative)
             state.setdefault('read_hashes',{})[relative]=hashlib.sha256(content.encode()).hexdigest()
             return {'path':relative,'content':redact(content)}
         if name in {'apply_patch','edit_file','set_python_constant'}:

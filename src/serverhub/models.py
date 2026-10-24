@@ -105,6 +105,8 @@ class Job(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     time_limit: Mapped[int] = mapped_column(Integer, default=3600)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    paused_seconds: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
     token_budget: Mapped[int] = mapped_column(Integer, default=20000)
     cost_budget: Mapped[float] = mapped_column(Float, default=1.0)
     tokens_used: Mapped[int] = mapped_column(Integer, default=0)

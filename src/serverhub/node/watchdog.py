@@ -16,6 +16,7 @@ import re
 import secrets
 import stat
 import time
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -139,15 +140,23 @@ def tick(directory: str | Path) -> list[dict]:
             target = trusted_file(data["target"])
             data.update(state="restoring", restore_started=time.time())
             _atomic(path, data)
-            temporary = target.parent/f".serverhub-recovery-{key}"
-            fd = os.open(temporary, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, data["target_mode"])
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(content)
-                fh.flush()
-                os.fsync(fh.fileno())
-                os.fchmod(fh.fileno(), data["target_mode"])
-                os.fchown(fh.fileno(), data["target_uid"], data["target_gid"])
-            os.replace(temporary, target)
+            fd, name = tempfile.mkstemp(prefix=f".serverhub-recovery-{key}-", dir=target.parent)
+            temporary = Path(name)
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(content)
+                    fh.flush()
+                    os.fchown(fh.fileno(), data["target_uid"], data["target_gid"])
+                    os.fchmod(fh.fileno(), data["target_mode"])
+                    os.fsync(fh.fileno())
+                os.replace(temporary, target)
+                directory_fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            finally:
+                temporary.unlink(missing_ok=True)
             if data.get("service"):
                 command("systemctl", "restart", data["service"], timeout=45)
                 command("systemctl", "is-active", "--quiet", data["service"])

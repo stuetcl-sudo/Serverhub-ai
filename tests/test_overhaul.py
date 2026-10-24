@@ -442,7 +442,7 @@ def test_upgrade_of_existing_0003_schema_adds_runtime_without_erasing_grants(tmp
     command.upgrade(_alembic_config(), "head")
     command.upgrade(_alembic_config(), "head")
     with get_engine().connect() as connection:
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0005_priority"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0006_pause_clock"
         assert (
             connection.execute(text("SELECT environment FROM policies WHERE id='legacy-policy'")).scalar()
             == "any"

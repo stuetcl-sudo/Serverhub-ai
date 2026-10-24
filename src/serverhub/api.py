@@ -81,8 +81,8 @@ class NewJob(StrictModel):
     run_after: datetime | None = None
     max_attempts: int = Field(default=3, ge=1, le=10)
     time_limit: int = Field(default=3600, ge=1, le=86400)
-    token_budget: int = Field(default=20000, ge=0, le=2_000_000)
-    cost_budget: float = Field(default=1.0, ge=0, le=1000, allow_inf_nan=False)
+    token_budget: int | None = Field(default=None, ge=0, le=2_000_000)
+    cost_budget: float | None = Field(default=None, ge=0, le=1000, allow_inf_nan=False)
 
 
 class Emergency(StrictModel):
@@ -318,9 +318,30 @@ def job_events(job_id: str, principal: Authenticated, after: int = 0, db=Depends
                                                   .order_by(JobEvent.id).limit(1000)).all()]
 
 
+class JobBudgetUpdate(BaseModel):
+    token_budget: int = Field(ge=0, le=2_000_000)
+    cost_budget: float = Field(ge=0, le=1000, allow_inf_nan=False)
+
+
+@router.put("/jobs/{job_id}/budget")
+def update_job_budget(job_id: str, body: JobBudgetUpdate, principal: Authenticated, db=Depends(get_db)):
+    job = _job_scope(db, principal, job_id)
+    db.refresh(job, with_for_update=True)
+    authorize(db, principal, "job.submit", job.host_id, job.project)
+    if job.state not in {"queued", "paused", "waiting_approval"}:
+        raise HTTPException(409, "Pause the job before changing its budget")
+    if body.token_budget < job.tokens_used or body.cost_budget < job.cost_used:
+        raise HTTPException(409, "Budget cannot be lower than accounted usage")
+    job.token_budget, job.cost_budget = body.token_budget, body.cost_budget
+    append_audit(db, principal.id, "job.budget", job.id, body.model_dump())
+    db.commit()
+    return to_dict(job)
+
+
 @router.post("/jobs/{job_id}/{action}")
 def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], principal: Authenticated, db=Depends(get_db)):
     job = _job_scope(db, principal, job_id)
+    db.refresh(job, with_for_update=True)
     if job.state in TERMINAL:
         raise HTTPException(409, "Job has already finished")
     if action == "pause":
@@ -358,8 +379,12 @@ def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], princi
             authorize(db, Principal(id=owner.id, username=owner.username, role=owner.role), denial["operation"],
                       job.host_id, job.project, denial.get("arguments", {}),
                       denial.get("environment") == "production")
+        from .jobs import resume_clock
+        resume_clock(job)
         job.state = "queued"
         job.run_after = utcnow()
+    from .jobs import mark_paused
+    mark_paused(job)
     append_audit(db, principal.id, "job." + action, job.id)
     db.add(JobEvent(job_id=job.id, message="Operator requested " + action, data={"actor": principal.id}))
     db.commit()

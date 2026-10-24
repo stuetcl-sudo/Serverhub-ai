@@ -3627,6 +3627,8 @@ function Projects() {
   const [project, setProject] = useState<Json | null>(null),
     [patchText, setPatchText] = useState(""),
     [promptText, setPromptText] = useState(""),
+    [tokenBudget, setTokenBudget] = useState(""),
+    [costBudget, setCostBudget] = useState(""),
     [targetHost, setTargetHost] = useState(""),
     [stage, setStage] = useState(false),
     [busy, setBusy] = useState(false),
@@ -3638,6 +3640,8 @@ function Projects() {
     try {
       const result = await post("/jobs", {
         kind: promptText.trim() ? "development_autonomous" : "development",
+        ...(tokenBudget !== "" ? { token_budget: Number(tokenBudget) } : {}),
+        ...(costBudget !== "" ? { cost_budget: Number(costBudget) } : {}),
         ...(targetHost.trim() ? { host_id: targetHost.trim() } : {}),
         project: project.name,
         spec: {
@@ -3731,6 +3735,14 @@ function Projects() {
             <label>
               Autonomous development task (optional)
               <textarea value={promptText} onChange={(event) => setPromptText(event.target.value)} rows={4} maxLength={16000} placeholder="Describe the requested change. The model inspects, edits, tests and verifies in the registered sandbox." />
+            </label>
+            <label>
+              Token budget (blank uses model default)
+              <input type="number" min={0} max={2000000} step={1} value={tokenBudget} onChange={e => setTokenBudget(e.target.value)} />
+            </label>
+            <label>
+              API cost budget (blank uses model default)
+              <input type="number" min={0} max={1000} step="any" value={costBudget} onChange={e => setCostBudget(e.target.value)} />
             </label>
             <label>
               Enrolled staging host ID (required for runtime deployment)

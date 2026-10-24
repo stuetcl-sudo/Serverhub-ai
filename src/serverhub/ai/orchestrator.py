@@ -12,7 +12,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select, func
 
-from serverhub.database import utcnow
 from serverhub.audit import redact
 from serverhub.integrations.registry import OPERATIONS, IntegrationError, execute, operation_schemas
 from serverhub.host_audit import AuditArguments
@@ -256,7 +255,7 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
                 continue
         return {"projects": visible}
     if operation == "development.submit":
-        from serverhub.jobs import submit_job, WaitingChildren, BudgetExceeded
+        from serverhub.jobs import submit_job, WaitingChildren, BudgetExceeded, elapsed_seconds
         from serverhub.models import Job
         from serverhub.policy import authorize
         authorize(ctx.db, ctx.principal, "development.workspace", ctx.job.host_id, args["project"])
@@ -273,7 +272,7 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
             payload={"project":args["project"],"prompt":prompt,"stage":args.get("stage",False)} if prompt else args
             job=submit_job(ctx.db,ctx.principal,kind,payload,host_id=ctx.job.host_id, project=args["project"],parent_id=ctx.job.id,
                 idempotency_key=key,token_budget=available,cost_budget=max(0,ctx.job.cost_budget-ctx.job.cost_used-child_cost),
-                time_limit=max(1,int(ctx.job.time_limit-(utcnow()-ctx.job.started_at).total_seconds())) if ctx.job.started_at else ctx.job.time_limit)
+                time_limit=max(1,int(ctx.job.time_limit-elapsed_seconds(ctx.job))) if ctx.job.started_at else ctx.job.time_limit)
             ctx.db.commit()
         if job.state == "succeeded":
             return {"job_id":job.id,"state":job.state,"completed":True,"verified":job.result.get("verified", False),"result":job.result}
