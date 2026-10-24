@@ -95,6 +95,8 @@ Limits are enforced only on `POST /api/auth/login`, in the existing protected
 `system_state` table (no SQL revision or expanded worker grants). PostgreSQL
 advisory locking serializes admission counters across API processes. Rejected
 IP/account attempts cannot consume the global admission bucket indefinitely.
+Counters are refreshed after locking, including sessions retained during password
+verification, so concurrent failures cannot overwrite a newer count with cached state.
 Counters expire and have bounded cardinality. Passwords, tokens and raw forwarding
 headers are not stored in counters. Hashing client identities is pseudonymization,
 not anonymization.

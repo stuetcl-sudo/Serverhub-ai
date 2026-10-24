@@ -50,3 +50,20 @@ def test_ip_limit_persists_across_app_instances_and_usernames(control,monkeypatc
             assert client.post('/api/auth/login',json={'username':name,'password':'wrong'}).status_code == 401
     with TestClient(create_app(),client=('198.51.100.8',1000)) as client:
         assert client.post('/api/auth/login',json={'username':'third','password':'wrong'}).status_code == 429
+
+
+def test_password_failures_refresh_cached_admission_counter(control):
+    from serverhub.login_security import admit, failure
+    from serverhub.models import SystemState
+    peer = request('198.51.100.11','')
+    with SessionLocal() as first, SessionLocal() as second:
+        key = admit(first,peer,'owner')
+        assert admit(second,peer,'owner') == key
+        # Keep strong references: SQLAlchemy's identity map uses weak references.
+        stale_first = first.get(SystemState,key)
+        stale_second = second.get(SystemState,key)
+        assert stale_first.value['count'] == stale_second.value['count'] == 0
+        failure(first,key)
+        failure(second,key)
+    with SessionLocal() as db:
+        assert db.get(SystemState,key).value['count'] == 2

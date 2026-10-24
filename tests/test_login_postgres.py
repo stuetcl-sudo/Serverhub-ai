@@ -28,3 +28,21 @@ def test_postgres_login_admission_survives_multi_process_race(pg_env,monkeypatch
         results=list(pool.map(admit_once,range(12)))
     assert results.count('admitted')==2,results
     assert results.count(429)==10,results
+
+
+def test_postgres_password_failure_refreshes_admission_session(pg_env):
+    from starlette.requests import Request
+    from serverhub.database import SessionLocal
+    from serverhub.login_security import admit, failure
+    from serverhub.models import SystemState
+    request = Request({'type':'http','client':('198.51.100.12',1234),'headers':[]})
+    with SessionLocal() as first, SessionLocal() as second:
+        key = admit(first,request,'pgowner')
+        assert admit(second,request,'pgowner') == key
+        cached_first = first.get(SystemState,key)
+        cached_second = second.get(SystemState,key)
+        assert cached_first.value['count'] == cached_second.value['count'] == 0
+        failure(first,key)
+        failure(second,key)
+    with SessionLocal() as db:
+        assert db.get(SystemState,key).value['count'] == 2

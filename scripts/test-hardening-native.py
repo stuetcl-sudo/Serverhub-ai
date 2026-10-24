@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import pwd
 import shutil
-import ssl
 import subprocess
 import threading
 import time
@@ -93,7 +92,11 @@ run(['systemctl','restart','serverhub-ai-api'])
 ca=Path('/etc/serverhub/tls/cert.pem')
 shutil.copyfile(ca,root/'ca.pem')
 (root/'ca.pem').chmod(0o644)
-(root/'Caddyfile').write_text('''http://127.0.0.1:19081 {
+(root/'Caddyfile').write_text('''{
+    admin off
+}
+http://127.0.0.1:19081 {
+    bind 127.0.0.1
     reverse_proxy https://127.0.0.1:9080 {
         header_up Host 127.0.0.1:9080
         transport http {
@@ -104,13 +107,19 @@ shutil.copyfile(ca,root/'ca.pem')
 ''')
 (root/'Caddyfile').chmod(0o644)
 try:
-    run(['docker','run','--rm','--read-only','--cap-drop','ALL',
-        '--security-opt','no-new-privileges:true','--tmpfs','/data','--tmpfs','/config',
-        '-v',str(root)+':/fixtures:ro','caddy:2.11.7','caddy','validate',
+    # The official image marks /usr/bin/caddy with cap_net_bind_service=ep.
+    # Executing that file with ALL capabilities dropped fails with EPERM.
+    # Copy bytes (not xattrs) into this container's tmpfs instead of granting a
+    # capability: the fixture only binds an unprivileged loopback port.
+    container = ['--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true',
+        '--tmpfs','/data','--tmpfs','/config','--tmpfs','/tmp:rw,exec,nosuid,nodev,size=128m',
+        '-v',str(root)+':/fixtures:ro','--entrypoint','/bin/sh',
+        'caddy:2.11.7@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489',
+        '-ec','cat /usr/bin/caddy > /tmp/caddy; chmod 0755 /tmp/caddy; exec /tmp/caddy "$@"','caddy-fixture']
+    run(['docker','run','--rm',*container,'validate',
         '--config','/fixtures/Caddyfile','--adapter','caddyfile'])
-    run(['docker','run','-d','--name','shub-hardening-caddy','--network','host','--read-only','--cap-drop','ALL',
-        '--security-opt','no-new-privileges:true','--tmpfs','/data','--tmpfs','/config',
-        '-v',str(root)+':/fixtures:ro','caddy:2.11.7','caddy','run','--config','/fixtures/Caddyfile','--adapter','caddyfile'])
+    run(['docker','run','-d','--name','shub-hardening-caddy','--network','host',*container,
+        'run','--config','/fixtures/Caddyfile','--adapter','caddyfile'])
     last_health = 'No health request attempted'
     for _ in range(40):
         try:

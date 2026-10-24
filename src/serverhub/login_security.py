@@ -51,7 +51,10 @@ def _key(kind, value):
 
 def _counter(db, key, period):
     now = time.time()
-    row = db.get(SystemState, key)
+    # Admission and password verification share a session. Another API process
+    # may update this counter while verification runs; never reuse its cached
+    # pre-verification value after acquiring the advisory lock.
+    row = db.get(SystemState, key, populate_existing=True)
     if row is None:
         row = SystemState(key=key, value={'start':now,'count':0,'period':period})
         db.add(row)
@@ -75,7 +78,7 @@ def admit(db, request, username):
         from sqlalchemy import func
         # Reject a saturated global bucket before scanning/pruning admission keys.
         global_key = _key('global','all')
-        global_row = db.get(SystemState, global_key)
+        global_row = db.get(SystemState, global_key, populate_existing=True)
         now = time.time()
         if global_row and now-global_row.value['start'] < 60 and global_row.value['count'] >= settings.login_global_limit:
             db.rollback()
@@ -120,6 +123,10 @@ def failure(db, key):
 
 
 def success(db, key):
-    row = db.get(SystemState,key)
-    if row:
-        row.value = {**row.value,'count':0}
+    with _LOCK:
+        if db.bind.dialect.name == 'postgresql':
+            from sqlalchemy import text
+            db.execute(text('SELECT pg_advisory_xact_lock(734882109)'))
+        row = db.get(SystemState,key,populate_existing=True)
+        if row:
+            row.value = {**row.value,'count':0}
