@@ -1,0 +1,44 @@
+{
+  "state": "passed",
+  "backup_id": "20261025T181752Z-a1911663475e",
+  "restore_drill": {
+    "backup_id": "20261025T181752Z-a1911663475e",
+    "state": "verified",
+    "restored_tables": 25,
+    "disposable_database": "serverhub_verify_3ff2118849d94a71a515c82056b6d0ce"
+  },
+  "restored_marker_and_schema_verified": true,
+  "nonempty_restore_rejected": true,
+  "watchdog_and_manual_rollback": "passed",
+  "previous": "repair-20261024T195431Z-60f67b",
+  "independent_recovery_release_module_identical": true,
+  "service_calls_recorded_only": [
+    [
+      "systemctl",
+      "restart",
+      "serverhub-ai-api.service",
+      "serverhub-ai-worker.service"
+    ],
+    [
+      "systemctl",
+      "try-restart",
+      "serverhub-ai-broker.service",
+      "serverhub-ai-node.service"
+    ],
+    [
+      "systemctl",
+      "restart",
+      "serverhub-ai-api.service",
+      "serverhub-ai-worker.service"
+    ],
+    [
+      "systemctl",
+      "try-restart",
+      "serverhub-ai-broker.service",
+      "serverhub-ai-node.service"
+    ]
+  ],
+  "real_service_restart": false,
+  "production_backup_verified": false,
+  "root_ownership_and_live_service_activation_tested": false
+}
