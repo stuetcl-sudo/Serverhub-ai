@@ -86,6 +86,8 @@ jobs:
         run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-native-ubuntu.py
       - name: Actual package transactions and database-consistent Docker restore
         run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-host-operations.py
+      - name: Actual private dependency network and Caddy login protection
+        run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-hardening-native.py
       - name: Real qwen autonomous Jarvis source repair and native staging rollback
         if: always() && steps.native_install.outcome == 'success'
         run: sudo env SERVERHUB_DISPOSABLE_TEST=fresh-ubuntu-ci GITHUB_ACTIONS=true PYTHONPATH="$PWD/src" "$PWD/.build-venv/bin/python" scripts/test-jarvis-pilot.py

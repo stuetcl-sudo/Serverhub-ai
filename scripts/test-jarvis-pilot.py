@@ -202,7 +202,12 @@ print('JARVIS_JOB_EVIDENCE='+json.dumps({'state':job['state'],'error':job.get('e
     'tokens_used':job['tokens_used'],'events':events[-12:],'upstream_commit':upstream,'injected_local_regression':True,
     'worker_recovery':recovery_evidence,'attempts':job['attempts'],'model_digests':tags}),flush=True)
 assert job['state']=='succeeded' and job['result']['verified'],job
-assert recovery_evidence.get('pid_changed') and job['attempts']>=2,job
+claims = [event for event in events if event.get('message') == 'Job claimed']
+shutdowns = [event for event in events if event.get('data', {}).get('class') == 'worker_shutdown']
+# Graceful resume is an execution entry, not a failed attempt. Prove actual
+# restart/reclaim independently, while preserving the failure-attempt ceiling.
+assert recovery_evidence.get('pid_changed') and len(claims) >= 2 and shutdowns, events
+assert 1 <= job['attempts'] < len(claims), job
 assert job['result']['staging']['verified'] and job['result']['production_deployed'] is False
 assert (source/'app/version.py').read_text()!=original
 assert run(['git','-c','safe.directory='+str(source),'-C',str(source),'rev-parse','HEAD'])==fixture_commit

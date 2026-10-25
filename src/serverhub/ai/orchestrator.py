@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import json
 import hashlib
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select, func
 
-from serverhub.database import utcnow
 from serverhub.audit import redact
 from serverhub.integrations.registry import OPERATIONS, IntegrationError, execute, operation_schemas
 from serverhub.host_audit import AuditArguments
@@ -57,7 +57,7 @@ class Search(Arguments):
 
 
 class InventoryQuery(Arguments):
-    section: str = Field(pattern=r"^(packages|services|ports|containers|addresses|routes|hardware)$")
+    section: Literal["packages", "services", "ports", "containers", "addresses", "routes", "hardware"]
     query: str = Field(default="", max_length=256)
     limit: int = Field(default=30, ge=1, le=100)
 
@@ -125,6 +125,8 @@ def tool_schemas(profile: str = "all") -> list[dict]:
                 "docker": {"docker.", "catalog."}, "network": {"diagnostics.network"},
                 "security": {"security.", "host.audit"}, "development": {"development."},
                 "monitoring": {"memory.", "host.audit"}, "verification": set()}
+    if profile == "development":
+        base = {"development.list", "development.submit", "task.verify", "agent.specialize"}
     prefixes = families.get(profile, set())
     return [schema for schema in core + operation_schemas()
             if (schema["function"]["name"].replace("__", ".") in base or
@@ -253,7 +255,7 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
                 continue
         return {"projects": visible}
     if operation == "development.submit":
-        from serverhub.jobs import submit_job, WaitingChildren, BudgetExceeded
+        from serverhub.jobs import submit_job, WaitingChildren, BudgetExceeded, elapsed_seconds
         from serverhub.models import Job
         from serverhub.policy import authorize
         authorize(ctx.db, ctx.principal, "development.workspace", ctx.job.host_id, args["project"])
@@ -264,13 +266,13 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
             child_cost=ctx.db.scalar(select(func.coalesce(func.sum(Job.cost_used),0)).where(Job.parent_id==ctx.job.id))
             available=ctx.job.token_budget-ctx.job.tokens_used-child_units-4000
             if available<32:
-                raise BudgetExceeded("Insufficient task-tree budget for development plus final verification")
+                raise BudgetExceeded("Insufficient task-tree budget for development plus final verification", {"minimum_tokens": 4032})
             prompt=args.pop("prompt",None)
             kind="development_autonomous" if prompt else "development"
             payload={"project":args["project"],"prompt":prompt,"stage":args.get("stage",False)} if prompt else args
             job=submit_job(ctx.db,ctx.principal,kind,payload,host_id=ctx.job.host_id, project=args["project"],parent_id=ctx.job.id,
                 idempotency_key=key,token_budget=available,cost_budget=max(0,ctx.job.cost_budget-ctx.job.cost_used-child_cost),
-                time_limit=max(1,int(ctx.job.time_limit-(utcnow()-ctx.job.started_at).total_seconds())) if ctx.job.started_at else ctx.job.time_limit)
+                time_limit=max(1,int(ctx.job.time_limit-elapsed_seconds(ctx.job))) if ctx.job.started_at else ctx.job.time_limit)
             ctx.db.commit()
         if job.state == "succeeded":
             return {"job_id":job.id,"state":job.state,"completed":True,"verified":job.result.get("verified", False),"result":job.result}
@@ -280,6 +282,34 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
         ctx.db.commit()
         raise WaitingChildren("Development subtask is queued; parent releases its execution slot and resumes from checkpoint")
     raise ValueError("Tool has no installed implementation")
+
+
+def _invalid_arguments(operation: str, arguments) -> dict | None:
+    """Validate model-proposed arguments before any journaling, logging of values or dispatch.
+
+    Returns sanitized field paths/types and the tool schema, or None when valid. Rejected
+    values, Pydantic input, context and URLs are never included.
+    """
+    model = OPERATIONS[operation].arguments if operation in OPERATIONS else TOOLS[operation][0]
+    try:
+        model.model_validate(arguments)
+    except ValidationError as exc:
+        errors = [{"path": list(error["loc"]), "type": error["type"]}
+                  for error in exc.errors(include_input=False, include_context=False, include_url=False)]
+        return {"errors": errors, "schema": model.model_json_schema()}
+    return None
+
+
+def _complete_call(ctx, state: dict, operation: str, call_id: str, result: dict) -> dict:
+    cleaned = redact(result)
+    if len(json.dumps(cleaned, default=str).encode()) > 256 * 1024:
+        cleaned = {"truncated": True, "detail": "Tool output exceeds conversation bound; inspect inventory/API directly"}
+    state["completed_calls"][call_id] = cleaned
+    state["evidence"].append({"operation": operation, "result": cleaned})
+    state.pop("in_flight", None)
+    _save(ctx, state)
+    ctx.log("AI tool result", {"operation": operation, "call_id": call_id, "result": cleaned})
+    return cleaned
 
 
 def _pending_tools(ctx, state: dict, on_execution=None) -> None:
@@ -292,42 +322,62 @@ def _pending_tools(ctx, state: dict, on_execution=None) -> None:
         if prior is not None:
             result = prior
         else:
-            mutating = operation in OPERATIONS and OPERATIONS[operation].writes
-            previous = state.get("in_flight")
-            if previous and previous.get("id") == call_id and previous.get("mutating"):
-                raise ValueError("An interrupted external mutation needs owner reconciliation; its durable checkpoint is retained")
-            state["in_flight"] = {"id": call_id, "operation": operation,
-                                  "arguments": call["arguments"], "mutating": mutating}
-            _save(ctx, state)
-            ctx.log("AI tool request", {"operation": operation, "arguments": call["arguments"],
-                                        "specialist": state["specialist"]})
             fingerprint = hashlib.sha256(json.dumps([operation, call["arguments"]], sort_keys=True).encode()).hexdigest()
             failures = state.setdefault("failed_tools", {})
-            try:
-                if failures.get(fingerprint, 0) >= 2:
-                    raise IntegrationError("Repeated failed operation suppressed; choose a changed diagnostic or remediation strategy", retryable=False)
-                if on_execution:
-                    on_execution()
-                result = _run_tool(ctx, operation, call["arguments"], state, call_id)
-            except IntegrationError as exc:
-                state["in_flight"]["failure"] = {"error": str(exc), "rollback": exc.rollback}
+            invalid = _invalid_arguments(operation, call["arguments"])
+            if invalid is not None:
+                # Validation precedes in_flight/mutating journaling: nothing was authorized or dispatched,
+                # An exact, bare legacy marker can precede validation in older builds.
+                # Never erase a different request or evidence of dispatch/checkpointing.
+                previous = state.get("in_flight")
+                if previous:
+                    legacy_marker = (
+                        previous.get("id") == call_id
+                        and previous.get("operation") == operation
+                        and previous.get("arguments") == call["arguments"]
+                        and set(previous) <= {"id", "operation", "arguments", "mutating"}
+                    )
+                    if not legacy_marker:
+                        raise ValueError("An interrupted external mutation needs owner reconciliation; its durable checkpoint is retained")
+                    state.pop("in_flight", None)
+                identical = failures[fingerprint] = min(3, failures.get(fingerprint, 0) + 1)
+                ctx.log("AI tool request rejected", {"operation": operation, "specialist": state["specialist"],
+                                                      "valid": False, "error_paths": [e["path"] for e in invalid["errors"]]})
+                result = {"failure_class": "invalid_tool_arguments", "errors": invalid["errors"],
+                          "operation": operation, "completed": False, "verified": False, "executed": False,
+                          "retryable": True, "requires_changed_arguments": True,
+                          "identical_failures": identical, "requires_changed_strategy": identical >= 2,
+                          "guidance": "Use the advertised schema. Repository dependencies belong to development.list/development.submit, not host inventory."}
+                if identical < 2:
+                    result["expected_schema"] = invalid["schema"]
+                result = _complete_call(ctx, state, operation, call_id, result)
+            else:
+                mutating = operation in OPERATIONS and OPERATIONS[operation].writes
+                previous = state.get("in_flight")
+                if previous and previous.get("id") == call_id and previous.get("mutating"):
+                    raise ValueError("An interrupted external mutation needs owner reconciliation; its durable checkpoint is retained")
+                state["in_flight"] = {"id": call_id, "operation": operation,
+                                      "arguments": call["arguments"], "mutating": mutating}
                 _save(ctx, state)
-                if mutating:
-                    raise
-                failures[fingerprint] = min(3, failures.get(fingerprint, 0) + 1)
-                result = {"error": str(exc), "verified": False, "completed": False,
-                          "failure_class": "integration", "retryable": exc.retryable,
-                          "identical_failures": failures[fingerprint],
-                          "requires_changed_strategy": failures[fingerprint] >= 2}
-            cleaned = redact(result)
-            if len(json.dumps(cleaned, default=str).encode()) > 256 * 1024:
-                cleaned = {"truncated": True, "detail": "Tool output exceeds conversation bound; inspect inventory/API directly"}
-            result = cleaned
-            state["completed_calls"][call_id] = result
-            state["evidence"].append({"operation": operation, "result": result})
-            state.pop("in_flight", None)
-            _save(ctx, state)
-            ctx.log("AI tool result", {"operation": operation, "call_id": call_id, "result": result})
+                ctx.log("AI tool request", {"operation": operation, "arguments": call["arguments"],
+                                            "specialist": state["specialist"]})
+                try:
+                    if failures.get(fingerprint, 0) >= 2:
+                        raise IntegrationError("Repeated failed operation suppressed; choose a changed diagnostic or remediation strategy", retryable=False)
+                    if on_execution:
+                        on_execution()
+                    result = _run_tool(ctx, operation, call["arguments"], state, call_id)
+                except IntegrationError as exc:
+                    state["in_flight"]["failure"] = {"error": str(exc), "rollback": exc.rollback}
+                    _save(ctx, state)
+                    if mutating:
+                        raise
+                    failures[fingerprint] = min(3, failures.get(fingerprint, 0) + 1)
+                    result = {"error": str(exc), "verified": False, "completed": False,
+                              "failure_class": "integration", "retryable": exc.retryable,
+                              "identical_failures": failures[fingerprint],
+                              "requires_changed_strategy": failures[fingerprint] >= 2}
+                result = _complete_call(ctx, state, operation, call_id, result)
         # Persist removal and its tool response in one checkpoint. A crash at any
         # earlier point reuses the completed result without repeating the effect.
         state["messages"].append({"role": "tool", "tool_call_id": call_id,
@@ -367,7 +417,7 @@ def autonomous_job(ctx, spec: dict) -> dict:
     steps = spec.get("max_steps", 20)
     if isinstance(steps, bool) or not isinstance(steps, int) or not 1 <= steps <= 100:
         raise ValueError("max_steps must be 1–100")
-    selected = spec.get("specialist", "infrastructure")
+    selected = spec.get("specialist", "development" if ctx.job.project else "infrastructure")
     if selected not in AGENTS:
         raise ValueError("Unknown specialist")
     routes = load_routes()
@@ -434,9 +484,10 @@ def autonomous_job(ctx, spec: dict) -> dict:
                 safe = {"input_estimate": data.get("estimated_input_tokens"),
                         "output_reserve": data.get("output_reserve_tokens"), "minimum_output": 32,
                         "context_limit": data.get("context_limit"), "remaining_job_budget": data.get("remaining_tokens"),
-                        "estimator": data.get("method"), "serialized_utf8_bytes": data.get("serialized_utf8_bytes")}
+                        "estimator": data.get("method"), "serialized_utf8_bytes": data.get("serialized_utf8_bytes"),
+                        "cost_reserve": data.get("cost_reserve", 0)}
                 raise JobPreflightRejected(str(exc), safe) from exc
-            raise BudgetExceeded(str(exc)) from exc
+            raise BudgetExceeded(str(exc), exc.diagnostics) from exc
         except ProviderError as exc:
             if exc.retryable:
                 from serverhub.jobs import RetryableError

@@ -138,6 +138,12 @@ class ProviderConfig(BaseModel):
     input_cost_per_million: float | None = Field(default=None, ge=0, le=10000)
     output_cost_per_million: float | None = Field(default=None, ge=0, le=10000)
     context_limit: int = Field(default=32768, ge=1024, le=2000000)
+    ordinary_job_token_limit: int = Field(default=200000, ge=0, le=2_000_000)
+    ordinary_job_cost_limit: float = Field(default=10.0, ge=0, le=1000, allow_inf_nan=False)
+    max_job_token_budget: int = Field(default=2_000_000, ge=0, le=2_000_000)
+    max_job_cost_budget: float = Field(default=1000, ge=0, le=1000, allow_inf_nan=False)
+    default_job_token_budget: int = Field(default=20000, ge=0, le=2_000_000)
+    default_job_cost_budget: float = Field(default=1.0, ge=0, le=1000, allow_inf_nan=False)
 
     @field_validator("kind")
     @classmethod
@@ -148,6 +154,11 @@ class ProviderConfig(BaseModel):
 
     @model_validator(mode="after")
     def endpoint(self):
+        if (self.default_job_token_budget > self.max_job_token_budget
+                or self.default_job_cost_budget > self.max_job_cost_budget
+                or self.ordinary_job_token_limit > self.max_job_token_budget
+                or self.ordinary_job_cost_limit > self.max_job_cost_budget):
+            raise ValueError("Route defaults and ordinary limits must not exceed hard budget ceilings")
         self.base_url = validate_url(self.base_url, allow_http=self.allow_insecure_http)
         if self.max_tokens_parameter not in {"max_tokens", "max_completion_tokens"}:
             raise ValueError("max_tokens_parameter must be max_tokens or max_completion_tokens")

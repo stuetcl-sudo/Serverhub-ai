@@ -52,3 +52,7 @@ GRANT SELECT ON model_routes TO serverhub_worker;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON model_routes FROM serverhub_worker;
 GRANT SELECT ON worker_heartbeats TO serverhub_api;
 GRANT SELECT, INSERT, UPDATE ON worker_heartbeats TO serverhub_worker;
+
+-- Runtime quotas and monitor cooldowns are separate from trusted emergency/login state.
+GRANT SELECT, INSERT, UPDATE ON job_control_state TO serverhub_api, serverhub_worker;
+REVOKE DELETE, TRUNCATE ON job_control_state FROM serverhub_api, serverhub_worker;

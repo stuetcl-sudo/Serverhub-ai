@@ -32,8 +32,9 @@ worker, Docker Gateway or credentials. It does not deploy to production.
   Project dependencies and pinned pytest install into the isolated workspace, never
   a production `.venv`. Builds/tests have no network. Dependency networking needs
   root project configuration **and** a live `development.network` dependency-phase
-  grant. It shares worker networking, not a package-host egress allowlist; approve
-  this powerful capability only for reviewed projects/dependencies.
+  grant. The security follow-up replaces shared networking with a private namespace
+  and an exact public HTTPS package-host gateway; see [the current boundary and
+  migration limitations](security-review-a634.md#dependency-network-boundary).
 * Normal workflow checkpoints now survive policy denial independently of the result
   object. Resume checks the original initiating account's denied operation before
   queuing. Every executed tool rechecks live expiry/revocation/emergency state.

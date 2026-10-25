@@ -232,7 +232,7 @@ def test_api_host_scoping_and_owner_only_controls(client):
 def test_api_lockout_and_logout(client):
     for _ in range(5):
         assert client.post("/api/auth/login", json={"username": "adult", "password": "wrong"}).status_code == 401
-    assert client.post("/api/auth/login", json={"username": "adult", "password": PASSWORD}).status_code == 401
+    assert client.post("/api/auth/login", json={"username": "adult", "password": PASSWORD}).status_code == 429
     result = client.post("/api/auth/login", json={"username": "owner", "password": PASSWORD})
     token = result.json()["token"]
     assert client.post("/api/auth/logout", headers={"Origin": "http://testserver"}).status_code == 200
@@ -331,7 +331,7 @@ def test_job_token_budget_is_enforced(core_env, owner, monkeypatch):
         db.commit()
     Worker(isolated=False).run_once()
     with SessionLocal() as db:
-        assert db.get(Job, job_id).state == "failed"
+        assert db.get(Job, job_id).state == "paused"
         assert db.get(Job, job_id).failure_class == "budget"
         assert db.get(Job, job_id).tokens_used == 11
 

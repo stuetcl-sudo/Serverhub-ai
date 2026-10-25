@@ -122,7 +122,7 @@ def analyze_host(inventory: dict, *, received_at: datetime, samples=(), baseline
                 steps=["Inventory required devices/capabilities and host integrations", "Test minimum privileges in staging; preserve Home Assistant and smart-home hardware/discovery", "Require backup and owner-approved redeploy"]))
         if any("apparmor=unconfined" in str(option) for option in container.get("security_opt", [])):
             findings.append(_finding("apparmor_unconfined", name, "Container disables AppArmor confinement", evidence, priority=12, severity="high"))
-        if container.get("health") == "unhealthy" or container.get("restart_count", 0) >= 5:
+        if container.get("health") == "unhealthy" or (container.get("restart_delta") or 0) >= 5:
             findings.append(_finding("container_health", name, "Container health or restart history needs diagnosis", {**evidence, "health": container.get("health"), "restart_count": container.get("restart_count")}, priority=15,
                 steps=["Read approved bounded logs and dependency health", "Correlate disk/memory pressure before proposing an allowlisted restart"]))
         image = str(container.get("image") or "")

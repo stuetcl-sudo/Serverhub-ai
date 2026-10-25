@@ -5,6 +5,7 @@ confirmation and an ephemeral Ubuntu 24.04 runner; this file is not an AI tool.
 """
 
 import json
+import runpy
 import grp
 import ssl
 import yaml
@@ -34,7 +35,6 @@ from serverhub.ops.installer import Installer, InstallError
 print(json.dumps({"audit_parent_modes": {str(path): oct(path.stat().st_mode & 0o777)
     for path in (Path("/var/log"), Path("/var/lib"))}}), flush=True)
 source = Path(__file__).resolve().parents[1]
-import runpy
 control_fixture = runpy.run_path(str(source / 'scripts/coexistence-fixture.py'))
 control_fixture['start']()
 control_fixture['conflicts'](source)
@@ -133,7 +133,7 @@ login = client.post(
 login.raise_for_status()
 assert "Secure" not in login.headers.get("set-cookie", "")  # narrowly scoped loopback tunnel login
 headers = {"Authorization": "Bearer " + login.json()["token"], "Origin": "https://serverhub.test"}
-model = {"kind": "ollama", "base_url": "http://127.0.0.1:11439", "model": "native-fixture"}
+model = {"kind": "ollama", "base_url": "http://127.0.0.1:11439", "model": "native-fixture", "context_limit": 16384}
 for endpoint in ("discover", "test"):
     response = client.post("/api/settings/models/" + endpoint, json=model, headers=headers)
     response.raise_for_status()
@@ -227,9 +227,8 @@ probe = subprocess.run(["runuser", "-u", "serverhub-ai", "--", python, "-c",
     'import socket; s=socket.socket(socket.AF_UNIX); s.connect("/run/serverhub-ai-broker/control.sock")'],
     cwd="/", capture_output=True, text=True)
 assert probe.returncode != 0 and "PermissionError" in probe.stderr
-# A local admission failure must pause without spending a model/job attempt.
-limited = client.put("/api/settings/models/default", headers=headers, json={**model, "context_limit": 1024})
-limited.raise_for_status()
+# Keep a realistic context throughout. Deliberately exhaust only the job budget;
+# context-window failures are independently covered by provider regression tests.
 job = client.post(
     "/api/jobs",
     headers=adult_headers,
@@ -237,7 +236,7 @@ job = client.post(
         "kind": "autonomous",
         "host_id": host,
         "spec": {"prompt": "Read CPU, memory and disk usage and verify fresh inventory."},
-        "token_budget": 20000,
+        "token_budget": 32,
     },
 )
 job.raise_for_status()
@@ -248,7 +247,12 @@ for _ in range(60):
     time.sleep(1)
 assert result["state"] == "paused", result
 assert result["attempts"] == 0 and result["tokens_used"] == 0
-corrected = client.put("/api/settings/models/default", headers=headers, json={**model, "context_limit": 16384})
+assert result["result"]["preflight"]["context_limit"] == 16384
+assert result["result"]["preflight"]["input_estimate"] + 32 < 16384
+assert result["result"]["preflight"]["remaining_job_budget"] == 32
+assert client.post("/api/jobs/" + job.json()["id"] + "/resume", headers=adult_headers).status_code == 409
+corrected = client.put("/api/jobs/" + job.json()["id"] + "/budget", headers=adult_headers,
+                       json={"token_budget": 20000, "cost_budget": 1})
 corrected.raise_for_status()
 client.post("/api/jobs/" + job.json()["id"] + "/resume", headers=adult_headers).raise_for_status()
 for _ in range(60):

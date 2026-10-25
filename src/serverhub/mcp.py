@@ -514,12 +514,16 @@ TOOLS = [
 # Dedicated development tools expose only registered project identities and job
 # controls. They reuse REST authentication/authorization; no command/path input.
 TOOLS += [
+    ("update_job_budget", "Change limits on an owned paused/queued job; preserves accounted usage",
+     _object({"job_id":HOST, "token_budget":{"type":"integer","minimum":0,"maximum":2000000},
+              "cost_budget":{"type":"number","minimum":0,"maximum":1000}}, ["job_id","token_budget","cost_budget"]), "serverhub:jobs"),
     ("list_projects", "List registered development projects visible to this identity", _object(), "serverhub:read"),
     ("create_development_job", "Queue a durable registered-project workflow; omit prompt for no-patch validation",
      _object({"project": {"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
               "prompt":{"type":"string","minLength":1,"maxLength":16000}, "stage":{"type":"boolean"},
               "host_id":HOST, "idempotency_key":{"type":"string","minLength":1,"maxLength":200},
-              "token_budget":{"type":"integer","minimum":0,"maximum":100000}}, ["project"]), "serverhub:jobs"),
+              "token_budget":{"type":"integer","minimum":0,"maximum":2000000},
+              "cost_budget":{"type":"number","minimum":0,"maximum":1000}}, ["project"]), "serverhub:jobs"),
     ("job_logs", "Read bounded own-job events after a cursor", _object({"job_id":HOST,
         "after":{"type":"integer","minimum":0}}, ["job_id"]), "serverhub:read"),
     ("publish_development_result", "Publish a verified bounded candidate as a draft PR to its root-registered repository; separate policy required", _object({"job_id":HOST}, ["job_id"]), "serverhub:jobs"),
@@ -551,13 +555,16 @@ def _call(name, arguments, actor, db):
         return grant_profile(ProfileGrant(profile="development", **arguments), actor, db)
     if name == "revoke_policy":
         return api.update_policy(arguments["policy_id"], api.PolicyUpdate(enabled=False), actor, db)
+    if name == "update_job_budget":
+        return api.update_job_budget(arguments["job_id"], api.JobBudgetUpdate(
+            token_budget=arguments["token_budget"], cost_budget=arguments["cost_budget"]), actor, db)
     if name == "create_development_job":
         spec = {"project": arguments["project"], "stage": arguments.get("stage", False)}
         if arguments.get("prompt"):
             spec["prompt"] = arguments["prompt"]
         return api.add_job(api.NewJob(kind="development_autonomous" if "prompt" in spec else "development",
             project=arguments["project"], host_id=arguments.get("host_id"), spec=spec,
-            idempotency_key=arguments.get("idempotency_key"), token_budget=arguments.get("token_budget", 20000)), actor, db)
+            idempotency_key=arguments.get("idempotency_key"), token_budget=arguments.get("token_budget"), cost_budget=arguments.get("cost_budget")), actor, db)
     if name == "job_logs":
         return api.job_events(arguments["job_id"], actor, arguments.get("after",0), db)
     if name in {"resume_job", "cancel_job"}:

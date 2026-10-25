@@ -38,7 +38,7 @@ class SandboxRunner:
         if not self.binary:
             raise DevelopmentError("bubblewrap is required; no unsandboxed fallback is available")
 
-    def arguments(self, workspace: Path, command: Command) -> list[str]:
+    def arguments(self, workspace: Path, command: Command, proxy_socket: Path | None = None) -> list[str]:
         if workspace.is_symlink() or not workspace.is_dir():
             raise DevelopmentError("workspace is missing or is a symlink")
         prefix=[]
@@ -68,16 +68,30 @@ class SandboxRunner:
         if command.network:
             if not self.project.allow_dependency_network:
                 raise DevelopmentError("network permission is not configured")
-            args += ["--share-net", "--dir", "/etc"]
-            if Path("/etc/resolv.conf").exists():
-                args += ["--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf"]
+            if proxy_socket is None:
+                raise DevelopmentError("Dependency network requires the isolated HTTPS gateway")
+            args += ["--dir", "/run", "--ro-bind", str(proxy_socket), "/run/serverhub-egress.sock",
+                     "--ro-bind", str(Path(__file__).with_name("proxy_bridge.py")), "/sandbox-net.py"]
             if Path("/etc/ssl/certs").exists():
-                args += ["--dir", "/etc/ssl", "--ro-bind", "/etc/ssl/certs", "/etc/ssl/certs"]
+                args += ["--dir", "/etc", "--dir", "/etc/ssl", "--ro-bind", "/etc/ssl/certs", "/etc/ssl/certs"]
+            return args + ["--", "/usr/bin/python3", "-I", "/sandbox-net.py", *command.argv]
         return args + ["--", *command.argv]
 
     def run(self, workspace: Path, command: Command, *,
             heartbeat: Callable[[], None] | None = None) -> CommandResult:
-        args = self.arguments(workspace, command)
+        from contextlib import ExitStack
+        from .egress import gateway
+        with ExitStack() as stack:
+            proxy_socket = None
+            if command.network:
+                if not self.project.allow_dependency_network:
+                    raise DevelopmentError("network permission is not configured")
+                temporary = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="serverhub-egress-")))
+                proxy_socket = stack.enter_context(gateway(temporary, self.project, command.timeout))
+            return self._run(workspace, command, proxy_socket, heartbeat)
+
+    def _run(self, workspace, command, proxy_socket, heartbeat):
+        args = self.arguments(workspace, command, proxy_socket)
         memory_limit = self.project.max_memory_mb * 1024 * 1024
         process_limit = self.project.max_processes
         def limits() -> None:

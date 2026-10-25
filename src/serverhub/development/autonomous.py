@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .config import load_projects, DevelopmentError
 from .sandbox import SandboxRunner
-from .workspace import WorkspaceManager, git, safe_relative, write_manifest
+from .workspace import WorkspaceManager, git, safe_relative, write_manifest, read_source
 from .workflow import _require, _run_commands
 from serverhub.ai.providers import ChatProvider, UsageBudget, load_routes, estimate_prompt, PreflightRejected, BudgetExceeded, ProviderError
 from serverhub.audit import redact
@@ -159,7 +159,8 @@ def autonomous_development(ctx,spec):
                 raise
         state['checked_commit']=git(workspace,'rev-parse','HEAD').strip()
         save()
-        return {'verified':True,'commit':state['checked_commit']}
+        return {'verified':True,'commit':state['checked_commit'],
+                'guidance':'The current source commit passed registered checks. Do not reapply an already committed edit. Call finish if the requested work is complete; inspect source before any further change.'}
     def tool(call):
         name,args=call['name'],call['arguments']
         if name=='plan':
@@ -171,13 +172,7 @@ def autonomous_development(ctx,spec):
         if name=='read_file':
             _require(ctx,project.name,'development.read')
             relative=ReadFile.model_validate(args).path
-            safe_relative(relative)
-            path=(workspace/relative).resolve()
-            if not path.is_relative_to(workspace.resolve()) or (path.suffix not in {'.py','.json','.toml','.txt','.md','.yaml','.yml','.ts','.tsx','.js','.html','.css','.sql','.sh','.ini','.cfg','.conf','.lock'} and path.name not in {'Dockerfile','Makefile'}):
-                raise DevelopmentError('Source path is outside the bounded text read allowlist')
-            if path.stat().st_size>65536:
-                raise DevelopmentError('Source file exceeds read bound')
-            content=path.read_text()
+            content=read_source(workspace,relative)
             state.setdefault('read_hashes',{})[relative]=hashlib.sha256(content.encode()).hexdigest()
             return {'path':relative,'content':redact(content)}
         if name in {'apply_patch','edit_file','set_python_constant'}:
@@ -254,6 +249,20 @@ def autonomous_development(ctx,spec):
     for index in range(state.get('step',0),min(50,max(1,int(spec.get('max_steps',20))))):
         ctx.check_cancelled()
         previous_progress=progress_marker()
+        # Source commits are durable even if a worker dies before its receipt.
+        # Verify each changed HEAD before asking the model what to do next. This
+        # uses the same authorized sandbox tool and does not imply job completion.
+        head=git(workspace,'rev-parse','HEAD').strip()
+        if (not state.get('pending') and head != state.get('base_commit')
+                and state.get('read_hashes')
+                and state.get('checks_attempted_commit') != head
+                and state.get('checked_commit') != head):
+            call_id='verify-source-'+head
+            state['pending']=[{'id':call_id,'name':'run_checks','arguments':{}}]
+            state['messages'].append({'role':'assistant','tool_calls':[{
+                'id':call_id,'type':'function',
+                'function':{'name':'run_checks','arguments':'{}'}}]})
+            save()
         if not state.get('pending'):
             request_messages=development_messages(state,cfg,budget.token_limit-budget.tokens_used)
             def before():
@@ -270,10 +279,10 @@ def autonomous_development(ctx,spec):
                 from serverhub.jobs import PreflightRejected as JobPreflight, BudgetExceeded as JobBudget
                 if not activity[0]:
                     raise JobPreflight(str(error),error.diagnostics) from error
-                raise JobBudget(str(error)) from error
+                raise JobBudget(str(error), error.diagnostics) from error
             except BudgetExceeded as error:
                 from serverhub.jobs import BudgetExceeded as JobBudget
-                raise JobBudget(str(error)) from error
+                raise JobBudget(str(error), error.diagnostics) from error
             except ProviderError as error:
                 if error.retryable:
                     from serverhub.jobs import RetryableError
@@ -306,6 +315,8 @@ def autonomous_development(ctx,spec):
                     detail='Invalid tool arguments: '+json.dumps([{'field':str(item['loc']),'reason':item['msg']} for item in error.errors(include_input=False)]) if isinstance(error,ValidationError) else str(error)
                     receipt={'verified':False,'error':str(redact(detail))[:2000],'test_output':redact(state.get('commands',[])[-1:])}
                 state['completed_calls'][call['id']]=redact(receipt)
+                if call['name']=='run_checks':
+                    state['checks_attempted_commit']=git(workspace,'rev-parse','HEAD').strip()
                 save()
             state['messages'].append({'role':'tool','tool_call_id':call['id'],'name':call['name'],'content':json.dumps(redact(receipt))})
             state['pending']=[item for item in state['pending'] if item['id']!=call['id']]

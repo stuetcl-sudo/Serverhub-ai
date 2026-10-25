@@ -25,18 +25,40 @@ FORBIDDEN = {
 }
 CONTROL = {"policy.manage", "users.manage", "models.manage", "node.enroll", "node.revoke", "emergency.manage"}
 GLOBAL_READ = {"job.submit", "incident.report", "jobs.read-own", "profile.read"}
-READ_SUFFIXES = (".read", ".list", ".status", ".inspect", ".metrics", ".discover", ".diagnose", ".lookup", ".query")
+# Classification never derives authority from an arbitrary operation suffix.
+# All compiled read capabilities remain usable through an explicit scoped grant.
+READ_OPERATIONS = frozenset({
+    "inventory.read", "inventory.query", "inventory.refresh", "discovery.refresh",
+    "diagnostics.network", "diagnostics.storage", "network.diagnose", "dns.lookup",
+    "systemd.status", "systemd.logs", "docker.list", "docker.inspect", "monitoring.read",
+    "host.audit", "task.verify", "docker.backup.list", "docker.backup.verify", "docker.restore.plan",
+    "package.plan", "configuration.plan", "development.list", "development.read",
+    "memory.search", "catalog.search", "profile.read", "jobs.read-own",
+    "home_assistant.status", "home_assistant.states", "adguard.status", "adguard.filters",
+    "unifi.sites", "unifi.devices", "unifi.clients", "uisp.devices", "uisp.sites",
+    "prometheus.query", "grafana.health", "grafana.dashboards", "github.repository",
+    "postgresql.health", "serverhub_mcp.tools",
+})
+# Integration reads always require their integration_id/query/site/repository grant.
+# Being read-only permits a role to use a grant; it is not permission to skip one.
+OWNER_DEFAULT_READS = frozenset({
+    "inventory.read", "inventory.query", "inventory.refresh", "discovery.refresh",
+    "monitoring.read", "host.audit", "task.verify", "profile.read", "jobs.read-own",
+    "development.list", "development.read", "systemd.status", "systemd.logs",
+    "diagnostics.network", "diagnostics.storage", "docker.inspect", "docker.list",
+    "network.diagnose", "dns.lookup", "docker.backup.list", "docker.backup.verify",
+    "docker.restore.plan", "package.plan", "configuration.plan",
+})
+
 ADULT_OPS = {"inventory.read", "inventory.refresh", "network.diagnose", "dns.lookup", "systemd.status",
-             "systemd.restart", "docker.restart", "docker.inspect", "docker.list", "homeassistant.states",
-             "homeassistant.health", "adguard.status", "adguard.filter.refresh", "monitoring.read", "incident.report",
+             "systemd.restart", "docker.restart", "docker.inspect", "docker.list", "home_assistant.states",
+             "home_assistant.status", "adguard.status", "adguard.refresh_filters", "monitoring.read", "incident.report",
              "diagnostics.network"}
 STANDARD_OPS = {"inventory.read", "network.diagnose", "diagnostics.network", "dns.lookup", "systemd.status", "monitoring.read", "incident.report"}
 
 
 def is_read(operation: str) -> bool:
-    return operation.endswith(READ_SUFFIXES) or operation in {
-        "inventory.read", "inventory.refresh", "discovery.refresh", "diagnostics.network", "host.audit", "diagnostics.storage",
-        "systemd.logs", "task.verify", "docker.backup.verify", "docker.restore.plan", "package.plan", "configuration.plan", "homeassistant.states", "homeassistant.health", "adguard.status"}
+    return operation in READ_OPERATIONS
 
 
 def operation_matches(pattern: str, operation: str) -> bool:
@@ -104,7 +126,7 @@ def _authorize(db, principal, operation: str, host_id: str | None = None, projec
         raise PermissionDenied("Operation exceeds household role capabilities")
     if principal.role == "user" and operation not in STANDARD_OPS and not is_read(operation):
         raise PermissionDenied("Operation exceeds standard user capabilities")
-    if principal.role == "owner" and is_read(operation):
+    if principal.role == "owner" and operation in OWNER_DEFAULT_READS:
         return None
     emergency = db.get(SystemState, "emergency_stop")
     if emergency:

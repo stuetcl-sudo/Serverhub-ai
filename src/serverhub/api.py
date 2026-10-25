@@ -81,8 +81,8 @@ class NewJob(StrictModel):
     run_after: datetime | None = None
     max_attempts: int = Field(default=3, ge=1, le=10)
     time_limit: int = Field(default=3600, ge=1, le=86400)
-    token_budget: int = Field(default=20000, ge=0, le=2_000_000)
-    cost_budget: float = Field(default=1.0, ge=0, le=1000, allow_inf_nan=False)
+    token_budget: int | None = Field(default=None, ge=0, le=2_000_000)
+    cost_budget: float | None = Field(default=None, ge=0, le=1000, allow_inf_nan=False)
 
 
 class Emergency(StrictModel):
@@ -125,6 +125,8 @@ def _host_dict(host):
 @router.post("/auth/login")
 def login(body: Login, request: Request, response: Response, db=Depends(get_db)):
     settings = get_settings()
+    from .login_security import admit, failure, success
+    admission_key = admit(db, request, body.username)
     user = db.scalar(select(User).where(User.username == body.username).with_for_update())
     now = utcnow()
     # Same expensive verification for absent/disabled/locked users limits account enumeration.
@@ -132,13 +134,11 @@ def login(body: Login, request: Request, response: Response, db=Depends(get_db))
     verified = verify_password(body.password, encoded)
     locked = bool(user and user.locked_until and user.locked_until > now)
     if not user or not verified or not user.enabled or locked:
-        if user and not locked:
-            user.failed_logins += 1
-            if user.failed_logins >= settings.login_failures:
-                user.locked_until = now + timedelta(seconds=settings.login_lock_seconds)
+        if user:
             append_audit(db, "authentication", "login.failed", user.id)
-            db.commit()
+        failure(db, admission_key)
         raise HTTPException(401, "Invalid credentials or account temporarily unavailable")
+    success(db, admission_key)
     user.failed_logins = 0
     user.locked_until = None
     if PASSWORDS.check_needs_rehash(user.password_hash):
@@ -318,12 +318,43 @@ def job_events(job_id: str, principal: Authenticated, after: int = 0, db=Depends
                                                   .order_by(JobEvent.id).limit(1000)).all()]
 
 
+class JobBudgetUpdate(BaseModel):
+    token_budget: int = Field(ge=0, le=2_000_000)
+    cost_budget: float = Field(ge=0, le=1000, allow_inf_nan=False)
+
+
+@router.put("/jobs/{job_id}/budget")
+def update_job_budget(job_id: str, body: JobBudgetUpdate, principal: Authenticated, db=Depends(get_db)):
+    job = _job_scope(db, principal, job_id)
+    db.refresh(job, with_for_update=True)
+    authorize(db, principal, "job.submit", job.host_id, job.project)
+    if job.state not in {"queued", "paused", "waiting_approval"}:
+        raise HTTPException(409, "Pause the job before changing its budget")
+    if body.token_budget < job.tokens_used or body.cost_budget < job.cost_used:
+        raise HTTPException(409, "Budget cannot be lower than accounted usage")
+    from .job_limits import check_route_budget
+    try:
+        check_route_budget(principal, job.kind, job.spec, body.token_budget, body.cost_budget)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    job.token_budget, job.cost_budget = body.token_budget, body.cost_budget
+    append_audit(db, principal.id, "job.budget", job.id, body.model_dump())
+    db.commit()
+    return to_dict(job)
+
+
 @router.post("/jobs/{job_id}/{action}")
 def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], principal: Authenticated, db=Depends(get_db)):
     job = _job_scope(db, principal, job_id)
+    db.refresh(job, with_for_update=True)
     if job.state in TERMINAL:
         raise HTTPException(409, "Job has already finished")
     if action == "pause":
+        if job.state == "waiting_children":
+            job.checkpoint = {**job.checkpoint, "pause_previous_state": "waiting_children"}
+        # An explicit operator pause overrides automatic parent-resume behavior.
+        if job.failure_class == "parent_paused":
+            job.failure_class = "paused"
         job.state = "pause_requested" if job.state == "running" else "paused"
     elif action == "cancel":
         job.state = "cancel_requested" if job.state in {"running", "pause_requested"} else "cancelled"
@@ -349,6 +380,13 @@ def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], princi
         if job.state not in {"paused", "waiting_approval"}:
             raise HTTPException(409, "Only paused or policy-blocked jobs can resume")
         authorize(db, principal, "job.submit", job.host_id, job.project)
+        from .job_limits import resume_budget_error
+        from .jobs import parent_paused, parent_stopped
+        problem = resume_budget_error(job, db)
+        if problem:
+            raise HTTPException(409, problem)
+        if parent_paused(db, job) or parent_stopped(db, job):
+            raise HTTPException(409, "Resume the parent task first; terminal parents cannot resume")
         denial = (job.result or {}).get("denial")
         if job.state == "waiting_approval" and isinstance(denial, dict) and denial.get("operation"):
             from .auth import Principal
@@ -358,8 +396,15 @@ def job_action(job_id: str, action: Literal["pause", "resume", "cancel"], princi
             authorize(db, Principal(id=owner.id, username=owner.username, role=owner.role), denial["operation"],
                       job.host_id, job.project, denial.get("arguments", {}),
                       denial.get("environment") == "production")
-        job.state = "queued"
+        from .jobs import resume_clock, resume_state
+        resume_clock(job)
+        job.state = resume_state(job)
         job.run_after = utcnow()
+    from .jobs import mark_paused, pause_descendants
+    mark_paused(job)
+    if action == "pause":
+        pause_descendants(db, job)
+
     append_audit(db, principal.id, "job." + action, job.id)
     db.add(JobEvent(job_id=job.id, message="Operator requested " + action, data={"actor": principal.id}))
     db.commit()

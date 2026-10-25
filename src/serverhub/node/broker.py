@@ -18,6 +18,7 @@ import socketserver
 import stat
 import struct
 import time
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -127,11 +128,11 @@ def _compose_file(entry: dict) -> tuple[Path, Path]:
             raise BrokerDenied("compose service uses unsupported privileges/features")
         if not re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[0-9a-f]{64}", str(service.get("image", ""))):
             raise BrokerDenied("compose images must be pinned by digest")
-        if not service.get("read_only") or service.get("cap_drop") != ["ALL"] or "no-new-privileges:true" not in service.get("security_opt", []):
+        if service.get("read_only") is not True or service.get("cap_drop") != ["ALL"] or service.get("security_opt") != ["no-new-privileges:true"]:
             raise BrokerDenied("compose services require read_only, cap_drop ALL and no-new-privileges")
-        if str(service.get("user", "0")).split(":", 1)[0] in {"0", "root", ""}:
-            raise BrokerDenied("compose services require non-root user")
-        if "${" in json.dumps(service):
+        if not re.fullmatch(r"[1-9][0-9]{0,8}(:[1-9][0-9]{0,8})?", str(service.get("user", ""))):
+            raise BrokerDenied("compose services require an explicit numeric non-root UID and optional non-root GID")
+        if re.search(r"\$(?:[A-Za-z_]|\{)", json.dumps(service).replace("$$", "")):
             raise BrokerDenied("compose interpolation is not accepted")
         for mount in service.get("volumes", []):
             # Named volumes only. Bind mounts, driver options and secrets are not accepted.
@@ -368,11 +369,38 @@ def call_broker(path: str, operation: str, arguments: dict, *, timeout: int = 18
     return response["result"]
 
 
-class BrokerServer(socketserver.UnixStreamServer):
+class BrokerServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     allow_reuse_address = False
+    daemon_threads = False
+    block_on_close = True
+    request_queue_size = 16
     def __init__(self, path: str, config: dict):
         self.config = config
+        limit = config.get("max_connections", 4)
+        if type(limit) is not int or not 1 <= limit <= 16:
+            raise BrokerDenied("max_connections must be 1..16")
+        self.slots = threading.BoundedSemaphore(limit)
+        # Maintain single-writer semantics across ALL targets; read requests can
+        # proceed while a long write is running. Adapter file locks remain intact.
+        self.write_lock = threading.Lock()
         super().__init__(path, BrokerHandler)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)  # bounded load shedding, no dispatch
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
 
 
 def append_broker_audit(config: dict, record: dict) -> None:
@@ -469,7 +497,12 @@ class BrokerHandler(socketserver.StreamRequestHandler):
                                 "operation": operation, "arguments": payload["arguments"], "correlation": context,
                                 "privilege": privilege, "phase": "before",
                                 "broker_contract_sha256": hashlib.sha256(json.dumps(self.server.config,sort_keys=True,default=str).encode()).hexdigest()})
-            result = execute(operation, payload["arguments"], self.server.config)
+            # Explicit read classification; no suffix-based authorization.
+            concurrent_reads = {"inventory.events", "systemd.status", "systemd.logs",
+                                "diagnostics.network", "diagnostics.storage"}
+            from contextlib import nullcontext
+            with nullcontext() if operation in concurrent_reads else self.server.write_lock:
+                result = execute(operation, payload["arguments"], self.server.config)
             result["execution_context"] = privilege
             response = {"ok": True, "result": result}
         except Exception as error:

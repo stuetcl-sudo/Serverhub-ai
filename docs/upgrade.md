@@ -14,7 +14,7 @@ For a namespaced installation with `/var/lib/serverhub-install/ownership.json`, 
 sudo ./scripts/repair-install.sh
 ```
 
-This preserves database passwords, sessions, enrolled identities and operator configuration. An invalid/obsolete model fallback remains root-only and does not block the upgrade; configure a validated database route through Setup afterwards. Only a schema-validated non-secret fallback is made readable to service users. It creates and checks a protected PostgreSQL/configuration backup, prepares a new native runtime, stops API/worker during migration, applies additive migrations `0004_runtime` and `0005_priority`, reapplies explicit grants, updates reviewed systemd units and code anchors, switches the release, and checks API/worker/frontend health. The reviewed upgrade also updates the separate `recovery-ai` maintenance runtime; normal signed releases do not change it.
+This preserves database passwords, sessions, enrolled identities and operator configuration. An invalid/obsolete model fallback remains root-only and does not block the upgrade; configure a validated database route through Setup afterwards. Only a schema-validated non-secret fallback is made readable to service users. It creates and checks a protected PostgreSQL/configuration backup, prepares a new native runtime, stops API/worker during migration, applies additive migrations through `0007_job_controls`, reapplies explicit grants, updates reviewed systemd units and code anchors, switches the release, and checks API/worker/frontend health. The reviewed upgrade also updates the separate `recovery-ai` maintenance runtime; normal signed releases do not change it.
 
 An independent 300-second release watchdog is armed before service interruption. A normal failure restores the previous release and saved configuration/units, restarts services, and retains backups. An abruptly killed repair can be reverted by the watchdog to the previous code; its configuration snapshot remains in the protected backup for administrator restoration. No automatic destructive database downgrade occurs. The old pre-overhaul health endpoint expects revision 0003 exactly, so it may report a migration mismatch after code rollback to 0003 while additive schema 0004/0005 remains. Complete the reviewed upgrade or perform a separately reviewed recovery; do not edit `alembic_version` to hide this mismatch.
 
@@ -138,3 +138,15 @@ No new SQL revision is needed. Existing host-specific development grants are not
 broadened: review/regrant a controller-only project profile, adding staging,
 network or draft PR publication only when wanted. See [the exact reviewed upgrade
 and rollback procedure](development-mcp.md#reviewed-production-procedure--not-executed).
+
+### Autopilot reliability
+
+The autopilot update adds migration `0006_pause_clock` and model/job budget defaults.
+See [pause-clock semantics, security limits and reviewed recovery](autopilot-reliability.md).
+Automatic activation across schema revisions remains prohibited.
+
+Issue #11 additionally requires migration `0007_job_controls` and reapplication
+of explicit PostgreSQL grants. Runtime accounting now uses a separate table;
+never grant the worker writes to protected `system_state` as a workaround. See
+[autopilot stability and security](autopilot-stability-security.md) for configuration,
+compatibility and offline rollback details.

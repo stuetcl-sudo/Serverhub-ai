@@ -215,7 +215,7 @@ def repair(source):
                 {
                     "manifest": {
                         "release_id": release.name,
-                        "schema_revision": "0005_priority",
+                        "schema_revision": "0007_job_controls",
                         "trust_boundary_digest": installer.trust_digest(),
                     }
                 }

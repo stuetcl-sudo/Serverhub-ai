@@ -16,6 +16,7 @@ import re
 import secrets
 import stat
 import time
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -120,6 +121,25 @@ def commit(directory: str | Path, key: str, token: str) -> dict:
     return {"id": key, "state": "committed"}
 
 
+def cleanup_stale(directory, key, data, *, age=3600):
+    """Called only under recovery flock; never follow links or remove unknown files."""
+    if data.get("state") not in {"restoring", "reverted", "committed"}:
+        return
+    target = trusted_file(data["target"])
+    candidates = list(target.parent.glob(f".serverhub-recovery-{key}-*"))
+    candidates.append(directory / f"{key}.new")
+    for path in candidates:
+        try:
+            st = path.lstat()
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_nlink != 1
+                    or st.st_mode & 0o022 or time.time()-st.st_mtime < age):
+                continue
+            # Both parents are root-protected; serialized recovery owns this key.
+            path.unlink()
+        except FileNotFoundError:
+            continue
+
+
 @_serialized
 def tick(directory: str | Path) -> list[dict]:
     if os.geteuid() != 0:
@@ -130,6 +150,7 @@ def tick(directory: str | Path) -> list[dict]:
         key = entry.stem
         try:
             path, data = _load(directory, key)
+            cleanup_stale(directory, key, data)
             if data.get("state") not in {"armed", "restoring"} or data.get("deadline", float("inf")) > time.time():
                 continue
             backup = trusted_file(directory/f"{key}.checkpoint")
@@ -139,15 +160,23 @@ def tick(directory: str | Path) -> list[dict]:
             target = trusted_file(data["target"])
             data.update(state="restoring", restore_started=time.time())
             _atomic(path, data)
-            temporary = target.parent/f".serverhub-recovery-{key}"
-            fd = os.open(temporary, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, data["target_mode"])
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(content)
-                fh.flush()
-                os.fsync(fh.fileno())
-                os.fchmod(fh.fileno(), data["target_mode"])
-                os.fchown(fh.fileno(), data["target_uid"], data["target_gid"])
-            os.replace(temporary, target)
+            fd, name = tempfile.mkstemp(prefix=f".serverhub-recovery-{key}-", dir=target.parent)
+            temporary = Path(name)
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(content)
+                    fh.flush()
+                    os.fchown(fh.fileno(), data["target_uid"], data["target_gid"])
+                    os.fchmod(fh.fileno(), data["target_mode"])
+                    os.fsync(fh.fileno())
+                os.replace(temporary, target)
+                directory_fd = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            finally:
+                temporary.unlink(missing_ok=True)
             if data.get("service"):
                 command("systemctl", "restart", data["service"], timeout=45)
                 command("systemctl", "is-active", "--quiet", data["service"])

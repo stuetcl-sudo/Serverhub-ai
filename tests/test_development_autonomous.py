@@ -13,7 +13,7 @@ from serverhub.jobs import HANDLERS, Worker, submit_job
 from serverhub.models import Job, Policy
 
 
-@pytest.mark.parametrize('scenario',['repair','stall'])
+@pytest.mark.parametrize('scenario',['repair','restart','revoked_checks','stall'])
 def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_env,owner,monkeypatch,tmp_path,scenario):
     source=repository(tmp_path/'source')
     project=Project(name='example',repository=str(source),tests=[Command(argv=['/usr/bin/true'])])
@@ -25,7 +25,8 @@ def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_
         def __init__(self,project): pass
         def preflight(self,workspace): return {'available':True}
         def run(self,workspace,command,heartbeat=None):
-            if heartbeat: heartbeat()
+            if heartbeat:
+                heartbeat()
             correct=(workspace/'app.py').read_text()=="print('new')\n"
             return CommandResult(command.argv,0 if correct else 1,'passed' if correct else 'expected new application version')
     monkeypatch.setattr(autonomous,'SandboxRunner',IsolatedRunnerFixture)
@@ -35,6 +36,16 @@ def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_
         Completion('',tool_calls=[ToolCall('edit','edit_file',{'path':'app.py','old':"print('old')",'new':"print('new')"})]),
         Completion('',tool_calls=[ToolCall('checks','run_checks',{})]),
         Completion('',tool_calls=[ToolCall('finish','finish',{})])])
+    if scenario in {'restart','revoked_checks'}:
+        from serverhub.jobs import JobContext, RetryableError
+        original_save=JobContext.save_checkpoint
+        interrupted=[False]
+        def interrupt_after_edit(self, checkpoint, **kwargs):
+            original_save(self, checkpoint, **kwargs)
+            if not interrupted[0] and 'edit' in checkpoint.get('developer',{}).get('completed_calls',{}):
+                interrupted[0]=True
+                raise RetryableError('Simulated worker interruption after source commit')
+        monkeypatch.setattr(JobContext,'save_checkpoint',interrupt_after_edit)
     if scenario=='stall':
         responses=iter([Completion('',tool_calls=[ToolCall('read','read_file',{'path':'app.py'})]),
             *[Completion('',tool_calls=[ToolCall('bad-'+str(index),'edit_file',{'path':'app.py','old':'no matching content','new':'new'})]) for index in range(3)]])
@@ -42,8 +53,16 @@ def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_
         def __init__(self,config): self.config=config
         def complete(self,messages,tools,budget,before_request=None):
             budget.preflight(self.config,messages,tools=tools)
-            if before_request: before_request()
+            if before_request:
+                before_request()
             result=next(responses)
+            if result.tool_calls[0].id=='checks':
+                # Verification must already have run before another model request,
+                # including after a restart with the successful edit receipt pending.
+                import json
+                receipts=[json.loads(item['content']) for item in messages if item.get('role')=='tool']
+                assert any(item.get('verified') is True for item in receipts)
+                assert 'finish' in {item['function']['name'] for item in tools}
             result.input_tokens,result.output_tokens=11,7
             budget.charge(result)
             return result
@@ -59,8 +78,27 @@ def test_model_repairs_after_failed_check_and_exports_only_verified_source(core_
         identity=job.id
         db.commit()
     assert Worker(isolated=False).run_once()
+    if scenario in {'restart','revoked_checks'}:
+        with SessionLocal() as db:
+            job=db.get(Job,identity)
+            assert job.state=='retry',job.error
+            assert job.checkpoint['developer']['patch_count']==1
+            if scenario=='revoked_checks':
+                from sqlalchemy import select
+                policy=db.scalar(select(Policy).where(Policy.name=='scoped development'))
+                policy.operations=[op for op in policy.operations if op!='development.test']
+            job.run_after=utcnow()-timedelta(seconds=1)
+            db.commit()
+        assert Worker(isolated=False).run_once()
     with SessionLocal() as db:
         job=db.get(Job,identity)
+        if scenario=='revoked_checks':
+            assert job.state=='waiting_approval',job.error
+            assert job.failure_class=='policy'
+            assert 'checked_commit' not in job.checkpoint['developer']
+            assert len(job.checkpoint['developer']['commands'])==1
+            assert job.checkpoint['developer']['commands'][0]['returncode']==1
+            return
         if scenario=='stall':
             assert job.state=='partial',job.error
             assert not job.result['verified'] and 'Three rounds' in job.result['reason']

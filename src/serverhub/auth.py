@@ -27,7 +27,7 @@ class Principal:
 
 
 def hash_secret(value: str) -> str:
-    """Fast keyed-token fingerprint; passwords use separate Argon2 hashing."""
+    """Fast SHA-256 fingerprint of high-entropy random tokens; passwords use separate Argon2 hashing."""
     return hashlib.sha256(value.encode()).hexdigest()
 
 

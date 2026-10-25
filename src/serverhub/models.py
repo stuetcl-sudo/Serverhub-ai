@@ -105,6 +105,8 @@ class Job(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     time_limit: Mapped[int] = mapped_column(Integer, default=3600)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    paused_seconds: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
     token_budget: Mapped[int] = mapped_column(Integer, default=20000)
     cost_budget: Mapped[float] = mapped_column(Float, default=1.0)
     tokens_used: Mapped[int] = mapped_column(Integer, default=0)
@@ -217,6 +219,14 @@ class AgentCommand(Base):
 
 class SystemState(Base):
     __tablename__ = "system_state"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class JobControlState(Base):
+    """Runtime accounting only; never stores emergency stop, secrets or policy."""
+    __tablename__ = "job_control_state"
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

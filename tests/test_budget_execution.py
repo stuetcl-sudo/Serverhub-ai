@@ -55,7 +55,7 @@ def test_preflight_pause_resume_and_verified_read_only_job_complete(client, monk
     assert len(requests) == 3
 
 
-def test_preflight_after_a_real_request_in_same_attempt_does_not_refund_attempt(client, monkeypatch):
+def test_budget_pause_after_request_retains_usage_but_does_not_burn_failure_attempt(client, monkeypatch):
     cfg = ProviderConfig(kind="ollama", model="local", base_url="http://localhost:11434")
     monkeypatch.setattr(orchestrator, "load_routes", lambda: {"default": cfg})
     class ActiveThenReject:
@@ -73,11 +73,11 @@ def test_preflight_after_a_real_request_in_same_attempt_does_not_refund_attempt(
     Worker(isolated=False).run_once()
     with SessionLocal() as db:
         job = db.get(Job, identity)
-        assert job.state == "failed" and job.attempts == 1
+        assert job.state == "paused" and job.attempts == 0
         assert job.failure_class == "budget"
 
 
-def test_pending_tool_work_before_model_preflight_does_not_refund_claim(client, monkeypatch):
+def test_pending_tool_progress_survives_budget_pause_without_failure_attempt(client, monkeypatch):
     from serverhub.auth import Principal
     config = ProviderConfig(kind="ollama", model="local", base_url="http://127.0.0.1:1", context_limit=1024)
     monkeypatch.setattr(orchestrator, "load_routes", lambda: {"default": config})
@@ -91,8 +91,8 @@ def test_pending_tool_work_before_model_preflight_does_not_refund_claim(client, 
     Worker(isolated=False).run_once()
     with SessionLocal() as db:
         job = db.get(Job, identity)
-        assert job.state == "failed" and job.failure_class == "budget"
-        assert job.attempts == 1 and "read1" in job.checkpoint["ai"]["completed_calls"]
+        assert job.state == "paused" and job.failure_class == "budget"
+        assert job.attempts == 0 and "read1" in job.checkpoint["ai"]["completed_calls"]
 
 
 def test_replaying_cached_tool_result_before_preflight_does_not_spend_an_attempt(client, monkeypatch):
