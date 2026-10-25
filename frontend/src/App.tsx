@@ -2981,7 +2981,7 @@ function Policies() {
                 name="expires_at"
                 type="datetime-local"
                 required
-                min={new Date().toISOString().slice(0, 16)}
+                min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
               />
             </label>
             <label className="checkbox-label">

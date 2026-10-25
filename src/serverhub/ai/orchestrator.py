@@ -266,7 +266,7 @@ def _run_tool(ctx, operation: str, arguments: dict, state: dict, call_id: str) -
             child_cost=ctx.db.scalar(select(func.coalesce(func.sum(Job.cost_used),0)).where(Job.parent_id==ctx.job.id))
             available=ctx.job.token_budget-ctx.job.tokens_used-child_units-4000
             if available<32:
-                raise BudgetExceeded("Insufficient task-tree budget for development plus final verification")
+                raise BudgetExceeded("Insufficient task-tree budget for development plus final verification", {"minimum_tokens": 4032})
             prompt=args.pop("prompt",None)
             kind="development_autonomous" if prompt else "development"
             payload={"project":args["project"],"prompt":prompt,"stage":args.get("stage",False)} if prompt else args
@@ -484,9 +484,10 @@ def autonomous_job(ctx, spec: dict) -> dict:
                 safe = {"input_estimate": data.get("estimated_input_tokens"),
                         "output_reserve": data.get("output_reserve_tokens"), "minimum_output": 32,
                         "context_limit": data.get("context_limit"), "remaining_job_budget": data.get("remaining_tokens"),
-                        "estimator": data.get("method"), "serialized_utf8_bytes": data.get("serialized_utf8_bytes")}
+                        "estimator": data.get("method"), "serialized_utf8_bytes": data.get("serialized_utf8_bytes"),
+                        "cost_reserve": data.get("cost_reserve", 0)}
                 raise JobPreflightRejected(str(exc), safe) from exc
-            raise BudgetExceeded(str(exc)) from exc
+            raise BudgetExceeded(str(exc), exc.diagnostics) from exc
         except ProviderError as exc:
             if exc.retryable:
                 from serverhub.jobs import RetryableError

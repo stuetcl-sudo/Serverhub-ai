@@ -98,3 +98,7 @@ denials, bounded broker slots and real Unix-socket concurrent reads/serialized
 writes. Existing write recovery, authorization, queue priority and audit tests run
 unchanged. The real socket test skips only when the local sandbox prohibits Unix
 sockets; it is mandatory under CI. Exact CI outcomes are recorded in the PR.
+
+PR #11 extends these behaviors; see [autopilot-stability-security.md](autopilot-stability-security.md)
+for guarded resume, conservative daily quotas, failure-attempt semantics, scoped
+watchdog cleanup and local-proxy login settings.

@@ -246,3 +246,29 @@ def test_unverified_plain_development_never_reports_success(control, registered,
     assert Worker(isolated=False).run_once()
     result = client.get('/api/jobs/' + submitted.json()['id'],headers=headers).json()
     assert result['state'] == 'partial'
+
+
+def test_mcp_budget_ceiling_and_role_enforced(control, registered):
+    import json
+    from serverhub.models import ModelRoute, User
+    client, headers, identity = control
+    token = mcp_token(identity, ['serverhub:read', 'serverhub:jobs', 'serverhub:policies'])
+    with SessionLocal() as db:
+        db.add(ModelRoute(name='development', enabled=True, updated_by=identity, config={
+            'kind':'ollama','model':'fixture','base_url':'http://localhost:11434',
+            'ordinary_job_token_limit':30000,'ordinary_job_cost_limit':1,
+            'max_job_token_budget':50000,'max_job_cost_budget':5}))
+        db.commit()
+    rejected = call(client, token, 'create_development_job', {'project':registered.name,
+        'prompt':'Inspect source','token_budget':50001})
+    assert rejected['result']['isError']
+    accepted = call(client, token, 'create_development_job', {'project':registered.name,
+        'prompt':'Inspect source','token_budget':40000})
+    assert not accepted['result'].get('isError'), accepted
+    identity_job = json.loads(accepted['result']['content'][0]['text'])['id']
+    assert call(client, token, 'update_job_budget', {'job_id':identity_job,'token_budget':50001,'cost_budget':1})['result']['isError']
+    # Existing OAuth tokens resolve the current role; owner status isn't cached.
+    with SessionLocal() as db:
+        db.get(User, identity).role = 'administrator'
+        db.commit()
+    assert call(client, token, 'update_job_budget', {'job_id':identity_job,'token_budget':40000,'cost_budget':1})['result']['isError']

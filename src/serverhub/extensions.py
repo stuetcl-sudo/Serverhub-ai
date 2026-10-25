@@ -211,6 +211,40 @@ def execute_operation(ctx, spec):
     return result
 
 
+def reserve_monitor_restart(ctx, remedy):
+    """Persist intent before dispatch; retries reuse the same operation identity."""
+    import time
+    from .models import JobControlState
+    from .settings import get_settings
+    from sqlalchemy import text
+    settings = get_settings()
+    ctx.require(remedy["operation"], remedy["arguments"])
+    key = "monitor-restart:" + hashlib.sha256(json.dumps(
+        [ctx.job.host_id, remedy], sort_keys=True).encode()).hexdigest()
+    if ctx.db.bind.dialect.name == "postgresql":
+        ctx.db.execute(text("SELECT pg_advisory_xact_lock(734882111)"))
+    row = ctx.db.get(JobControlState, key, populate_existing=True)
+    now = time.time()
+    if row is None:
+        row = JobControlState(key=key, value={"attempts": []})
+        ctx.db.add(row)
+    attempts = [a for a in row.value["attempts"] if now-a["time"] < settings.monitor_restart_window_seconds]
+    operation_key = ctx.job.id + ":repair:" + key.rsplit(":", 1)[1]
+    if any(a["job"] == ctx.job.id for a in attempts):
+        ctx.db.commit()
+        return operation_key, None
+    wait = min(settings.monitor_restart_window_seconds,
+               settings.monitor_restart_backoff_seconds * 2**min(len(attempts)-1, 16)) if attempts else 0
+    if len(attempts) >= settings.monitor_restart_limit or (attempts and now-attempts[-1]["time"] < wait):
+        ctx.db.commit()
+        return None, "Restart cap/cooldown active; investigate the cause before another repair"
+    row.value = {"attempts": attempts + [{"job": ctx.job.id, "time": now}]}
+    append_audit(ctx.db, ctx.principal.id, "monitor.restart_reserved", ctx.job.id,
+                 {"host": ctx.job.host_id, **remedy})
+    ctx.db.commit()
+    return operation_key, None
+
+
 def monitor(ctx, spec):
     """Diagnostic procedure; repairs use concrete, policy-gated registered restarts."""
     ctx.require("inventory.read")
@@ -233,16 +267,22 @@ def monitor(ctx, spec):
     results = []
     if spec.get("repair"):
         ctx.require("monitoring.repair")
-        for index, remedy in enumerate(remedies[:10]):
+        for remedy in remedies[:10]:
+            operation_key, blocked = reserve_monitor_restart(ctx, remedy)
+            if blocked:
+                results.append({**remedy, "blocked": blocked, "verified": False})
+                continue
             # Reauthorization and the independent broker's local allowlist both apply.
             outcome = execute_operation(
-                ctx, {**remedy, "idempotency_key": ctx.job.id + ":repair:" + str(index)}
+                ctx, {**remedy, "idempotency_key": operation_key}
             )
             results.append({**remedy, "outcome": outcome})
         execute_node(ctx, "inventory.refresh", {}, idempotency_key=ctx.job.id + ":monitor:after")
         ctx.db.expire_all()
         inventory = ctx.db.get(Host, ctx.job.host_id).inventory
         for item in results:
+            if item.get("blocked"):
+                continue
             arg = item["arguments"]
             if "service" in arg:
                 observed = next(
@@ -272,6 +312,7 @@ def monitor(ctx, spec):
         ctx.db.commit()
     return {
         "source": "fresh_agent_inventory",
+        "completed": not spec.get("repair") or (len(results) == len(remedies) and all(item.get("verified") for item in results)),
         "suggested_procedures": remedies,
         "repairs": results,
         "verified": all(item.get("verified") for item in results) if results else False,

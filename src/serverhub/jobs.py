@@ -49,14 +49,62 @@ def resume_clock(job):
         job.paused_at = None
 
 
-def parent_stopped(db,job):
-    if not job.parent_id:
-        return False
-    parent=db.get(Job,job.parent_id)
-    if parent:
-        db.refresh(parent)
-    return not parent or parent.owner_id!=job.owner_id or parent.state in TERMINAL or bool(
-        parent.started_at and elapsed_seconds(parent)>=parent.time_limit)
+def resume_state(job):
+    checkpoint = dict(job.checkpoint or {})
+    state = checkpoint.pop("pause_previous_state", "queued")
+    job.checkpoint = checkpoint
+    return "waiting_children" if state == "waiting_children" else "queued"
+
+
+def parent_stopped(db, job):
+    seen, parent_id = {job.id}, job.parent_id
+    while parent_id:
+        if parent_id in seen:
+            return True
+        seen.add(parent_id)
+        parent = db.get(Job, parent_id, populate_existing=True)
+        if (not parent or parent.owner_id != job.owner_id or parent.state in TERMINAL | {"cancel_requested"}
+                or (parent.started_at and elapsed_seconds(parent) >= parent.time_limit)):
+            return True
+        parent_id = parent.parent_id
+    return False
+
+
+def parent_paused(db, job):
+    seen = {job.id}
+    parent_id = job.parent_id
+    while parent_id:
+        if parent_id in seen:
+            return True
+        seen.add(parent_id)
+        parent = db.get(Job, parent_id, populate_existing=True)
+        if parent is None:
+            return False
+        if parent.state in {"paused", "pause_requested", "waiting_approval"}:
+            return True
+        parent_id = parent.parent_id
+    return False
+
+
+
+def pause_descendants(db, parent):
+    pending, seen = [parent.id], {parent.id}
+    while pending:
+        children = db.scalars(select(Job).where(Job.parent_id.in_(pending), Job.owner_id == parent.owner_id)).all()
+        pending = []
+        for child in children:
+            if child.id in seen:
+                continue
+            seen.add(child.id)
+            pending.append(child.id)
+            if child.state in RUNNABLE:
+                if child.state == "waiting_children":
+                    child.checkpoint = {**child.checkpoint, "pause_previous_state": "waiting_children"}
+                child.state, child.failure_class = "paused", "parent_paused"
+                mark_paused(child)
+                _event(db, child, "Parent task paused", {"parent": parent.id})
+            # Running children observe ancestor state before every tool and the
+            # supervisor terminates them; keep their lease/accounting intact.
 
 
 
@@ -65,7 +113,10 @@ class RetryableError(Exception):
 
 
 class BudgetExceeded(Exception):
-    pass
+    def __init__(self, message, diagnostics=None):
+        super().__init__(message)
+        self.diagnostics = diagnostics or {}
+
 
 
 class PreflightRejected(BudgetExceeded):
@@ -84,6 +135,10 @@ class WaitingChildren(Exception):
 
 
 class JobPaused(Exception):
+    pass
+
+
+class ParentPaused(JobPaused):
     pass
 
 
@@ -143,6 +198,8 @@ def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | N
         raise ValueError(f"Unknown job kind: {kind}")
     if not isinstance(spec, dict):
         raise ValueError("job specification must be an object")
+    if "model_route" in spec and (not isinstance(spec["model_route"], str) or not spec["model_route"].strip()):
+        raise ValueError("spec.model_route must be a non-empty string")
     if token_budget is None or cost_budget is None:
         defaults = None
         if kind in {"autonomous", "development_autonomous"}:
@@ -164,12 +221,16 @@ def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | N
             raise PermissionDenied("Job dependency or parent is unavailable")
     if len(set(dependencies)) != len(dependencies):
         raise ValueError("Duplicate dependencies")
+    from .job_limits import lock_quota
+    lock_quota(db)
     if idempotency_key:
         existing = db.scalar(select(Job).where(Job.owner_id == principal.id, Job.idempotency_key == idempotency_key))
         if existing:
             if (existing.kind, existing.spec, existing.host_id, existing.project) != (kind, spec, host_id, project):
                 raise ValueError("Idempotency key already belongs to another request")
             return existing
+    from .job_limits import check_route_budget, admit_job
+    check_route_budget(principal, kind, spec, token_budget, cost_budget)
     # Concrete tools are authorized at submission AND execution. Autonomous plans
     # are not yet known, so each proposed tool is authorized separately at runtime.
     if kind == "operation":
@@ -183,6 +244,7 @@ def submit_job(db, principal: Principal, kind: str, spec: dict, host_id: str | N
                 raise ValueError("Each workflow step requires an operation and argument object")
             authorize(db, principal, step.get("operation", ""), host_id, project, step.get("arguments", {}),
                       bool(step.get("production", False)))
+    admit_job(db, principal.id, time_limit)
     job = Job(owner_id=principal.id, kind=kind, spec=spec, host_id=host_id, project=project,
               parent_id=parent_id, depends_on=dependencies, idempotency_key=idempotency_key, priority=priority,
               run_after=run_after or utcnow(), max_attempts=max_attempts, time_limit=time_limit,
@@ -207,6 +269,8 @@ class JobContext:
             raise LeaseLost("Job lease expired or was claimed by another worker")
         if parent_stopped(self.db,self.job):
             raise JobCancelled("Parent task finished or its execution deadline expired")
+        if parent_paused(self.db, self.job):
+            raise ParentPaused("Parent task is paused; resume parent first")
         if self.job.state in {"cancel_requested", "cancelled"}:
             raise JobCancelled("Job cancelled")
         if self.job.state in {"pause_requested", "paused"}:
@@ -271,7 +335,9 @@ class JobContext:
         if isinstance(units, bool) or not isinstance(units, int) or units < 0 or not math.isfinite(cost) or cost < 0:
             raise ValueError("Invalid model reservation")
         if self.job.tokens_used + units > self.job.token_budget or self.job.cost_used + cost > self.job.cost_budget:
-            raise BudgetExceeded("Model reservation exceeds remaining job budget")
+            raise BudgetExceeded("Model reservation exceeds remaining job budget", {"minimum_tokens": units, "cost_reserve": cost})
+        from .job_limits import charge_daily
+        charge_daily(self.db, self.job.owner_id, units, cost)
         checkpoint = dict(self.job.checkpoint or {})
         if checkpoint.get("model_request_reservation"):
             raise RuntimeError("Previous model reservation must be settled first")
@@ -291,6 +357,9 @@ class JobContext:
         if (isinstance(total_units, bool) or not isinstance(total_units, int) or total_units < base_units
                 or not math.isfinite(total_cost) or total_cost < base_cost):
             raise ValueError("Model settlement cannot refund earlier requests")
+        from .job_limits import charge_daily
+        charge_daily(self.db, self.job.owner_id, max(0, total_units-self.job.tokens_used),
+                     max(0, total_cost-self.job.cost_used), enforce=False)
         self.job.tokens_used, self.job.cost_used = total_units, total_cost
         checkpoint.pop("model_request_reservation", None)
         self.job.checkpoint = checkpoint
@@ -300,6 +369,8 @@ class JobContext:
         if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0 or not math.isfinite(cost) or cost < 0:
             raise ValueError("Usage cannot be negative")
         self.check_cancelled()
+        from .job_limits import charge_daily
+        charge_daily(self.db, self.job.owner_id, tokens, cost)
         self.job.tokens_used += tokens
         self.job.cost_used += cost
         self.db.commit()
@@ -347,6 +418,8 @@ def _classify(exc):
         return "cancelled", "cancelled", False
     if isinstance(exc, WaitingChildren):
         return "waiting_children", "dependency_wait", False
+    if isinstance(exc, ParentPaused):
+        return "paused", "parent_paused", False
     if isinstance(exc, JobPaused):
         return "paused", "paused", False
     if isinstance(exc, LeaseLost):
@@ -400,8 +473,15 @@ def execute_job(job_id: str, worker_id: str):
                 state = "failed"
             job.state = state
             mark_paused(job)
-            if isinstance(exc, PreflightRejected):
+            if state in {"paused", "waiting_approval"}:
                 job.attempts = max(0, job.attempts - 1)
+            if isinstance(exc, BudgetExceeded):
+                data = exc.diagnostics
+                job.checkpoint = {**job.checkpoint, "budget_pause": {
+                    "minimum_tokens": data.get("minimum_tokens", (data.get("estimated_input_tokens", data.get("input_estimate")) or 0) + 32),
+                    "minimum_cost": data.get("cost_reserve", 0),
+                    "reason": redact(str(exc))[:500]}}
+            if isinstance(exc, PreflightRejected):
                 job.result = {"completed": False, "preflight": exc.diagnostics,
                               "verification": "No provider request or tool execution in this attempt. Correct the configuration/scope and resume, or submit a separately authorized larger-budget job."}
             job.failure_class = failure_class
@@ -414,6 +494,8 @@ def execute_job(job_id: str, worker_id: str):
                 job.finished_at = utcnow()
             _event(db, job, "Job interrupted", {"state": state, "class": failure_class, "error": job.error}, "warning")
             append_audit(db, job.owner_id, "job." + state, job.id, {"class": failure_class, "error": job.error})
+        if job.state in {"paused", "waiting_approval"}:
+            pause_descendants(db, job)
         job.lease_until = None
         job.worker_id = None
         job.updated_at = utcnow()
@@ -457,6 +539,14 @@ class Worker:
                 return None
             from .scheduling import tick
             tick(db)
+            # Release scheduling/quota locks before locking running jobs; model
+            # accounting takes job -> quota locks and must never deadlock here.
+            db.commit()
+            if db.bind.dialect.name == "postgresql":
+                db.execute(text("SELECT pg_advisory_xact_lock(734882102)"))
+            emergency = db.get(SystemState, "emergency_stop", populate_existing=True)
+            if emergency and emergency.value.get("enabled"):
+                return None
             stale = db.scalars(select(Job).where(Job.state.in_(["running", "pause_requested", "cancel_requested"]),
                                                 Job.lease_until <= utcnow()).with_for_update(skip_locked=True)).all()
             for job in stale:
@@ -464,6 +554,10 @@ class Worker:
                     job.state = "cancelled"
                 elif job.state == "pause_requested":
                     job.state = "paused"
+                elif parent_stopped(db, job):
+                    job.state, job.failure_class = "cancelled", "parent_stopped"
+                elif parent_paused(db, job):
+                    job.state, job.failure_class = "paused", "parent_paused"
                 elif job.attempts >= job.max_attempts:
                     job.state = "failed"
                     job.failure_class = "lease_exhausted"
@@ -472,11 +566,18 @@ class Worker:
                     job.run_after = utcnow()
                     job.failure_class = "restart_recovery"
                 mark_paused(job)
+                if job.state == "paused":
+                    job.attempts = max(0, job.attempts - 1)
                 job.worker_id = None
                 job.lease_until = None
                 if job.state in TERMINAL:
                     job.finished_at = utcnow()
                 _event(db, job, "Recovered expired worker lease", {"state": job.state})
+            for child in db.scalars(select(Job).where(Job.state == "paused", Job.failure_class == "parent_paused").with_for_update(skip_locked=True)):
+                if not parent_paused(db, child):
+                    resume_clock(child)
+                    child.state = resume_state(child)
+                    _event(db, child, "Parent pause released; runtime authorization remains required")
             db.flush()
             running = db.scalar(select(func.count()).select_from(Job).where(Job.state.in_(["running", "pause_requested", "cancel_requested"])))
             if running >= settings.max_concurrent_jobs:
@@ -487,6 +588,12 @@ class Worker:
                                     .with_for_update(skip_locked=True)).all()
             chosen = None
             for job in candidates:
+                if parent_paused(db, job):
+                    continue
+                user_running = db.scalar(select(func.count()).select_from(Job).where(
+                    Job.owner_id == job.owner_id, Job.state.in_(["running", "pause_requested", "cancel_requested"])))
+                if user_running >= settings.max_user_jobs:
+                    continue
                 if parent_stopped(db,job):
                     job.state,job.failure_class,job.error="cancelled","parent_stopped","Parent task finished or its execution deadline expired"
                     job.finished_at=utcnow()
@@ -550,6 +657,8 @@ class Worker:
                     interrupted = ("cancelled" if not self.stopping else "retry", "cancelled" if not self.stopping else "worker_shutdown")
                 elif parent_stopped(db,job):
                     interrupted = ("cancelled", "parent_stopped")
+                elif parent_paused(db, job):
+                    interrupted = ("paused", "parent_paused")
                 elif job.state == "pause_requested":
                     interrupted = ("paused", "paused")
                 elif job.started_at and elapsed_seconds(job) >= job.time_limit:
@@ -575,8 +684,12 @@ class Worker:
                 state, failure = interrupted or ("retry" if job.attempts < job.max_attempts else "failed", "worker_crash")
                 job.state = state
                 job.failure_class = failure
+                if failure == "worker_shutdown":
+                    job.attempts = max(0, job.attempts - 1)
                 job.error = "Worker process stopped; in-flight external effects require adapter reconciliation"
                 mark_paused(job)
+                if job.state == "paused":
+                    job.attempts = max(0, job.attempts - 1)
                 job.worker_id = None
                 job.lease_until = None
                 if state in TERMINAL:

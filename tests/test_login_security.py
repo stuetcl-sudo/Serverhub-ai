@@ -67,3 +67,29 @@ def test_password_failures_refresh_cached_admission_counter(control):
         failure(second,key)
     with SessionLocal() as db:
         assert db.get(SystemState,key).value['count'] == 2
+
+
+def test_proxy_clients_do_not_share_failures_and_success_does_not_exhaust_ip(control, monkeypatch):
+    from serverhub.main import create_app
+    monkeypatch.setenv('SERVERHUB_TRUSTED_PROXY_CIDRS', '["127.0.0.1/32","::1/128"]')
+    monkeypatch.setenv('SERVERHUB_LOGIN_IP_LIMIT', '2')
+    get_settings.cache_clear()
+    with TestClient(create_app(), client=('127.0.0.1', 1000)) as proxy:
+        for name in ('missing1', 'missing2'):
+            assert proxy.post('/api/auth/login', headers={'X-Forwarded-For':'198.51.100.10'},
+                json={'username':name,'password':'wrong'}).status_code == 401
+        assert proxy.post('/api/auth/login', headers={'X-Forwarded-For':'1.2.3.4, 198.51.100.10'},
+            json={'username':'owner','password':'wrong'}).status_code == 429
+        for _ in range(4):
+            assert proxy.post('/api/auth/login', headers={'X-Forwarded-For':'198.51.100.11', 'Origin':'http://testserver'},
+                json={'username':'owner','password':'strong-test-password-42'}).status_code == 200
+    assert client_address(request('::1', '2001:db8::20')) == '2001:db8::20'
+    assert client_address(request('127.0.0.1', ', garbage')) == '127.0.0.1'
+
+
+def test_trusted_proxy_must_be_explicit_loopback():
+    import pytest
+    from serverhub.settings import Settings
+    for cidr in ('0.0.0.0/0', '10.0.0.0/8', '::/0'):
+        with pytest.raises(ValueError, match='loopback'):
+            Settings(trusted_proxy_cidrs=[cidr])

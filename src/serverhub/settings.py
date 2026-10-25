@@ -30,11 +30,22 @@ class Settings(BaseSettings):
         import ipaddress
         for value in values:
             network = ipaddress.ip_network(value, strict=True)
-            if network.prefixlen == 0:
-                raise ValueError("Trust only the actual reverse proxy, never all clients")
+            if not network.is_loopback:
+                raise ValueError("Trusted proxies must be explicit loopback CIDRs for the local Caddy/nginx proxy")
         return values
     max_concurrent_jobs: int = 4
     max_host_jobs: int = 1
+    max_user_jobs: int = Field(default=2, ge=1, le=100)
+    max_user_pending_jobs: int = Field(default=100, ge=1, le=10000)
+    user_daily_jobs: int = Field(default=500, ge=1)
+    user_daily_tokens: int = Field(default=10_000_000, ge=1)
+    user_daily_cost: float = Field(default=1000, gt=0, allow_inf_nan=False)
+    user_daily_runtime_seconds: int = Field(default=864000, ge=1)
+    incident_stable_samples: int = Field(default=3, ge=2, le=100)
+    incident_stable_seconds: int = Field(default=120, ge=1)
+    monitor_restart_limit: int = Field(default=3, ge=1, le=20)
+    monitor_restart_window_seconds: int = Field(default=3600, ge=60)
+    monitor_restart_backoff_seconds: int = Field(default=60, ge=1)
     lease_seconds: int = 45
     worker_poll_seconds: float = 2.0
     offline_seconds: int = 180

@@ -604,7 +604,7 @@ class Installer:
                         {
                             "manifest": {
                                 "release_id": state["release_id"],
-                                "schema_revision": "0006_pause_clock",
+                                "schema_revision": "0007_job_controls",
                                 "trust_boundary_digest": self.trust_digest(),
                             }
                         }
