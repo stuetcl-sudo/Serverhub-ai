@@ -13,7 +13,7 @@ import json
 import re
 import secrets
 from datetime import timedelta
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -173,6 +173,12 @@ def _validate_authorization(parameters, db):
     return client, sorted(scopes)
 
 
+def _consent_cookie(nonce: str) -> str:
+    # A separate browser binding per pending request: tabs and retries must not
+    # overwrite (or delete) another request's CSRF cookie.
+    return "serverhub_oauth_consent_" + hash_secret(nonce)
+
+
 @router.get("/oauth/authorize", response_class=HTMLResponse)
 def authorize_page(request: Request, db=Depends(get_db)):
     parameters = dict(request.query_params)
@@ -180,8 +186,14 @@ def authorize_page(request: Request, db=Depends(get_db)):
     try:
         actor = current_principal(request, db)
     except HTTPException:
+        continue_url = html.escape("/oauth/authorize?" + urlencode(parameters), quote=True)
         return HTMLResponse(
-            '<!doctype html><html><title>Sign in to ServerHub</title><body><h1>Sign in to ServerHub</h1><p>Open the dashboard in this browser, sign in, then return here and reload to approve this connection.</p><a href="/" target="_blank" rel="noopener">Open dashboard</a></body></html>',
+            '<!doctype html><html><title>Sign in to ServerHub</title><body><h1>Sign in to ServerHub</h1>'
+            '<p>Open the dashboard in this browser, sign in, then return here and continue to approve this connection.</p>'
+            '<a href="/" target="_blank" rel="noopener">Open dashboard</a> '
+            # A user-initiated same-site navigation sends the Strict session cookie;
+            # reloading a cross-site entry can preserve its cross-site status.
+            f'<a href="{continue_url}">Continue authorization</a></body></html>',
             status_code=401,
         )
     nonce = secrets.token_urlsafe(48)
@@ -200,13 +212,21 @@ def authorize_page(request: Request, db=Depends(get_db)):
 <p>Requested access: {html.escape(", ".join(scopes))}. Existing host permissions and expiring operation policies still apply.</p>
 <form method="post" action="/oauth/authorize"><input type="hidden" name="consent_nonce" value="{nonce}">
 <button name="decision" value="approve">Approve connection</button> <button name="decision" value="deny">Deny</button></form></body></html>'''
+    # WebKit applies form-action to the POST's external 303 redirect too. Allow
+    # only this validated client's callback origin/path, never arbitrary sources.
+    # CSP ignores query strings; OAuth still validates the complete exact URI.
+    callback = urlsplit(parameters["redirect_uri"])
+    callback_source = quote(urlunsplit((callback.scheme, callback.netloc, callback.path, "", "")), safe=":/[]%")
+    request.state.oauth_form_action = "'self' " + callback_source
     response = HTMLResponse(text)
     response.set_cookie(
-        "serverhub_oauth_consent",
+        _consent_cookie(nonce),
         nonce,
         max_age=300,
         httponly=True,
         secure=not get_settings().dev_mode,
+        # Consent is posted from this same-site page, even when the initial
+        # top-level GET came from ChatGPT. Lax would not allow cross-site POSTs.
         samesite="strict",
         path="/oauth/authorize",
     )
@@ -232,7 +252,9 @@ async def _form(request):
 async def consent(request: Request, actor: Principal = Depends(current_principal), db=Depends(get_db)):
     form = await _form(request)
     nonce = form.get("consent_nonce", "")
-    if not nonce or not secrets.compare_digest(nonce, request.cookies.get("serverhub_oauth_consent", "")):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{64}", nonce) or not secrets.compare_digest(
+        nonce, request.cookies.get(_consent_cookie(nonce), "")
+    ):
         raise HTTPException(403, "Consent CSRF check failed")
     pending = db.scalar(
         select(OAuthPending).where(OAuthPending.digest == hash_secret(nonce)).with_for_update()
@@ -265,7 +287,10 @@ async def consent(request: Request, actor: Principal = Depends(current_principal
     response = RedirectResponse(
         p["redirect_uri"] + ("&" if "?" in p["redirect_uri"] else "?") + urlencode(values), status_code=303
     )
-    response.delete_cookie("serverhub_oauth_consent", path="/oauth/authorize")
+    response.delete_cookie(
+        _consent_cookie(nonce), path="/oauth/authorize", httponly=True,
+        secure=not get_settings().dev_mode, samesite="strict",
+    )
     return response
 
 
