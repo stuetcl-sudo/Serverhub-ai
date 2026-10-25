@@ -157,7 +157,8 @@ def signed_bundle(tmp_path):
     trust.write_text("a"*64)
     (bundle / "release.json").write_bytes(canonical(manifest))
     (bundle / "release.sig").write_text(base64.b64encode(key.sign(canonical(manifest))).decode())
-    manager = ReleaseManager(tmp_path / "install", tmp_path / "state", public_key=public, trust_digest=trust, require_root=False)
+    manager = ReleaseManager(tmp_path / "install", tmp_path / "state", public_key=public, trust_digest=trust, require_root=False,
+                             code_hashes=tmp_path / "isolated-code-hashes.json")
     return manager, bundle, manifest
 
 
