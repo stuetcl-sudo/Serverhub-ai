@@ -224,6 +224,14 @@ class SystemState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class JobControlState(Base):
+    """Runtime accounting only; never stores emergency stop, secrets or policy."""
+    __tablename__ = "job_control_state"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class Schedule(Base):
     __tablename__ = "schedules"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

@@ -79,7 +79,7 @@ cancellation; child jobs also reserve it. Request reservations are charged befor
 sending, including uncertain/failed requests; successful lower provider usage is
 refunded to the job ledger but not to the conservative daily admission ledger.
 Usage above a reservation is retained. This intentionally favors bounded resource
-use over maximally filling a day's allowance. Counters persist in `system_state`.
+use over maximally filling a day's allowance. Counters persist in `job_control_state`; worker writes to `system_state` remain denied.
 Existing sandbox CPU/memory/process and timeout limits remain unchanged; this PR
 does not add per-user aggregate cgroups. Pending/daily submission limits produce
 422 with an actionable reason; exhausted daily model quota pauses the job.
@@ -137,8 +137,11 @@ removes checkpoints or backups. Existing independent operation rollback is intac
 
 ## Upgrade, rollback and verification
 
-No new database migration: the schema remains `0006_pause_clock`. Quota and monitor
-ledgers and incident evidence use existing JSON state. Review the new defaults and
+Migration `0007_job_controls` adds only the `job_control_state` table for runtime
+quota/monitor ledgers, separate from protected `system_state`. Explicit grants
+permit API/worker SELECT/INSERT/UPDATE on the new table, not DELETE/TRUNCATE or
+schema ownership. Worker modification of emergency state, policy and model routes
+remains denied. Incident evidence uses the existing incident JSON fields. Review the new defaults and
 proxy CIDR restriction before upgrading. Read-only production preflight from a
 reviewed checkout (not executed against production during this task):
 
@@ -151,8 +154,9 @@ and verify protected database/config backups, build with
 `./scripts/install-ubuntu.sh --build-only`, then use the reviewed
 `sudo ./scripts/repair-install.sh` maintenance procedure. Do not operate generic
 Control unit names. Retain the previous trusted release and backup. A rollback to
-PR #10 requires no database downgrade, but must use the documented controlled
-release/offline recovery procedure and restore compatible route configuration;
+PR #10 must use the documented offline recovery procedure with a compatible
+schema/configuration backup; code-only rollback across schema heads is rejected.
+Do not execute the destructive 0007 table-drop downgrade on production automatically;
 it removes these enforcement improvements. Pause autonomous work before rollback,
 verify service health and policy/audit access, and review interrupted writes before
 resuming. No automatic rollback across a trust-boundary change is authorized.
@@ -166,3 +170,13 @@ PostgreSQL, native systemd and Ollama omissions are not described as real tests;
 the repository's disposable Ubuntu CI exercises those separately. A discovered
 frontend datetime-local minimum used UTC rather than local time; it is corrected
 so non-UTC browsers can create valid short-lived permissions.
+
+The native install regression uses a 16,384-token model context throughout. Its
+negative admission test deliberately assigns a 32-token job budget, asserts no
+provider usage, asserts HTTP 409 on unchanged resume, then raises the job budget
+to 20,000 through the authenticated API and verifies completion. This isolates
+budget enforcement from context exhaustion; separate provider tests still cover
+context-window failures. The native model endpoint is an explicit fixture; actual
+Qwen is tested by the separate Ollama workflow and Jarvis pilot. PostgreSQL tests
+exercise admission as the real API role and subsequent quota charging as the real
+worker role, including rejection of writes to protected system state.

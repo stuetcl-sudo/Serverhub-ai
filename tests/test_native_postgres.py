@@ -120,3 +120,40 @@ def test_worker_cannot_reconfigure_models_but_can_publish_liveness(native_pg):
             worker.execute("UPDATE model_routes SET enabled=false")
         worker.execute("INSERT INTO worker_heartbeats (worker_id,seen_at) VALUES ('isolated-worker',CURRENT_TIMESTAMP)")
         assert worker.execute("SELECT worker_id FROM worker_heartbeats").fetchone()[0]=='isolated-worker'
+
+
+def test_worker_runtime_accounting_does_not_grant_system_state_writes(native_pg):
+    url = native_pg['urls']['worker'].set(drivername='postgresql').render_as_string(hide_password=False)
+    with psycopg.connect(url, autocommit=True) as worker:
+        worker.execute("INSERT INTO job_control_state (key,value,updated_at) VALUES ('quota-test','{}',CURRENT_TIMESTAMP)")
+        worker.execute("UPDATE job_control_state SET value='{\"tokens\":42}' WHERE key='quota-test'")
+        assert worker.execute("SELECT value FROM job_control_state WHERE key='quota-test'").fetchone()[0]['tokens'] == 42
+        for statement in ("DELETE FROM job_control_state", "TRUNCATE job_control_state",
+                          "UPDATE system_state SET value='{}'", "UPDATE policies SET enabled=false"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                worker.execute(statement)
+
+
+def test_quota_admitted_by_api_can_be_charged_by_actual_worker(native_pg):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from serverhub.job_limits import admit_job, charge_daily
+    from serverhub.models import JobControlState
+    from serverhub.database import utcnow
+    api_engine = create_engine(native_pg['urls']['api'])
+    worker_engine = create_engine(native_pg['urls']['worker'])
+    key = 'job-quota:' + utcnow().date().isoformat() + ':isolated-quota-user'
+    try:
+        with Session(api_engine) as db:
+            admit_job(db, 'isolated-quota-user', 60)
+            db.commit()
+        with Session(worker_engine) as db:
+            charge_daily(db, 'isolated-quota-user', 4200, 0)
+            db.commit()
+            assert db.get(JobControlState, key).value == {'tokens': 4200, 'cost': 0, 'runtime': 60, 'jobs': 1}
+            charge_daily(db, 'isolated-quota-user', 100, .01)
+            db.commit()
+            assert db.get(JobControlState, key).value['tokens'] == 4300
+    finally:
+        api_engine.dispose()
+        worker_engine.dispose()

@@ -6,7 +6,7 @@ model outcomes are charged, never refunded. No request content is stored here.
 from sqlalchemy import func, select, text
 
 from .database import utcnow
-from .models import Job, SystemState
+from .models import Job, JobControlState
 from .policy import PermissionDenied
 from .settings import get_settings
 
@@ -36,9 +36,9 @@ def lock_quota(db):
 def _ledger(db, user):
     lock_quota(db)
     key = "job-quota:" + utcnow().date().isoformat() + ":" + user
-    row = db.get(SystemState, key, populate_existing=True)
+    row = db.get(JobControlState, key, populate_existing=True)
     if row is None:
-        row = SystemState(key=key, value={"tokens": 0, "cost": 0.0, "runtime": 0})
+        row = JobControlState(key=key, value={"tokens": 0, "cost": 0.0, "runtime": 0})
         db.add(row)
         db.flush()
     return row
@@ -75,7 +75,7 @@ def resume_budget_error(job, db=None):
     minimum = saved.get("minimum_tokens", 32)
     cost = saved.get("minimum_cost", 0)
     if db is not None:
-        row = db.get(SystemState, "job-quota:" + utcnow().date().isoformat() + ":" + job.owner_id,
+        row = db.get(JobControlState, "job-quota:" + utcnow().date().isoformat() + ":" + job.owner_id,
                      populate_existing=True)
         settings = get_settings()
         if row and (row.value["tokens"] + minimum > settings.user_daily_tokens

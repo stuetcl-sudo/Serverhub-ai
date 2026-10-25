@@ -1,3 +1,4 @@
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -11,7 +12,7 @@ from serverhub.auth import Principal
 from serverhub.database import SessionLocal, utcnow
 from serverhub.jobs import (HANDLERS, BudgetExceeded, JobContext, Worker, submit_job,
                            parent_paused, parent_stopped, JobPaused)
-from serverhub.models import Job, ModelRoute, Incident, Host, SystemState
+from serverhub.models import Job, ModelRoute, Incident, Host, JobControlState
 from serverhub.policy import PermissionDenied
 from serverhub.settings import get_settings
 
@@ -185,8 +186,8 @@ def test_monitor_restart_caps_are_per_target_and_durable(core_env, owner):
         assert reserve_monitor_restart(ctx, remedy) == (key, None)
         ctx.job.id = "second"
         assert reserve_monitor_restart(ctx, remedy)[1]
-        row = db.scalar(select(SystemState).where(SystemState.key.like("monitor-restart:%")))
-        row.value = {"attempts": [{"job": str(i), "time": utcnow().timestamp()-500} for i in range(3)]}
+        row = db.scalar(select(JobControlState).where(JobControlState.key.like("monitor-restart:%")))
+        row.value = {"attempts": [{"job": str(i), "time": time.time()-500} for i in range(3)]}
         db.commit()
         assert reserve_monitor_restart(ctx, remedy)[1]
         ctx.job.host_id = "node2"
@@ -352,7 +353,7 @@ def test_monitor_denied_grant_never_reserves_restart(core_env, owner, monkeypatc
         ctx = JobContext(db, job, owner)
         with pytest.raises(PermissionDenied):
             reserve_monitor_restart(ctx, {"operation": "systemd.restart", "arguments": {"service": "example.service"}})
-        assert not db.scalars(select(SystemState).where(SystemState.key.like("monitor-restart:%"))).all()
+        assert not db.scalars(select(JobControlState).where(JobControlState.key.like("monitor-restart:%"))).all()
 
 
 def test_parent_resume_accounts_for_delegated_usage_and_verification_reserve(core_env, owner, monkeypatch):
@@ -386,3 +387,19 @@ def test_removing_container_healthcheck_is_not_verified_recovery(core_env):
             ingest_inventory(db, host, observation(None))
             db.commit()
         assert incident.state == "open" and incident.evidence["stable"] == []
+
+
+def test_runtime_control_migration_from_actual_previous_shape(core_env):
+    from alembic import command
+    from serverhub.cli import _alembic_config
+    from serverhub.database import get_engine
+    from sqlalchemy import text, inspect
+    with get_engine().begin() as conn:
+        conn.execute(text("DROP TABLE job_control_state"))
+        conn.execute(text("UPDATE alembic_version SET version_num='0006_pause_clock'"))
+    command.upgrade(_alembic_config(), 'head')
+    assert inspect(get_engine()).has_table('job_control_state')
+    command.downgrade(_alembic_config(), '0006_pause_clock')
+    assert not inspect(get_engine()).has_table('job_control_state')
+    command.upgrade(_alembic_config(), 'head')
+    assert inspect(get_engine()).has_table('job_control_state')

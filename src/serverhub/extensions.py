@@ -214,7 +214,7 @@ def execute_operation(ctx, spec):
 def reserve_monitor_restart(ctx, remedy):
     """Persist intent before dispatch; retries reuse the same operation identity."""
     import time
-    from .models import SystemState
+    from .models import JobControlState
     from .settings import get_settings
     from sqlalchemy import text
     settings = get_settings()
@@ -223,10 +223,10 @@ def reserve_monitor_restart(ctx, remedy):
         [ctx.job.host_id, remedy], sort_keys=True).encode()).hexdigest()
     if ctx.db.bind.dialect.name == "postgresql":
         ctx.db.execute(text("SELECT pg_advisory_xact_lock(734882111)"))
-    row = ctx.db.get(SystemState, key, populate_existing=True)
+    row = ctx.db.get(JobControlState, key, populate_existing=True)
     now = time.time()
     if row is None:
-        row = SystemState(key=key, value={"attempts": []})
+        row = JobControlState(key=key, value={"attempts": []})
         ctx.db.add(row)
     attempts = [a for a in row.value["attempts"] if now-a["time"] < settings.monitor_restart_window_seconds]
     operation_key = ctx.job.id + ":repair:" + key.rsplit(":", 1)[1]
