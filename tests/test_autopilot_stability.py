@@ -403,3 +403,36 @@ def test_runtime_control_migration_from_actual_previous_shape(core_env):
     assert not inspect(get_engine()).has_table('job_control_state')
     command.upgrade(_alembic_config(), 'head')
     assert inspect(get_engine()).has_table('job_control_state')
+
+
+def test_graceful_shutdown_reclaims_without_failure_attempt_or_write_replay(core_env, owner, monkeypatch):
+    from serverhub.models import JobEvent
+    monkeypatch.setitem(HANDLERS, 'fixture', lambda *_: {})
+    worker = Worker(worker_id='shutdown-fixture', isolated=False)
+    with SessionLocal() as db:
+        job = submit_job(db, owner, 'fixture', {}, max_attempts=1)
+        identity = job.id
+        job.checkpoint = {'in_flight': {'idempotency_key': 'uncertain-write'}}
+        db.commit()
+    assert worker._claim() == identity
+    worker.stopping = True
+    class Process:
+        alive = True
+        def is_alive(self):
+            return self.alive
+        def join(self, **kwargs):
+            pass
+        def terminate(self):
+            self.alive = False
+    worker._supervise(Process(), identity)
+    with SessionLocal() as db:
+        job = db.get(Job, identity)
+        assert (job.state, job.attempts, job.failure_class) == ('retry', 0, 'worker_shutdown')
+        assert job.checkpoint['in_flight']['idempotency_key'] == 'uncertain-write'
+    assert Worker(worker_id='restarted', isolated=False)._claim() == identity
+    with SessionLocal() as db:
+        job = db.get(Job, identity)
+        assert job.attempts == 1 and job.checkpoint['in_flight']['idempotency_key'] == 'uncertain-write'
+        events = db.scalars(select(JobEvent).where(JobEvent.job_id == identity)).all()
+        assert len([event for event in events if event.message == 'Job claimed']) == 2
+        assert any(event.data.get('class') == 'worker_shutdown' for event in events)
