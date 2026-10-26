@@ -65,3 +65,37 @@ def test_database_probe_errors_do_not_expose_password(monkeypatch):
     with pytest.raises(InstallError) as error:
         read_schema_revision('postgresql://user:secret-password@localhost/serverhub')
     assert 'secret-password' not in str(error.value)
+
+
+def test_independent_watchdog_restores_only_proven_schema_compatible_release(tmp_path, monkeypatch):
+    import json
+    import serverhub.ops.repair as repair
+    from serverhub.ops.release import ReleaseManager
+
+    install = tmp_path / "install"
+    previous = install / "releases/previous"
+    candidate = install / "releases/candidate"
+    previous.mkdir(parents=True)
+    candidate.mkdir()
+    (install / "current").symlink_to(candidate)
+    (previous / "installed.json").write_text(
+        json.dumps({"manifest": {"schema_revision": "0007_job_controls"}})
+    )
+    manager = ReleaseManager(install, tmp_path / "state", require_root=False, clock=lambda: 100)
+    manager._protect()
+    calls = []
+    monkeypatch.setattr(manager, "_run", lambda argv: calls.append(argv))
+    monkeypatch.setattr(repair, "read_environment", lambda path: {"SERVERHUB_DATABASE_URL": "hidden"})
+    monkeypatch.setattr(repair, "read_schema_revision", lambda url: "0007_job_controls")
+    manager._write_journal({
+        "state": "armed", "release_id": "repair-test", "previous": str(previous),
+        "candidate": str(candidate), "deadline": 99,
+        "repair_schema_revision": "0007_job_controls",
+    })
+    result = manager.watchdog()
+    assert result["state"] == "reverted"
+    assert (install / "current").resolve() == previous
+    assert calls == [
+        ["systemctl", "restart", "serverhub-ai-api.service", "serverhub-ai-worker.service"],
+        ["systemctl", "try-restart", "serverhub-ai-broker.service", "serverhub-ai-node.service"],
+    ]
