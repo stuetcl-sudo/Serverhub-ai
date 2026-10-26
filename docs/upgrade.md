@@ -97,6 +97,13 @@ and previous release until a restore drill passes.
 
 ## Executable code anchor
 
+For the exact PR14 OAuth candidate only, the reviewed
+[single-command offline owner procedure](pr14-owner-release.md) provides
+interactive root approval, fixed artifact hashes, isolated production-backup
+restore, and independent rollback of both executable code and protected anchors.
+It does not change the normal signed-release verifier or permit autonomous
+Python updates. Read that procedure before running `sudo bash scripts/release-pr14.sh`.
+
 Initial installation also stores `/etc/serverhub/trusted-code-hashes.json`. The independent verifier compares actual wheel module bytes and its exact package file set with this root-owned anchor, rejects startup `.pth`/unexpected installation payloads and changed CLI entry points, and checks the signed artifact hashes. Repeating an old trust digest in a new signed manifest cannot conceal changed policy code. Since Python modules share an interpreter, the whole Python package is anchored. Automatic upgrades are therefore limited to unchanged Python code (for example frontend or dependency artifacts); Python-code improvements require explicit offline owner review and maintenance of the stable recovery runtime/anchor. A fully autonomous self-code-update approval service is not implemented.
 
 ## Build a signed bundle
