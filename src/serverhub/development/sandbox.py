@@ -159,7 +159,16 @@ class SandboxRunner:
         # Validate the executable *inside* the sandbox, not just on the host.
         result = self.run(workspace, Command(argv=["/workspace/.venv/bin/python", "-m",
             "pip", "--version"], timeout=10))
-        return {"available": result.returncode == 0 and not result.timed_out,
-                "returncode": result.returncode, "detail": tools.output + result.output,
-                "remediation": "Repair the job-local virtualenv inside the isolated workspace; no unsandboxed fallback is permitted",
+        if result.returncode or result.timed_out:
+            return {"available": False, "returncode": result.returncode,
+                    "detail": tools.output + result.output,
+                    "remediation": "Repair the job-local virtualenv inside the isolated workspace; no unsandboxed fallback is permitted",
+                    "unsandboxed_fallback": False}
+        # Verify the actual owner-configured 'python -m pip' invocation resolves
+        # via sandbox PATH, rather than merely checking the absolute venv path.
+        resolved = self.run(workspace, Command(argv=["/usr/bin/env", "python", "-m",
+            "pip", "--version"], timeout=10))
+        return {"available": resolved.returncode == 0 and not resolved.timed_out,
+                "returncode": resolved.returncode, "detail": tools.output + result.output + resolved.output,
+                "remediation": "Ensure the sandbox PATH resolves the job-local python command; never use host Python or an unsandboxed fallback",
                 "unsandboxed_fallback": False}
