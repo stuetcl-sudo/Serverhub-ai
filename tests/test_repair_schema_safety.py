@@ -16,10 +16,13 @@ def test_same_schema_is_permitted(monkeypatch):
     assert require_compatible_schema('not-exposed') == '0007_job_controls'
 
 
-@pytest.mark.parametrize('recorded,actual', [(None, '0007_job_controls'),
-                                            ('0006_pause_clock', '0007_job_controls'),
-                                            ('0007_job_controls', None)])
-def test_independent_watchdog_blocks_unproven_repair_rollback(tmp_path, monkeypatch, recorded, actual):
+@pytest.mark.parametrize('recorded,actual,previous_revision', [
+    (None, '0007_job_controls', '0006_pause_clock'),
+    ('0006_pause_clock', '0007_job_controls', '0006_pause_clock'),
+    ('0007_job_controls', None, '0006_pause_clock'),
+    ('0007_job_controls', '0007_job_controls', '0006_pause_clock'),
+])
+def test_independent_watchdog_blocks_unproven_repair_rollback(tmp_path, monkeypatch, recorded, actual, previous_revision):
     from serverhub.ops.release import ReleaseManager, ReleaseError
     import serverhub.ops.repair as repair
     import json
@@ -29,7 +32,7 @@ def test_independent_watchdog_blocks_unproven_repair_rollback(tmp_path, monkeypa
     previous.mkdir(parents=True)
     candidate.mkdir()
     (install / 'current').symlink_to(candidate)
-    (previous / 'installed.json').write_text(json.dumps({'manifest': {'schema_revision': '0006_pause_clock'}}))
+    (previous / 'installed.json').write_text(json.dumps({'manifest': {'schema_revision': previous_revision}}))
     calls = []
     manager = ReleaseManager(install, tmp_path / 'state', require_root=False, clock=lambda: 100)
     manager._protect()
