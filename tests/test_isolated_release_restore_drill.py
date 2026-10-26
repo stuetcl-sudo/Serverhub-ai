@@ -163,9 +163,12 @@ def test_0006_backup_restore_migrate_and_compatible_recovery(monkeypatch, tmp_pa
 
         migrated = snapshot(migrated_name)
         # A matching audit hash is insufficient unless the full chain validates.
-        with create_engine(url(migrated_name)).connect() as connection:
-            with Session(bind=connection) as audit_session:
+        audit_engine = create_engine(url(migrated_name))
+        try:
+            with Session(audit_engine) as audit_session:
                 assert verify_chain(audit_session)["valid"] is True
+        finally:
+            audit_engine.dispose()
         assert {key: value for key, value in migrated.items() if key != "revision"} == {
             key: value for key, value in before.items() if key != "revision"
         }
