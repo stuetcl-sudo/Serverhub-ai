@@ -4,6 +4,7 @@ Synthetic data only. Never connects to the production database. A real
 production-backup restore remains a separate, owner-authorized release gate.
 """
 import os
+import secrets
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,7 @@ def test_0006_backup_restore_migrate_and_compatible_recovery(monkeypatch, tmp_pa
     names = ["sh_drill_" + uuid4().hex[:16] for _ in range(3)]
     source_name, migrated_name, recovered_name = names
     role_names = {kind: "sh_drill_" + uuid4().hex[:16] for kind in ("api", "worker", "migrate")}
+    passwords = {kind: secrets.token_hex(24) for kind in role_names}
     admin_dsn = base.set(drivername="postgresql").render_as_string(hide_password=False)
     created = []
     roles_created = []
@@ -81,7 +83,9 @@ def test_0006_backup_restore_migrate_and_compatible_recovery(monkeypatch, tmp_pa
     try:
         with psycopg.connect(admin_dsn, autocommit=True) as admin:
             for role in role_names.values():
-                admin.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))
+                admin.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                    sql.Identifier(role), sql.Literal(passwords[next(k for k, v in role_names.items() if v == role)])
+                ))
                 roles_created.append(role)
             for name in names:
                 admin.execute(sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(sql.Identifier(name)))
@@ -134,7 +138,7 @@ def test_0006_backup_restore_migrate_and_compatible_recovery(monkeypatch, tmp_pa
             admin.execute(grants)
 
         worker_url = base.set(database=migrated_name, username=role_names["worker"],
-                              password="", drivername="postgresql").render_as_string(hide_password=False)
+                              password=passwords["worker"], drivername="postgresql").render_as_string(hide_password=False)
         with psycopg.connect(worker_url, autocommit=True) as worker:
             worker.execute(
                 "INSERT INTO job_control_state (key,value,updated_at) "
