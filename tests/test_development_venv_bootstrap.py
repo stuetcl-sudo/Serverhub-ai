@@ -42,6 +42,7 @@ def test_preflight_creates_venv_only_inside_sandbox(tmp_path, monkeypatch):
     assert "venv_available" in calls[0][-1]
     assert "find_spec('pip')" not in calls[0][-1]
     assert calls[2] == ["/workspace/.venv/bin/python", "-m", "pip", "--version"]
+    assert calls[3] == ["/usr/bin/env", "python", "-m", "pip", "--version"]
     assert result["unsandboxed_fallback"] is False
 
 
@@ -69,3 +70,23 @@ def test_preflight_rejects_symlinked_virtualenv(tmp_path):
     runner = SandboxRunner(project(), binary="/usr/bin/bwrap")
     with pytest.raises(DevelopmentError, match="real directory"):
         runner.preflight(tmp_path)
+
+
+def test_preflight_blocks_missing_bare_python_even_if_venv_pip_works(tmp_path, monkeypatch):
+    runner = SandboxRunner(project(), binary="/usr/bin/bwrap")
+    calls = []
+
+    def fake_run(workspace, command, **kwargs):
+        calls.append(command.argv)
+        if command.argv[:3] == ["/usr/bin/python3", "-m", "venv"]:
+            (workspace / ".venv").mkdir()
+        if command.argv[:2] == ["/usr/bin/env", "python"]:
+            return CommandResult(command.argv, 127, "env: python: No such file or directory")
+        return CommandResult(command.argv, 0, "ready")
+
+    monkeypatch.setattr(runner, "run", fake_run)
+    result = runner.preflight(tmp_path)
+    assert result["available"] is False
+    assert result["returncode"] == 127
+    assert result["unsandboxed_fallback"] is False
+    assert len(calls) == 4
