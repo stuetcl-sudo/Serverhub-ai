@@ -38,7 +38,7 @@ def test_0006_backup_restore_migrate_and_compatible_recovery(monkeypatch, tmp_pa
     from serverhub.database import get_engine
     from serverhub.models import Job, User
     from serverhub.oauth_models import OAuthClient
-    from serverhub.ops.backup import BackupManager
+    from serverhub.ops.backup import BackupError, BackupManager
     from serverhub.settings import get_settings
 
     names = ["sh_drill_" + uuid4().hex[:16] for _ in range(3)]
@@ -118,6 +118,14 @@ def test_0006_backup_restore_migrate_and_compatible_recovery(monkeypatch, tmp_pa
         manager = BackupManager(tmp_path / "isolated-backups", require_root=False)
         manifest = manager.create(url(source_name))
         assert manager.verify(manifest["id"])["files"]["postgres.dump"]["size"] > 0
+
+        # Wrong target confirmation must fail before any database writes.
+        with pytest.raises(BackupError, match="typed database confirmation"):
+            manager.restore(manifest["id"], url(migrated_name), confirm_database="not-the-target")
+        with psycopg.connect(pg_url(migrated_name)) as empty_target:
+            assert empty_target.execute(
+                "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"
+            ).fetchone()[0] == 0
 
         manager.restore(manifest["id"], url(migrated_name), confirm_database=migrated_name)
         assert snapshot(migrated_name) == before
