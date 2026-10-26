@@ -24,12 +24,18 @@ required = {
         "allow_dependency_network",
     ),
 }
-for relative, guards in required.items():
-    target = ROOT / relative
-    if not target.is_file() or target.is_symlink():
-        raise SystemExit(f"missing or unsafe guarded source: {relative}")
-    source = target.read_text()
-    for guard in guards:
-        if guard not in source:
-            raise SystemExit(f"independent guard absent: {relative} / {guard}")
-print("Independent self-development baseline guards present (static check only)")
+def verify(root: Path = ROOT) -> None:
+    """Validate baseline guard markers in the candidate workspace."""
+    for relative, guards in required.items():
+        target = root / relative
+        if not target.is_file() or target.is_symlink():
+            raise SystemExit(f"missing or unsafe guarded source: {relative}")
+        source = target.read_text()
+        for guard in guards:
+            if guard not in source:
+                raise SystemExit(f"independent guard absent: {relative} / {guard}")
+    print("Independent self-development baseline guards present (static check only)")
+
+
+if __name__ == "__main__":
+    verify()
