@@ -60,7 +60,7 @@ class SandboxRunner:
                  "--bind", str(workspace.resolve()), "/workspace",
                  "--ro-bind", str(workspace.resolve() / ".git"), "/workspace/.git",
                  "--chdir", "/workspace", "--clearenv",
-                 "--setenv", "PATH", "/usr/bin:/bin:/workspace/.venv/bin:/workspace/node_modules/.bin",
+                 "--setenv", "PATH", "/workspace/.venv/bin:/workspace/node_modules/.bin:/usr/bin:/bin",
                  "--setenv", "HOME", "/home/build", "--setenv", "LANG", "C.UTF-8",
                  "--setenv", "CI", "1"]
         if self.project.checks_path:
@@ -133,10 +133,33 @@ class SandboxRunner:
             return CommandResult(list(command.argv), process.returncode or 0, content, timed_out)
 
     def preflight(self, workspace: Path) -> dict:
-        result = self.run(workspace, Command(argv=["/usr/bin/python3", "-I", "-c",
+        """Create a job-local Python environment inside bubblewrap, never on the host.
+
+        Ubuntu 24.04 does not provide a bare 'python' executable by default,
+        and system pip is externally managed. Root-registered projects using
+        'python -m pip' must resolve to an isolated, writable venv instead.
+        """
+        venv = workspace / ".venv"
+        if venv.is_symlink() or (venv.exists() and not venv.is_dir()):
+            raise DevelopmentError("project virtualenv path must be a real directory")
+        tools = self.run(workspace, Command(argv=["/usr/bin/python3", "-I", "-c",
             "import importlib.util,json,ssl,sys; "
-            "tools={k:importlib.util.find_spec(k) is not None for k in ('pip','venv')}; "
-            "print(json.dumps({'python':sys.version.split()[0],'tools':tools,'sandbox':True})); "
-            "sys.exit(0 if all(tools.values()) else 78)"], timeout=10))
-        return {"available": result.returncode == 0, "returncode": result.returncode,
-                "detail": result.output, "remediation": "Install python3-pip, python3-venv, bubblewrap and the AI AppArmor profile through reviewed native repair; never use a production virtualenv", "unsandboxed_fallback": False}
+            "venv_available=importlib.util.find_spec('venv') is not None; "
+            "print(json.dumps({'python':sys.version.split()[0],'venv_available':venv_available,'sandbox':True})); "
+            "sys.exit(0 if venv_available else 78)"], timeout=10))
+        if tools.returncode != 0 or tools.timed_out:
+            return {"available": False, "returncode": tools.returncode,
+                    "detail": tools.output, "remediation": "Install python3-venv, bubblewrap and the AI AppArmor profile through reviewed native repair; never use a production virtualenv", "unsandboxed_fallback": False}
+        if not venv.exists():
+            setup = self.run(workspace, Command(
+                argv=["/usr/bin/python3", "-m", "venv", "/workspace/.venv"], timeout=45))
+            if setup.returncode != 0 or setup.timed_out:
+                return {"available": False, "returncode": setup.returncode,
+                        "detail": setup.output, "remediation": "Repair isolated python3-venv prerequisites; never install into system Python or run outside bubblewrap", "unsandboxed_fallback": False}
+        # Validate the executable *inside* the sandbox, not just on the host.
+        result = self.run(workspace, Command(argv=["/workspace/.venv/bin/python", "-m",
+            "pip", "--version"], timeout=10))
+        return {"available": result.returncode == 0 and not result.timed_out,
+                "returncode": result.returncode, "detail": tools.output + result.output,
+                "remediation": "Repair the job-local virtualenv inside the isolated workspace; no unsandboxed fallback is permitted",
+                "unsandboxed_fallback": False}

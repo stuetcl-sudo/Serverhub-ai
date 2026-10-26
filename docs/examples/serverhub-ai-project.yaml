@@ -1,0 +1,36 @@
+# OWNER-REVIEWED EXAMPLE ONLY. Not installed or enabled by a Git checkout.
+# Append this single project to the root-owned /etc/serverhub/projects.yaml
+# without replacing the existing jarvis-os entry. No production deployment.
+# Requires PR #18's sandbox-local venv bootstrap and protected acceptance checks.
+projects:
+  - name: serverhub-ai
+    repository: https://github.com/stuetcl-sudo/Serverhub-ai.git
+    base_ref: release/autopilot-oauth-candidate
+    allow_dependency_network: true
+    dependency_hosts: [pypi.org, files.pythonhosted.org]
+    dependencies:
+      - argv: [python, -m, pip, install, --require-hashes, -r, requirements.lock]
+        network: true
+        timeout: 1200
+      - argv: [python, -m, pip, install, 'pytest==8.3.5']
+        network: true
+        timeout: 300
+    build:
+      - argv: [/usr/bin/python3, -m, compileall, -q, src/serverhub]
+        timeout: 120
+    tests:
+      - argv: [/usr/bin/env, PYTHONPATH=src, python, -m, pytest, -q, tests/test_development_workspaces.py, tests/test_development_venv_bootstrap.py]
+        timeout: 300
+    checks_path: /etc/serverhub/project-checks/serverhub-ai
+    independent_checks:
+      - argv: [/usr/bin/env, PYTHONPATH=src, python, /checks/serverhub-ai-check.py]
+        timeout: 120
+    artifact_paths: [src, tests, docs, pyproject.toml, requirements.lock]
+    max_artifact_bytes: 268435456
+    max_memory_mb: 4096
+    max_processes: 128
+    # Publication is OFF until a separately provisioned, fine-grained token and
+    # explicit development.publish grant exist. Never allow unattended merges.
+    # Publication paths must be independently reviewed, especially for security code.
+    # publication_token_env: SERVERHUB_GITHUB_SELFDEV
+    # publication_paths: [src/serverhub/development, tests, docs]

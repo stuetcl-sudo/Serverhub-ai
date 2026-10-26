@@ -1,0 +1,83 @@
+{
+  "base_commit": "42483fb0fe59f76e783ca309aff1ac381dd24d84",
+  "installed_release": "/opt/serverhub/releases/repair-20261024T195431Z-60f67b",
+  "installed_package_files": 65,
+  "base_package_matches_installed": true,
+  "only_changed_package_files": {
+    "mcp.py": {
+      "installed_sha256": "88219757fe8b54a5242ecf21f667b404b8a049848a47fbef250099388fbcf79f",
+      "candidate_sha256": "43ed7629f3f9a1a6d66bde70da9f106488a23b89a47a2aca6c3863dc2e32e9eb"
+    },
+    "main.py": {
+      "installed_sha256": "013f86846598bacfbea164980df8b13197fdeb1af550883c00e920e7b7d83bfd",
+      "candidate_sha256": "347e4fa919f8927e242515987fd02cf550209704c78a147f8e0235ca559c96ca"
+    }
+  },
+  "unchanged_trees": {
+    "migrations": {
+      "env.py": "a5190ca1c22c4a67c3287193067ffd7d62061c102303dd8da1c1d47693c97976",
+      "versions/0002_oauth.py": "2557f2c1f51d15e7b4b836bc61f6c225b6b695328d6bc34b4392806dea388ef1",
+      "versions/0004_runtime.py": "92a404bea5fac05c4d71415754f9309ff0bc23ca10a1ff7200621a726a72444b",
+      "versions/0001_core.py": "1719d461c7b2656804cefba695ab63d34b5827f777ea6ac181d924dd7bf3ba62",
+      "versions/0006_pause_clock.py": "31781ce454c69df4ce36ee1b4c50f348fc9b0b1db25d6e7ad7cf77efb57c2e52",
+      "versions/0005_priority.py": "c4b0a28db32353c8601e5da557a5c2fc6a12bfb8fab52da9ad0e935b600362f2",
+      "versions/0003_schedules.py": "cc9e3ce5c46d0e91e7a99235b5c0a4af361039318dad7b1c622bd5164b8837fb"
+    },
+    "web": {
+      "index.html": "6443531e84e107e64b3db67a649cad40249d5fcbc2d38b5e3fe87e385188822c",
+      "assets/index-SLtW8udW.css": "1bd1a05767698f19bcf362fbd0165596d01c97bf54e270c3ce704e56c09f5136",
+      "assets/index-Dl8vk9s9.js": "fd49eb39db2d9b52490bf634827ef83702e41f4868fdb19cd74a0e5f462c4c64"
+    }
+  },
+  "service_recovery_grants_dependencies_unchanged": true,
+  "bundle_signed": false,
+  "bundle_hashes": {
+    "migrations.tar.gz": "259f46189260ffb9f1d1d75bfee7ec25ba4b0397b9244ce7a5b29f4e476a2c6f",
+    "application.whl": "a96f24266030fd8a611ae6614de0e21faf5e484f04822704dc8fc92bc1b8a130",
+    "web.tar.gz": "34e557c682db46bd234b6d2056bd90eae5264040904e30da327554acfe0c1a01",
+    "requirements.lock": "8b3b5bc8625f46465b16bcca2038c3a1454821ccfcf5f65def61b353a5185c89",
+    "alembic.ini": "8965c450bfd77867a3b02b26c5a0cfce35002fbba0f57fd2cd25aa0009393d70"
+  },
+  "schema_revision": "0006_pause_clock",
+  "locked_dependency_versions_verified": {
+    "alembic": "1.20.1",
+    "annotated-doc": "0.0.5",
+    "annotated-types": "0.8.0",
+    "anyio": "4.15.1",
+    "argon2-cffi": "25.1.0",
+    "argon2-cffi-bindings": "26.1.0",
+    "attrs": "26.1.0",
+    "certifi": "2026.10.19",
+    "cffi": "2.1.1",
+    "click": "8.5.0",
+    "cryptography": "50.0.2",
+    "fastapi": "0.159.1",
+    "greenlet": "3.5.6",
+    "h11": "0.16.0",
+    "httpcore": "1.0.9",
+    "httpx": "0.28.1",
+    "idna": "3.20",
+    "jsonschema": "4.26.0",
+    "jsonschema-specifications": "2025.9.1",
+    "mako": "1.4.3",
+    "markupsafe": "3.0.4",
+    "opentelemetry-api": "1.45.1",
+    "psutil": "7.2.2",
+    "psycopg": "3.3.6",
+    "psycopg-binary": "3.3.6",
+    "pycparser": "3.11",
+    "pydantic": "2.14.1",
+    "pydantic-core": "2.50.1",
+    "pydantic-settings": "2.16.1",
+    "python-dotenv": "1.2.4",
+    "pyyaml": "6.0.3",
+    "referencing": "0.37.0",
+    "rpds-py": "2026.9.1",
+    "sqlalchemy": "2.0.55",
+    "starlette": "1.9.0",
+    "typing-extensions": "4.16.0",
+    "typing-inspection": "0.4.4",
+    "uvicorn": "0.54.0"
+  },
+  "oauth_patch_matches_approved_pr13": true
+}
