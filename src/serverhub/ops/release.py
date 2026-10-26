@@ -259,6 +259,23 @@ class ReleaseManager:
             raise
 
     def _rollback(self, journal):
+        if str(journal.get("release_id", "")).startswith("repair-") or "repair_schema_revision" in journal:
+            from .repair import read_environment, read_schema_revision
+            try:
+                expected = journal.get("repair_schema_revision")
+                if not expected:
+                    raise ReleaseError("Legacy repair journal has no database compatibility evidence")
+                environment = read_environment("/etc/serverhub/recovery.env")
+                actual = read_schema_revision(environment["SERVERHUB_DATABASE_URL"])
+                previous = json.loads((Path(journal["previous"]) / "installed.json").read_text())
+                if actual != expected or previous["manifest"]["schema_revision"] != actual:
+                    raise ReleaseError("Database is incompatible with previous release")
+            except Exception:
+                journal["state"] = "manual_recovery_required"
+                journal["reason"] = "database compatibility cannot be proven"
+                self._write_journal(journal)
+                self._run(["systemctl", "stop", *self.SERVICES])
+                raise ReleaseError("Repair rollback blocked; AI services stopped; independent database recovery required") from None
         self._switch(Path(journal["previous"]))
         self._run(["systemctl", "restart", *self.SERVICES])
         self._run(["systemctl", "try-restart", "serverhub-ai-broker.service", "serverhub-ai-node.service"])

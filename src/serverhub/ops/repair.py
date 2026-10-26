@@ -34,6 +34,34 @@ def read_environment(path):
     return result
 
 
+def read_schema_revision(database_url):
+    """Read actual schema; never trust only the installed release manifest."""
+    import psycopg
+    from sqlalchemy.engine import make_url
+    try:
+        url = make_url(database_url).set(drivername="postgresql")
+        with psycopg.connect(url.render_as_string(hide_password=False), connect_timeout=5) as connection:
+            connection.read_only = True
+            with connection.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = '5s'")
+                cursor.execute("SELECT version_num FROM public.alembic_version")
+                rows = cursor.fetchall()
+                if len(rows) != 1 or not isinstance(rows[0][0], str):
+                    raise ValueError("ambiguous schema")
+                return rows[0][0]
+    except Exception:
+        raise InstallError("Cannot verify database schema; maintenance stopped without exposing connection details") from None
+
+
+def require_compatible_schema(database_url):
+    revision = read_schema_revision(database_url)
+    if revision != "0007_job_controls":
+        raise InstallError(
+            "schema-changing repair is blocked: verified coordinated database/code recovery "
+            "is not implemented (issue #20); do not run migrations or regenerate anchors manually")
+    return revision
+
+
 def protect_model_fallback(path):
     """An obsolete/invalid fallback must not prevent owner access to new Setup.
 
@@ -87,6 +115,15 @@ def repair(source):
         raise InstallError("Current release is outside the native release directory")
     from .coexistence import require_safe
     require_safe(units=installer.units(), runner=installer.runner)
+    # Must happen before backup, release directory creation, recovery installation,
+    # trust writes, service stops or any migration. No unsafe override is provided.
+    schema_revision = require_compatible_schema(env["SERVERHUB_DATABASE_URL"])
+    previous_manifest = json.loads(trusted_file(previous / "installed.json").read_text())["manifest"]
+    if previous_manifest.get("schema_revision") != schema_revision:
+        raise InstallError("Previous release schema differs from database; automatic repair/rollback blocked")
+    from alembic.script import ScriptDirectory
+    if ScriptDirectory(str(source / "migrations")).get_heads() != [schema_revision]:
+        raise InstallError("Candidate migration head differs from database; schema-changing repair blocked")
     backup = BackupManager().create(env["SERVERHUB_DATABASE_URL"], [Path("/etc/serverhub")])
     snapshots = {}
     for path in [*Path("/etc/serverhub").glob("*"), *(Path("/etc/systemd/system") / name for name in installer.units())]:
@@ -163,6 +200,7 @@ def repair(source):
         installer._run(["systemctl","restart","serverhub-ai-operation-watchdog.timer"])
         recovery_journal = {
             "state": "armed",
+            "repair_schema_revision": schema_revision,
             "previous": str(previous),
             "candidate": str(release),
             "deadline": time.time() + 300,
@@ -236,9 +274,21 @@ def repair(source):
             "backup_id": backup["id"],
             "credentials": "retained",
             "models_configuration": models_state,
-            "schema_rollback": "0004/0005 are additive; rollback retains added columns and requires schema-compatible previous code",
+            "schema_rollback": "schema unchanged and verified; schema-changing repair is blocked pending issue #20",
         }
     except BaseException:
+        # If a failed migration or an external actor changed schema, neither the
+        # exception path nor independent watchdog may restart previous code.
+        try:
+            if read_schema_revision(env["SERVERHUB_DATABASE_URL"]) != schema_revision:
+                raise InstallError("Schema changed during repair")
+        except InstallError:
+            installer._run(["systemctl", "stop", "serverhub-ai-api.service", "serverhub-ai-worker.service"])
+            if recovery_journal:
+                recovery_journal["state"] = "manual_recovery_required"
+                recovery_journal["reason"] = "database compatibility cannot be proven"
+                recovery._write_journal(recovery_journal)
+            raise InstallError("Automatic rollback blocked: database compatibility unverified; AI services stopped, backups retained") from None
         installer._activate(previous)
         if introduced_profile and profile_path.exists() and profile_path.read_text()==PROFILE:
             subprocess.run(["/usr/sbin/apparmor_parser","--remove",str(profile_path)],check=False,capture_output=True,timeout=30)
@@ -274,7 +324,7 @@ def main():
                 {
                     "state": "failed",
                     "error": str(exc),
-                    "next_step": "Inspect protected installer logs; previous release/configuration restored when activation had begun. Backups are retained. Rerun after fixing the prerequisite.",
+                    "next_step": "Inspect protected logs and recovery journal. Failure does not imply rollback succeeded. Schema-changing repair is blocked; do not bypass it. Backups are retained.",
                 }
             ),
             file=sys.stderr,
