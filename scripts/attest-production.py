@@ -17,10 +17,12 @@ from urllib.parse import urlsplit, unquote
 
 SAFE = re.compile(r"[A-Za-z0-9_.-]{1,160}\Z")
 UNITS = ('serverhub-ai-api.service', 'serverhub-ai-worker.service',
-         'serverhub-ai-broker.service', 'serverhub-ai-recovery.service',
+         'serverhub-ai-broker.service', 'serverhub-ai-recovery.service', 'serverhub-ai-recovery.timer',
          'serverhub-broker.service', 'serverhub-docker-ro.service', 'serverhub-worker.service')
 PROPERTIES = ('Id', 'User', 'Group', 'MainPID', 'ActiveState', 'SubState',
-              'ExecMainStartTimestampMonotonic', 'FragmentPath', 'DropInPaths')
+              'ExecMainStartTimestampMonotonic', 'FragmentPath', 'DropInPaths',
+              'Type', 'Restart', 'Result', 'ExecMainStatus', 'TriggeredBy', 'Triggers', 'LoadState')
+BASELINE_SHA256 = 'ed190340536e68d586112cf40ca84c4191d0413f62e676c53d189d0bfd44176a'
 
 
 def digest(path):
@@ -78,6 +80,68 @@ def services():
     return result
 
 
+def recovery_baseline():
+    path = Path(__file__).with_name('attestation-recovery-baseline.json')
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != BASELINE_SHA256:
+        raise ValueError('reviewed recovery baseline digest mismatch')
+    return json.loads(data)
+
+
+def stable_services(before, after, baseline):
+    if set(before) != set(UNITS) or set(after) != set(UNITS):
+        return False
+    service = 'serverhub-ai-recovery.service'
+    timer = 'serverhub-ai-recovery.timer'
+    for snapshot in (before, after):
+        for unit in (service, timer):
+            entry = snapshot[unit]
+            props = entry['properties']
+            fragment = props.get('FragmentPath')
+            if (props.get('LoadState') != 'loaded' or props.get('DropInPaths')
+                    or entry['file_hashes'] != {fragment: baseline['units'][unit]}):
+                return False
+        props = snapshot[service]['properties']
+        if (props.get('Type') != 'oneshot' or props.get('Restart') != 'no'
+                or props.get('Result') != 'success' or props.get('ExecMainStatus') != '0'
+                or props.get('User') != 'root' or props.get('TriggeredBy') != timer
+                or (props.get('ActiveState'), props.get('SubState')) not in
+                {('inactive', 'dead'), ('activating', 'start')}):
+            return False
+        props = snapshot[timer]['properties']
+        if (props.get('ActiveState') != 'active' or props.get('SubState') not in ('waiting', 'running')
+                or props.get('Triggers') != service):
+            return False
+    volatile = {'MainPID', 'ExecMainStartTimestampMonotonic', 'ActiveState', 'SubState'}
+    for unit in UNITS:
+        if unit not in (service, timer):
+            if before[unit] != after[unit]:
+                return False
+        else:
+            for field in ('properties', 'file_hashes'):
+                excluded = volatile if field == 'properties' else set()
+                if ({k: v for k, v in before[unit][field].items() if k not in excluded}
+                        != {k: v for k, v in after[unit][field].items() if k not in excluded}):
+                    return False
+    return True
+
+
+def watchdog_errors(since):
+    # Catch failures between two successful samples; never emit journal messages.
+    raw = run(['/usr/bin/journalctl', '--unit=serverhub-ai-recovery.service',
+               '--since=' + since, '--no-pager', '--output=json'])
+    count = 0
+    for line in raw.splitlines():
+        entry = json.loads(line)
+        failed = entry.get('SERVICE_RESULT', 'success') != 'success'
+        failed = failed or entry.get('UNIT_RESULT', 'success') != 'success'
+        priority = entry.get('PRIORITY', '6')
+        if not isinstance(priority, str) or not priority.isdigit():
+            raise ValueError('invalid journal priority')
+        count += bool(failed or int(priority) <= 3)
+    return {'errors_observed': count}
+
+
 def schema():
     # Use the existing API identity, never the migration/database administrator role.
     content = sealed(Path('/etc/serverhub/api.env')).read_text()
@@ -114,6 +178,7 @@ def runtime(root, anchor):
 
 
 def collect():
+    since = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
     report = {'format': 1, 'observed_at': datetime.now(timezone.utc).isoformat(),
               'production_install_authorized': False, 'errors': [],
               'limitations': ['Local root is the trust boundary; this is not remote attestation.',
@@ -125,6 +190,7 @@ def collect():
             report[name] = operation()
         except (OSError, ValueError, KeyError, subprocess.SubprocessError):
             report['errors'].append(name + ': evidence unavailable or unsafe; inspect locally')
+    check('recovery_baseline', recovery_baseline)
     check('services_before', services)
     check('control_tree_before', lambda: hashes(Path('/opt/serverhub-control'), '*.py'))
     def release():
@@ -154,23 +220,29 @@ def collect():
                 'manifest_trust_matches_anchor': manifest.get('trust_boundary_digest') == trust,
                 'directory_matches_release_id': root.name == identity,
                 'active': runtime(root, anchor),
-                'recovery': runtime(Path('/opt/serverhub/recovery-ai'), anchor),
+                'recovery': runtime(Path('/opt/serverhub/recovery-ai'), recovery_baseline()),
                 'watchdog_sha256': digest(sealed(Path('/opt/serverhub/recovery-ai/operation_watchdog.py'))),
                 'migrations': hashes(root / 'migrations'), 'web': hashes(root / 'web')}
     check('release', release)
     check('database', schema)
     check('services_after', services)
     check('control_tree_after', lambda: hashes(Path('/opt/serverhub-control'), '*.py'))
-    report['stable_observation'] = all(key in report and report[key] == report.get(other)
-                                     for key, other in (('services_before', 'services_after'),
-                                                        ('control_tree_before', 'control_tree_after')))
+    check('watchdog_journal', lambda: watchdog_errors(since))
+    report['stable_observation'] = bool(
+        'services_before' in report and 'services_after' in report
+        and 'recovery_baseline' in report
+        and stable_services(report['services_before'], report['services_after'], report['recovery_baseline'])
+        and report.get('watchdog_journal', {}).get('errors_observed') == 0
+        and 'control_tree_before' in report
+        and report['control_tree_before'] == report.get('control_tree_after'))
     release_result = report.get('release', {})
     report['local_integrity_checks_passed'] = bool(
         not report['errors'] and report['stable_observation']
         and release_result.get('manifest_trust_matches_anchor')
         and release_result.get('directory_matches_release_id')
         and release_result.get('active', {}).get('matches_code_anchor')
-        and release_result.get('recovery', {}).get('matches_code_anchor'))
+        and release_result.get('recovery', {}).get('matches_code_anchor')
+        and release_result.get('watchdog_sha256') == report.get('recovery_baseline', {}).get('watchdog_sha256'))
     return report
 
 

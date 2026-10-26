@@ -69,3 +69,69 @@ def test_runtime_exact_anchor_and_dependency_evidence(monkeypatch, tmp_path):
     assert attest.runtime(tmp_path, {'files': expected})['matches_code_anchor']
     (site / 'extra.py').write_text('# unexpected')
     assert not attest.runtime(tmp_path, {'files': expected})['matches_code_anchor']
+
+
+def snapshots():
+    import copy
+    baseline = attest.recovery_baseline()
+    before = {u: {'properties': {'Id': u}, 'file_hashes': {}} for u in attest.UNITS}
+    service, timer = 'serverhub-ai-recovery.service', 'serverhub-ai-recovery.timer'
+    for u in (service, timer):
+        path = '/etc/systemd/system/' + u
+        before[u] = {'properties': {'FragmentPath': path, 'DropInPaths': '', 'LoadState': 'loaded'},
+                     'file_hashes': {path: baseline['units'][u]}}
+    before[service]['properties'].update(Type='oneshot', Restart='no', Result='success', ExecMainStatus='0',
+                                        User='root', TriggeredBy=timer, ActiveState='inactive', SubState='dead',
+                                        MainPID='0', ExecMainStartTimestampMonotonic='10')
+    before[timer]['properties'].update(ActiveState='active', SubState='waiting', Triggers=service)
+    after = copy.deepcopy(before)
+    after[service]['properties'].update(ActiveState='activating', SubState='start', MainPID='123',
+                                       ExecMainStartTimestampMonotonic='20')
+    return before, after, baseline
+
+
+def test_scheduled_oneshot_is_stable():
+    assert attest.stable_services(*snapshots())
+
+
+@pytest.mark.parametrize('field,value', [('Result', 'exit-code'), ('ExecMainStatus', '1'),
+                                        ('Type', 'simple'), ('Restart', 'always'), ('User', 'nobody'),
+                                        ('TriggeredBy', ''), ('ActiveState', 'failed'),
+                                        ('DropInPaths', '/override.conf')])
+def test_watchdog_failures_and_identity_changes_rejected(field, value):
+    before, after, baseline = snapshots()
+    after['serverhub-ai-recovery.service']['properties'][field] = value
+    assert not attest.stable_services(before, after, baseline)
+
+
+def test_timer_and_control_changes_rejected():
+    before, after, baseline = snapshots()
+    after['serverhub-ai-recovery.timer']['properties']['Triggers'] = 'other.service'
+    assert not attest.stable_services(before, after, baseline)
+    before, after, baseline = snapshots()
+    after['serverhub-worker.service']['properties']['MainPID'] = 'new'
+    assert not attest.stable_services(before, after, baseline)
+    before, after, baseline = snapshots()
+    after['serverhub-ai-recovery.timer']['file_hashes']['/extra'] = 'bad'
+    assert not attest.stable_services(before, after, baseline)
+
+
+def test_intermediate_journal_failure_is_not_hidden(monkeypatch):
+    monkeypatch.setattr(attest, 'run', lambda args: '\n'.join([
+        '{"PRIORITY":"6","SERVICE_RESULT":"exit-code","MESSAGE":"SECRET"}',
+        '{"PRIORITY":"6","SERVICE_RESULT":"success"}']))
+    assert attest.watchdog_errors('2026-10-26') == {'errors_observed': 1}
+
+
+def test_recovery_baseline_is_independent_and_not_ignored():
+    baseline = attest.recovery_baseline()
+    assert baseline['source_commit'] == '42483fb0fe59f76e783ca309aff1ac381dd24d84'
+    assert baseline['files']['serverhub/main.py'] == '013f86846598bacfbea164980df8b13197fdeb1af550883c00e920e7b7d83bfd'
+    assert baseline['files']['serverhub/mcp.py'] == '88219757fe8b54a5242ecf21f667b404b8a049848a47fbef250099388fbcf79f'
+    assert len(baseline['files']) == 65
+
+
+def test_baseline_tampering_rejected(monkeypatch):
+    monkeypatch.setattr(attest, 'BASELINE_SHA256', '0' * 64)
+    with pytest.raises(ValueError, match='baseline digest mismatch'):
+        attest.recovery_baseline()
