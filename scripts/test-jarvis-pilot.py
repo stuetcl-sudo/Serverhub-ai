@@ -26,6 +26,10 @@ if not Path('/etc/serverhub/native-ci-node.json').exists():
     raise SystemExit('Guarded native installation suite must run first')
 
 def run(argv, **kw):
+    # Keep fixture ownership transfer free of detached Git maintenance writers.
+    # Scope configuration to these disposable commands, never global Git config.
+    if argv[0] == 'git':
+        argv = ['git', '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', *argv[1:]]
     try:
         return subprocess.run(argv,check=True,text=True,capture_output=True,**kw).stdout.strip()
     except subprocess.CalledProcessError as error:
