@@ -1,0 +1,23 @@
+{
+  "scope": "Development only; production script was not invoked",
+  "candidate_commit": "3e9a2f4bc32d455a2cecffddd495494d8ed08078",
+  "release_id": "oauth-csrf-pr14-3e9a2f4",
+  "helper_sha256": "ff0192e4f85a958cd172699ac1aa3d7c81fd0a42673f033dd18abdf65fc82ed1",
+  "targeted_tests": {"passed": 38, "failed": 0},
+  "full_suite": {"passed": 504, "skipped": 8, "failed": 0, "warnings": 1},
+  "full_suite_evidence_local": "/tmp/pr14-tty-fix-full.xml",
+  "terminal_regression": "Original r+ failure reproduced on real controlling PTYs; separate streams verified with exact consent, refusal, empty/wrong-case input and detached piped-input rejection",
+  "candidate_and_rollback": "Unchanged from e1fa075: candidate 3e9a2f4, pinned original artifacts, previous repair-20261024T195431Z-60f67b plus old anchors, 900-second watchdog",
+  "isolated_postgresql": "Real PG16 initdb, dump, restore, audit/schema/data validation and bad schema/audit/archive rejection; no production DB",
+  "isolated_oauth_mcp": "Real application API, parallel approvals/denials, PKCE, replay, Origin, MCP allowed/forbidden calls, owner login/logout",
+  "filesystem_recovery": "Private real symlink/anchor restoration, failed health retry, reboot expiry, tampering and idempotent verified rerun",
+  "systemd_effects": "Recorded in isolated tests; no production restart or root activation executed",
+  "static_checks": ["bash -n", "ruff check", "git diff --check", "bootstrap helper SHA256 equality"],
+  "skips": [
+    "Six existing tests require a disposable root filesystem",
+    "Two existing tests require a configured real Ollama provider"
+  ],
+  "warning": "Existing Starlette httpx TestClient deprecation",
+  "review": "Independent safety review; material recovery/durability findings fixed with regression tests",
+  "production_changes": false
+}
