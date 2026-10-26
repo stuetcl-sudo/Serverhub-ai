@@ -144,12 +144,12 @@ class SandboxRunner:
             raise DevelopmentError("project virtualenv path must be a real directory")
         tools = self.run(workspace, Command(argv=["/usr/bin/python3", "-I", "-c",
             "import importlib.util,json,ssl,sys; "
-            "tools={k:importlib.util.find_spec(k) is not None for k in ('pip','venv')}; "
-            "print(json.dumps({'python':sys.version.split()[0],'tools':tools,'sandbox':True})); "
-            "sys.exit(0 if all(tools.values()) else 78)"], timeout=10))
+            "venv_available=importlib.util.find_spec('venv') is not None; "
+            "print(json.dumps({'python':sys.version.split()[0],'venv_available':venv_available,'sandbox':True})); "
+            "sys.exit(0 if venv_available else 78)"], timeout=10))
         if tools.returncode != 0 or tools.timed_out:
             return {"available": False, "returncode": tools.returncode,
-                    "detail": tools.output, "remediation": "Install python3-pip, python3-venv, bubblewrap and the AI AppArmor profile through reviewed native repair; never use a production virtualenv", "unsandboxed_fallback": False}
+                    "detail": tools.output, "remediation": "Install python3-venv, bubblewrap and the AI AppArmor profile through reviewed native repair; never use a production virtualenv", "unsandboxed_fallback": False}
         if not venv.exists():
             setup = self.run(workspace, Command(
                 argv=["/usr/bin/python3", "-m", "venv", "/workspace/.venv"], timeout=45))
