@@ -73,10 +73,13 @@ def need(condition, message):
 
 
 def tty_text(prompt):
-    with open('/dev/tty', 'r+') as tty:
-        tty.write(prompt)
-        tty.flush()
-        return tty.readline().strip()
+    # A terminal is non-seekable: text update mode (r+) is not supported.
+    # Keep prompt output independent from input; never fall back to stdin.
+    with open('/dev/tty', 'w', encoding='utf-8') as output, open('/dev/tty', 'r', encoding='utf-8') as terminal_input:
+        need(output.isatty() and terminal_input.isatty(), 'Interactive controlling terminal required')
+        output.write(prompt)
+        output.flush()
+        return terminal_input.readline().strip()
 
 
 def sha(data):

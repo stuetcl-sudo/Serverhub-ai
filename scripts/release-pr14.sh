@@ -8,7 +8,7 @@ fi
 release_script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 cd /
 # Filled from the reviewed helper bytes; never execute a later checkout reread.
-release_helper_sha=daab41da69de76ea36e01ca36f5d4b6960208c81f3cfbe95657a07df2b07bbba
+release_helper_sha=ff0192e4f85a958cd172699ac1aa3d7c81fd0a42673f033dd18abdf65fc82ed1
 release_bootstrap_dir=$(/usr/bin/mktemp -d /run/serverhub-pr14.XXXXXXXX)
 trap '/usr/bin/rm -f -- "$release_bootstrap_dir/release_pr14.py"; /usr/bin/rmdir -- "$release_bootstrap_dir"' EXIT
 /usr/bin/install -m 0600 -- "$release_script_dir/release_pr14.py" "$release_bootstrap_dir/release_pr14.py"

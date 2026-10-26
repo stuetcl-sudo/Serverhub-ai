@@ -2,6 +2,11 @@
 import importlib.util
 import json
 import subprocess
+import os
+import pty
+import select
+import signal
+import time
 from pathlib import Path
 
 import pytest
@@ -15,6 +20,120 @@ def load_release():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def controlling_terminal(action, prompt, answer):
+    """Exercise /dev/tty itself in a child with a real controlling terminal."""
+    pid, master = pty.fork()
+    if pid == 0:
+        try:
+            import sys
+            sys.stdout = open('/dev/tty', 'w', buffering=1)
+            sys.stderr = sys.stdout
+            result = action()
+            print('TTY_RESULT=' + repr(result), flush=True)
+            os._exit(0)
+        except BaseException as error:
+            print(type(error).__name__ + ': ' + str(error), flush=True)
+            os._exit(1)
+    output = bytearray()
+    sent = False
+    status = None
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                try:
+                    data = os.read(master, 65536)
+                except OSError as error:
+                    if error.errno != 5:  # Linux PTY reports EIO after child closes.
+                        raise
+                    break
+                if not data:
+                    break
+                output.extend(data)
+            if not sent and prompt.encode() in output:
+                os.write(master, (answer + '\n').encode())
+                sent = True
+        while True:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+            if waited:
+                break
+            if time.monotonic() >= deadline:
+                os.kill(pid, signal.SIGKILL)
+                _, status = os.waitpid(pid, 0)
+                break
+            time.sleep(0.01)
+        return os.waitstatus_to_exitcode(status), output.decode(errors='replace')
+    finally:
+        os.close(master)
+        if status is None:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.waitpid(pid, 0)
+
+
+@pytest.mark.parametrize('answer', ['RELEASE PR14', 'no', ''])
+def test_tty_text_reads_a_real_nonseekable_terminal(answer):
+    m = load_release()
+    prompt = 'Type RELEASE PR14: '
+    code, output = controlling_terminal(lambda: m.tty_text(prompt), prompt, answer)
+    assert code == 0, output
+    assert prompt in output
+    assert 'TTY_RESULT=' + repr(answer) in output
+
+
+@pytest.mark.parametrize('answer', ['no', '', 'release pr14'])
+def test_real_terminal_cannot_bypass_owner_consent(tmp_path, answer, monkeypatch):
+    m = load_release()
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(m.sys, 'argv', ['release_pr14.py'])
+    monkeypatch.setattr(m, 'STATE', tmp_path / 'must-not-exist')
+    def decline():
+        with pytest.raises(m.Stop, match='Owner declined'):
+            m.main()
+        return 'declined'
+    code, output = controlling_terminal(decline, 'Type RELEASE PR14: ', answer)
+    assert code == 0, output
+    assert "TTY_RESULT='declined'" in output
+    assert not m.STATE.exists()
+
+
+def test_real_terminal_accepts_only_explicit_release_phrase(tmp_path, monkeypatch):
+    m = load_release()
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(m.sys, 'argv', ['release_pr14.py'])
+    monkeypatch.setattr(m, 'STATE', tmp_path / 'must-not-exist')
+    def stop_before_state(*args, **kwargs):
+        raise m.Stop('consent gate reached')
+    monkeypatch.setattr(m, 'protected_path', stop_before_state)
+    def approve():
+        with pytest.raises(m.Stop, match='consent gate reached'):
+            m.main()
+        return 'approved without installation'
+    code, output = controlling_terminal(approve, 'Type RELEASE PR14: ', 'RELEASE PR14')
+    assert code == 0, output
+    assert "TTY_RESULT='approved without installation'" in output
+    assert not m.STATE.exists()
+
+
+def test_missing_controlling_terminal_never_uses_piped_consent():
+    import sys
+    helper = Path(__file__).parents[1] / 'scripts/release_pr14.py'
+    code = (
+        'import importlib.util; '
+        f'spec=importlib.util.spec_from_file_location("release_pr14", {str(helper)!r}); '
+        'module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); '
+        'print("TTY_RESULT=" + module.tty_text("Type RELEASE PR14: "))'
+    )
+    result = subprocess.run([sys.executable, '-I', '-c', code], input='RELEASE PR14\n',
+                            capture_output=True, text=True, start_new_session=True, timeout=10)
+    assert result.returncode != 0
+    assert 'TTY_RESULT=' not in result.stdout
+    assert 'OSError' in result.stderr
 
 
 def test_entrypoint_exists_and_has_no_unattended_approval():

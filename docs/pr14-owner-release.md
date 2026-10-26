@@ -24,6 +24,20 @@ before confirmation. There is no unattended `--yes` option or production test
 backend. Prior blanket development permission does not suppress the requested
 interactive owner approval.
 
+Terminal input and prompt output use separate `/dev/tty` streams. Update mode
+(`r+`) is unsupported on this non-seekable device. Both streams must be terminals;
+the prompt is flushed before reading. Missing controlling-terminal access fails
+closed; piped stdin never supplies approval. The exact `RELEASE PR14` consent is
+still required before release state is created. Regression tests use real
+controlling pseudoterminals for prompt/input and approval/refusal, plus a detached
+process to verify that piped consent is rejected.
+
+The corrected helper SHA256, also pinned by the shell wrapper, is
+`ff0192e4f85a958cd172699ac1aa3d7c81fd0a42673f033dd18abdf65fc82ed1`.
+This changes terminal I/O only; the approved candidate, artifact hashes,
+900-second recovery deadline and exact previous-release/anchor rollback are
+unchanged.
+
 ## Exact release identity
 
 | Item | Value |
