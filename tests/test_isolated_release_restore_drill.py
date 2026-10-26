@@ -129,6 +129,10 @@ def test_0006_backup_restore_migrate_and_compatible_recovery(monkeypatch, tmp_pa
 
         manager.restore(manifest["id"], url(migrated_name), confirm_database=migrated_name)
         assert snapshot(migrated_name) == before
+        # Refuse a second restore into a nonempty target; existing records survive.
+        with pytest.raises(BackupError, match="empty database"):
+            manager.restore(manifest["id"], url(migrated_name), confirm_database=migrated_name)
+        assert snapshot(migrated_name) == before
         upgrade(migrated_name, "0007_job_controls")
 
         with psycopg.connect(pg_url(migrated_name)) as connection:
