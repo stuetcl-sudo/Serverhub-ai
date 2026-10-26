@@ -3,9 +3,10 @@ import pytest
 from serverhub.ops.installer import InstallError
 
 
-def test_schema_change_rejected_before_backup_or_runtime_mutation(monkeypatch):
+@pytest.mark.parametrize("actual", ["0006_pause_clock", "0008_future", "unknown"])
+def test_schema_change_rejected_before_backup_or_runtime_mutation(monkeypatch, actual):
     from serverhub.ops.repair import require_compatible_schema
-    monkeypatch.setattr('serverhub.ops.repair.read_schema_revision', lambda url: '0006_pause_clock')
+    monkeypatch.setattr('serverhub.ops.repair.read_schema_revision', lambda url: actual)
     with pytest.raises(InstallError, match='schema-changing repair is blocked'):
         require_compatible_schema('not-exposed')
 
