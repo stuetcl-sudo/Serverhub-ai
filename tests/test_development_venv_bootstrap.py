@@ -38,6 +38,9 @@ def test_preflight_creates_venv_only_inside_sandbox(tmp_path, monkeypatch):
     result = runner.preflight(tmp_path)
     assert result["available"] is True
     assert calls[1] == ["/usr/bin/python3", "-m", "venv", "/workspace/.venv"]
+    # A system Python without global pip is valid: ensurepip belongs to venv.
+    assert "venv_available" in calls[0][-1]
+    assert "find_spec('pip')" not in calls[0][-1]
     assert calls[2] == ["/workspace/.venv/bin/python", "-m", "pip", "--version"]
     assert result["unsandboxed_fallback"] is False
 
