@@ -3,7 +3,6 @@
 The bare 'python' command must resolve inside the workspace venv, never to
 the Ubuntu host interpreter or an unsandboxed fallback.
 """
-from pathlib import Path
 
 import pytest
 

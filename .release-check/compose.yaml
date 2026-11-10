@@ -1,0 +1,34 @@
+name: serverhub-release-validation-20261109
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: serverhub
+      POSTGRES_PASSWORD: disposable-test-only
+      POSTGRES_DB: serverhub_test
+    networks: [validation]
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U serverhub -d serverhub_test']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    mem_limit: 512m
+  tests:
+    image: serverhub-release-validation:20261109
+    build:
+      context: ..
+      dockerfile: .release-check/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVERHUB_DEV_MODE: 'true'
+      SERVERHUB_TEST_DATABASE_CONFIRM: isolated
+      SERVERHUB_DATABASE_URL: postgresql+psycopg://serverhub:disposable-test-only@127.0.0.1:5432/serverhub_test
+      SERVERHUB_TEST_POSTGRES_URL: postgresql+psycopg://serverhub:disposable-test-only@127.0.0.1:5432/serverhub_test
+    network_mode: service:postgres
+    mem_limit: 1536m
+networks:
+  validation:
+    internal: true

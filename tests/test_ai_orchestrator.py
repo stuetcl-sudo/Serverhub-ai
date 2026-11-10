@@ -347,3 +347,25 @@ def test_invalid_result_checkpoint_recovers_without_execution(monkeypatch):
     assert not recovered["pending_calls"]
     assert len(recovered["messages"]) == 1
     assert not ctx.operations
+
+
+@pytest.mark.parametrize('operation', ['inventory.read', 'inventory.refresh'])
+def test_zero_argument_recovery_does_not_dispatch_invented_target(monkeypatch, operation):
+    dispatched = []
+    monkeypatch.setattr(ai, '_run_tool', lambda ctx, op, args, state, call_id:
+                        dispatched.append((ctx.job.host_id, op, args)) or {'observed': True})
+    ctx = Context()
+    state = {'specialist': 'infrastructure', 'messages': [], 'evidence': [], 'completed_calls': {},
+             'pending_calls': [{'id': 'bad', 'name': operation.replace('.', '__'),
+                                'operation': operation, 'arguments': {'target': 'other-host'}}]}
+    ai._pending_tools(ctx, state)
+    assert dispatched == []
+    rejected = state['evidence'][0]['result']
+    assert rejected['executed'] is False
+    assert rejected['corrected_arguments'] == {}
+    assert 'other-host' not in str(state['messages'])
+    state['pending_calls'] = [{'id': 'corrected', 'name': operation.replace('.', '__'),
+                              'operation': operation, 'arguments': rejected['corrected_arguments']}]
+    ai._pending_tools(ctx, state)
+    assert dispatched == [('host1', operation, {})]
+    assert state['pending_calls'] == []

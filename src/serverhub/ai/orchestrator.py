@@ -116,7 +116,7 @@ NODE_TOOLS = {"docker.compose.update","package.plan", "package.apply", "configur
 
 
 def tool_schemas(profile: str = "all") -> list[dict]:
-    core = [{"type": "function", "function": {"name": name.replace(".", "__"), "description": description,
+    core = [{"type": "function", "function": {"name": name.replace(".", "__"), "description": description + (". Arguments must be exactly {}; host scope is already bound to the job." if not model.model_fields else ""),
              "parameters": model.model_json_schema()}} for name, (model, description) in TOOLS.items()]
     if profile == "all":
         return core + operation_schemas()
@@ -348,6 +348,13 @@ def _pending_tools(ctx, state: dict, on_execution=None) -> None:
                           "retryable": True, "requires_changed_arguments": True,
                           "identical_failures": identical, "requires_changed_strategy": identical >= 2,
                           "guidance": "Use the advertised schema. Repository dependencies belong to development.list/development.submit, not host inventory."}
+                if not invalid["schema"].get("properties"):
+                    result["corrected_arguments"] = {}
+                    result["guidance"] = (
+                        "This tool takes no arguments. Submit a NEW call with arguments exactly {}. "
+                        "Do not pass target, host, or host_id: the job already binds the authorized host. "
+                        "The rejected call was not executed."
+                    )
                 if identical < 2:
                     result["expected_schema"] = invalid["schema"]
                 result = _complete_call(ctx, state, operation, call_id, result)

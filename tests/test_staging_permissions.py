@@ -1,5 +1,4 @@
 """Permissions of extracted staging roots must include only their project group."""
-import os
 from serverhub.node import staging
 
 
