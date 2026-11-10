@@ -57,7 +57,7 @@ class Transaction:
 
     lock.sqlite is never removed/replaced. Its exclusive SQLite transaction is
     released by the OS on process death. journal.sqlite commits independently
-    with synchronous=FULL, so writing a phase never drops the process lease.
+    with synchronous=EXTRA, so writing a phase never drops the process lease.
     No lease expiry, PID guessing or time-based takeover can race an upgrader.
     Network filesystems are outside the supported deployment contract.
     """
@@ -91,13 +91,45 @@ class Transaction:
                 if info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
                     raise TransactionError("transaction paths must be root-owned and protected")
 
+    @staticmethod
+    def _durable_connection(connection):
+        # DELETE + FULL can lose the final commit on sudden power failure.
+        # EXTRA also synchronizes the directory after journal deletion.
+        mode = connection.execute("PRAGMA journal_mode=DELETE").fetchone()
+        connection.execute("PRAGMA synchronous=EXTRA")
+        sync = connection.execute("PRAGMA synchronous").fetchone()
+        if mode != ("delete",) or sync != (3,):
+            raise TransactionError("required journal durability is unavailable")
+
+    def _sync_directories(self):
+        # Persist creation of the state root and each ancestor before any
+        # adapter effect. Repeating this also covers interrupted initialization.
+        if os.name != "posix":
+            if self.require_root:
+                raise TransactionError("directory durability requires Linux")
+            return  # Synthetic non-native tests only.
+        try:
+            for path in (self.root, *self.root.parents):
+                fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+        except OSError:
+            raise TransactionError("transaction directory durability unavailable") from None
+
     def _file(self, path):
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
             created = False
         else:
-            os.close(fd)
+            try:
+                os.fsync(fd)
+            except OSError:
+                raise TransactionError("transaction file durability unavailable") from None
+            finally:
+                os.close(fd)
             created = True
         self._protect(path)
         if not path.is_file():
@@ -135,13 +167,14 @@ class Transaction:
                     raise TransactionError("journal exists without its original lock")
                 with closing(sqlite3.connect(self.journal_path)) as journal:
                     with journal:
-                        journal.execute("PRAGMA synchronous=FULL")
+                        self._durable_connection(journal)
                         journal.execute("CREATE TABLE events (sequence INTEGER PRIMARY KEY, record TEXT NOT NULL)")
             elif not self.journal_path.is_file() or self.journal_path.stat().st_size == 0:
                 raise TransactionError("transaction journal missing; manual inspection required")
             # Validate on entry as well as on every use. Never silently recreate
             # a missing journal following an interrupted transaction.
             self.history()
+            self._sync_directories()
         except BaseException:
             self.__exit__(None, None, None)
             raise
@@ -158,8 +191,7 @@ class Transaction:
         self._protect(self.journal_path)
         conn = sqlite3.connect(self.journal_path, timeout=0)
         try:
-            conn.execute("PRAGMA synchronous=FULL")
-            conn.execute("PRAGMA journal_mode=DELETE")
+            self._durable_connection(conn)
             return conn
         except sqlite3.Error:
             conn.close()

@@ -12,7 +12,7 @@ The existing schema-changing repair rejection remains untouched.
 
 Two persistent SQLite files have separate responsibilities: an exclusive
 transaction on `lock.sqlite` serializes upgrader/recovery processes; independently
-committed FULL-synchronous events in `journal.sqlite` retain each phase intent.
+committed EXTRA-synchronous events in `journal.sqlite` retain each phase intent.
 Neither file is replaced or unlinked. Process death releases the lease without
 PID guessing or lease expiry. A missing, malformed or inconsistent journal
 fails closed. Records validate immutable identities, checkpoint checksums,
@@ -70,3 +70,18 @@ Those are historical base results, not verification of this new branch.
 
 Do not close #20, remove the schema-change block, merge or deploy this draft as a
 complete coordinated recovery implementation.
+
+
+## Linux follow-up, 9 November 2026
+
+The release candidate now uses SQLite EXTRA with DELETE journals and checks the
+effective pragmas. This is required to synchronize rollback-journal deletion
+before admitting application writes (SQLite PRAGMA synchronous documentation).
+First-use file creation and directory entries are explicitly synchronized on
+Linux; inability to synchronize fails before any adapter effect. Synthetic
+non-POSIX tests do not certify native filesystem durability.
+
+Three new regressions were observed failing before the fix and passing afterward.
+The focused recovery plus orchestrator suite passed 63 tests on Linux/Python 3.12.
+This tests the configuration and failure behavior, not physical power cutting.
+Native adapter/watchdog enrollment remains a separate unresolved requirement.

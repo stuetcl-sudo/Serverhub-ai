@@ -320,3 +320,46 @@ with Transaction(Path(sys.argv[2]) / "state", require_root=False) as tx:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=10)
+
+
+def test_journal_uses_power_loss_durable_delete_commits(tmp_path):
+    with new(tmp_path) as tx:
+        connection = tx._connection()
+        try:
+            assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+            assert connection.execute("PRAGMA synchronous").fetchone()[0] == 3
+        finally:
+            connection.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux directory durability contract")
+def test_initialization_syncs_directory_entries_before_adapter_effects(tmp_path, monkeypatch):
+    import stat
+    real_fsync = os.fsync
+    synced = []
+    def record(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            synced.append(os.readlink(f"/proc/self/fd/{fd}"))
+        return real_fsync(fd)
+    monkeypatch.setattr(os, "fsync", record)
+    adapter = FixtureAdapter()
+    with new(tmp_path) as tx:
+        assert str(tmp_path) in synced
+        assert str(tx.root) in synced
+        tx.upgrade(adapter, "previous", "candidate", "runtime-digest")
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux directory durability contract")
+def test_initialization_sync_failure_prevents_side_effects(tmp_path, monkeypatch):
+    import stat
+    real_fsync = os.fsync
+    def fail(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("private device detail")
+        return real_fsync(fd)
+    monkeypatch.setattr(os, "fsync", fail)
+    adapter = FixtureAdapter()
+    with pytest.raises(core()[1], match="durability"):
+        with new(tmp_path) as tx:
+            tx.upgrade(adapter, "previous", "candidate", "runtime-digest")
+    assert adapter.calls == []
